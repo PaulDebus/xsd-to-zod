@@ -31,6 +31,22 @@ writeFileSync('schema.meta.ts', metadata);
 runPostGenerationFormatting(['schema.zod.ts', 'schema.meta.ts']);
 ```
 
+## CLI
+
+Generate Zod schemas and metadata directly from the command line:
+
+```sh
+npx xsd2zod schema.xsd -o src/generated --format
+```
+
+When working with multiple XSD files, provide a basename with `--name`:
+
+```sh
+npx xsd2zod types.xsd elements.xsd -o src/generated -n my-api
+```
+
+This produces `src/generated/my-api.zod.ts` and `src/generated/my-api.meta.ts`.
+
 Then in your app:
 
 ```ts

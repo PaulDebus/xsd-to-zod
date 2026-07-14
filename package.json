@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "main": "./dist/index.js",
+  "bin": {
+    "xsd2zod": "./dist/cli.js"
+  },
   "scripts": {
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
