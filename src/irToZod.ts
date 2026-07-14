@@ -42,9 +42,14 @@ const primitiveToZod = (typeName: QName): string => {
 };
 
 const withCardinality = (schema: string, field: IrField): string => {
-  const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
-  const arrWrapped = isArray ? `z.array(${schema})` : schema;
-  return field.minOccurs === 0 ? `${arrWrapped}.optional()` : arrWrapped;
+  let result = schema;
+  if (field.nillable) {
+    result = `${result}.nullable()`;
+  }
+  if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
+    result = `z.array(${result})`;
+  }
+  return field.minOccurs === 0 ? `${result}.optional()` : result;
 };
 
 const toFieldKey = (field: IrField): string => {

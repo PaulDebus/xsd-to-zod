@@ -67,90 +67,130 @@ const extractRuntimeRoots = (metadataCode: string): RuntimeRootMetadata[] => {
   return JSON.parse(match[1]).roots as RuntimeRootMetadata[];
 };
 
+const withTempDir = (fn: (dir: string) => void): void => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
+  try {
+    fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
 describe('xsd2zod v1 pipeline', () => {
   it('supports array cardinality, collisions, choice, and nillable handling', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
-    const file = path.join(dir, 'schema.xsd');
-    fs.writeFileSync(file, XSD);
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, XSD);
 
-    const ir = parseXsd([file]);
-    const generated = irToZod(ir);
-    expect(generated.schemas).toContain('z.union([z.discriminatedUnion');
-    expect(generated.schemas).toContain('"note": z.string().optional()');
-    expect(generated.schemas).toContain('"approved": z.boolean().optional()');
-    const runtimeRoots = extractRuntimeRoots(generated.metadata);
+      const ir = parseXsd([file]);
+      const generated = irToZod(ir);
+      expect(generated.schemas).toContain('z.union([z.discriminatedUnion');
+      expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
+      expect(generated.schemas).toContain('"approved": z.boolean().optional()');
+      const runtimeRoots = extractRuntimeRoots(generated.metadata);
 
-    const orderType = ir.complexTypes['{urn:test}OrderType'];
-    expect(orderType).toBeDefined();
-    expect(orderType.fields.find((field) => field.qname === '{urn:test}sku')?.minOccurs).toBe(0);
-    expect(orderType.fields.find((field) => field.qname === '{}item')?.kind).toBe('attribute');
+      const orderType = ir.complexTypes['{urn:test}OrderType'];
+      expect(orderType).toBeDefined();
+      expect(orderType.fields.find((field) => field.qname === '{urn:test}sku')?.minOccurs).toBe(0);
+      expect(orderType.fields.find((field) => field.qname === '{}item')?.kind).toBe('attribute');
 
-    const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
-    expect(orderMeta).toBeDefined();
+      const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
+      expect(orderMeta).toBeDefined();
 
-    const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
+      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
 
-    const xml = `<order xmlns="urn:test" item="shadow"><item>one</item><sku>A1</sku><approved>1</approved><note xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></order>`;
-    const parsed = parseXml(xml);
+      const xml = `<order xmlns="urn:test" item="shadow"><item>one</item><sku>A1</sku><approved>1</approved><note xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></order>`;
+      const parsed = parseXml(xml);
 
-    expect(parsed['@item']).toBe('shadow');
-    expect(parsed.item).toEqual(['one']);
-    expect(parsed.__choice).toBe('sku');
-    expect(parsed.approved).toBe(true);
-    expect(parsed.note).toBeNull();
+      expect(parsed['@item']).toBe('shadow');
+      expect(parsed.item).toEqual(['one']);
+      expect(parsed.__choice).toBe('sku');
+      expect(parsed.approved).toBe(true);
+      expect(parsed.note).toBeNull();
 
-    const serialized = serializeXml(parsed);
-    expect(serialized).toContain('xsi:nil="true"');
-    expect(serialized).toContain('<sku>A1</sku>');
+      const serialized = serializeXml(parsed);
+      expect(serialized).toContain('xsi:nil="true"');
+      expect(serialized).toContain('<sku>A1</sku>');
+    });
   });
 
   it('does not treat non-xsi nil as xsi:nil and matches root namespace', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
-    const file = path.join(dir, 'schema.xsd');
-    fs.writeFileSync(file, XSD);
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, XSD);
 
-    const ir = parseXsd([file]);
-    const generated = irToZod(ir);
-    const runtimeRoots = extractRuntimeRoots(generated.metadata);
-    const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
-    expect(orderMeta).toBeDefined();
+      const ir = parseXsd([file]);
+      const generated = irToZod(ir);
+      const runtimeRoots = extractRuntimeRoots(generated.metadata);
+      const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
+      expect(orderMeta).toBeDefined();
 
-    const { parseXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
-    const parsed = parseXml('<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>');
-    expect(parsed.note).toBe('kept');
-    expect(parsed.approved).toBe(false);
+      const { parseXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
+      const parsed = parseXml('<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>');
+      expect(parsed.note).toBe('kept');
+      expect(parsed.approved).toBe(false);
 
-    expect(() => parseXml('<order xmlns="urn:other"><note>bad</note></order>')).toThrow(
-      "Root element '{urn:test}order' not found in XML payload"
-    );
+      expect(() => parseXml('<order xmlns="urn:other"><note>bad</note></order>')).toThrow(
+        "Root element '{urn:test}order' not found in XML payload"
+      );
+    });
   });
 
   it('supports simpleContent with attributes and text value', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
-    const file = path.join(dir, 'schema.xsd');
-    fs.writeFileSync(file, XSD);
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, XSD);
 
-    const ir = parseXsd([file]);
-    const generated = irToZod(ir);
-    const runtimeRoots = extractRuntimeRoots(generated.metadata);
+      const ir = parseXsd([file]);
+      const generated = irToZod(ir);
+      const runtimeRoots = extractRuntimeRoots(generated.metadata);
 
-    const priceMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}price'));
-    expect(priceMeta).toBeDefined();
+      const priceMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}price'));
+      expect(priceMeta).toBeDefined();
 
-    const { parseXml } = createRootHelpers<Record<string, unknown>>(priceMeta!);
-    const parsed = parseXml('<price xmlns="urn:test" currency="USD">42</price>');
+      const { parseXml } = createRootHelpers<Record<string, unknown>>(priceMeta!);
+      const parsed = parseXml('<price xmlns="urn:test" currency="USD">42</price>');
 
-    expect(parsed._text).toBe(42);
-    expect(parsed['@currency']).toBe('USD');
+      expect(parsed._text).toBe(42);
+      expect(parsed['@currency']).toBe('USD');
+    });
   });
 
   it('flattens multi-level complex type extension chains', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
-    const file = path.join(dir, 'schema.xsd');
-    fs.writeFileSync(file, EXTENSION_XSD);
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, EXTENSION_XSD);
 
-    const ir = parseXsd([file]);
-    const aFields = ir.complexTypes['{urn:test}A']?.fields.map((field) => field.qname);
-    expect(aFields).toEqual(['{urn:test}cField', '{urn:test}bField', '{urn:test}aField']);
+      const ir = parseXsd([file]);
+      const aFields = ir.complexTypes['{urn:test}A']?.fields.map((field) => field.qname);
+      expect(aFields).toEqual(['{urn:test}cField', '{urn:test}bField', '{urn:test}aField']);
+    });
+  });
+
+  it('resolves element ref attributes', () => {
+    const REF_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:ref-test" xmlns:t="urn:ref-test" elementFormDefault="qualified">
+  <xs:element name="shared" type="xs:string"/>
+  <xs:complexType name="Container">
+    <xs:sequence>
+      <xs:element ref="t:shared" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="own" type="xs:int"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="container" type="t:Container"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, REF_XSD);
+
+      const ir = parseXsd([file]);
+      const containerType = ir.complexTypes['{urn:ref-test}Container'];
+      expect(containerType).toBeDefined();
+      const sharedField = containerType?.fields.find((f) => f.qname === '{urn:ref-test}shared');
+      expect(sharedField).toBeDefined();
+      expect(sharedField?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}string');
+      expect(sharedField?.maxOccurs).toBe('unbounded');
+    });
   });
 });

@@ -158,15 +158,39 @@ const collectFields = (
   container: AnyNode,
   fields: IrField[],
   choiceGroup?: string,
-  inheritedCardinality: Cardinality = { minOccurs: 1, maxOccurs: 1 }
+  inheritedCardinality: Cardinality = { minOccurs: 1, maxOccurs: 1 },
+  elements: Record<string, ElementDef> = {},
+  choiceCounter?: { value: number }
 ): void => {
+  if (!choiceCounter) {
+    choiceCounter = { value: 0 };
+  }
   for (const [tag, child] of nodeChildren(container)) {
     const localTag = getNodeTagLocalName(tag);
     if (localTag === 'element') {
       const name = String(child['@_name'] ?? '');
-      if (!name) {
+      const ref = child['@_ref'] ? String(child['@_ref']) : '';
+      if (!name && !ref) {
         continue;
       }
+
+      if (ref) {
+        const refQName = resolveTypeQName(ref, nsMap);
+        const referenced = elements[refQName];
+        if (referenced) {
+          const effectiveCardinality = combineCardinality(inheritedCardinality, parseCardinality(child));
+          fields.push({
+            ...effectiveCardinality,
+            kind: 'element',
+            qname: refQName,
+            typeName: referenced.typeName,
+            nillable: child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
+            choiceGroup
+          });
+        }
+        continue;
+      }
+
       const typeName = resolveTypeQName(child['@_type'] ? String(child['@_type']) : undefined, {
         ...nsMap,
         '': ownerNs
@@ -185,9 +209,25 @@ const collectFields = (
 
     if (localTag === 'attribute') {
       const name = String(child['@_name'] ?? '');
-      if (!name) {
+      const ref = child['@_ref'] ? String(child['@_ref']) : '';
+      if (!name && !ref) {
         continue;
       }
+
+      if (ref) {
+        const refQName = resolveTypeQName(ref, nsMap);
+        fields.push({
+          ...combineCardinality(inheritedCardinality, {
+            minOccurs: child['@_use'] === 'required' ? 1 : 0,
+            maxOccurs: 1
+          }),
+          kind: 'attribute',
+          qname: refQName,
+          typeName: toClark(XSD_NS, 'string')
+        });
+        continue;
+      }
+
       fields.push({
         ...combineCardinality(inheritedCardinality, {
           minOccurs: child['@_use'] === 'required' ? 1 : 0,
@@ -208,13 +248,15 @@ const collectFields = (
         child,
         fields,
         choiceGroup,
-        combineCardinality(inheritedCardinality, parseCardinality(child))
+        combineCardinality(inheritedCardinality, parseCardinality(child)),
+        elements,
+        choiceCounter
       );
       continue;
     }
 
     if (localTag === 'choice') {
-      const groupId = `${fields.length}`;
+      const groupId = `${choiceCounter.value++}`;
       collectFields(
         ownerNs,
         nsMap,
@@ -222,7 +264,9 @@ const collectFields = (
         child,
         fields,
         groupId,
-        combineCardinality(inheritedCardinality, parseCardinality(child))
+        combineCardinality(inheritedCardinality, parseCardinality(child)),
+        elements,
+        choiceCounter
       );
       continue;
     }
@@ -239,7 +283,7 @@ const collectFields = (
         qname: toClark(ownerNs, '_text'),
         typeName: baseType
       });
-      collectFields(ownerNs, nsMap, formDefaults, extension, fields, choiceGroup, inheritedCardinality);
+      collectFields(ownerNs, nsMap, formDefaults, extension, fields, choiceGroup, inheritedCardinality, elements, choiceCounter);
       continue;
     }
 
@@ -248,7 +292,7 @@ const collectFields = (
       if (!extension) {
         continue;
       }
-      collectFields(ownerNs, nsMap, formDefaults, extension, fields, choiceGroup, inheritedCardinality);
+      collectFields(ownerNs, nsMap, formDefaults, extension, fields, choiceGroup, inheritedCardinality, elements, choiceCounter);
     }
   }
 };
@@ -272,8 +316,13 @@ export const parseXsd = (files: string[]): XsdIr => {
 
     const { schemaNode, nsMap, targetNs, formDefaults } = readSchema(file);
     targetNamespaces.add(targetNs);
+    const schemaChildren = nodeChildren(schemaNode);
 
-    for (const [tag, child] of nodeChildren(schemaNode)) {
+    const elementNodes: Array<{ node: AnyNode }> = [];
+    const complexTypeNodes: Array<{ node: AnyNode }> = [];
+
+    // Pass 1: collect all declarations before processing fields
+    for (const [tag, child] of schemaChildren) {
       const localTag = getNodeTagLocalName(tag);
 
       if (localTag === 'import' || localTag === 'include') {
@@ -297,55 +346,62 @@ export const parseXsd = (files: string[]): XsdIr => {
       }
 
       if (localTag === 'complexType') {
-        const name = String(child['@_name'] ?? '');
-        if (!name) {
-          continue;
-        }
-        const qname = toClark(targetNs, name);
-        const fields: IrField[] = [];
-        collectFields(targetNs, nsMap, formDefaults, child, fields);
-        const extension = nodeChildren(child)
-          .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
-        const extensionNode = extension
-          ? nodeChildren(extension).find(([key]) => getNodeTagLocalName(key) === 'extension')?.[1]
-          : undefined;
-        const baseType = extensionNode?.['@_base'] ? resolveTypeQName(String(extensionNode['@_base']), nsMap) : undefined;
-
-        complexTypes[qname] = { name: qname, fields, baseType };
+        complexTypeNodes.push({ node: child });
         continue;
       }
 
       if (localTag === 'element') {
-        const name = String(child['@_name'] ?? '');
-        if (!name) {
-          continue;
-        }
-
-        let typeName = child['@_type'] ? resolveTypeQName(String(child['@_type']), { ...nsMap, '': targetNs }) : undefined;
-
-        if (!typeName) {
-          const inlineComplex = nodeChildren(child).find(([key]) => getNodeTagLocalName(key) === 'complexType')?.[1];
-          if (inlineComplex) {
-            typeName = toClark(targetNs, `${name}Type`);
-            const fields: IrField[] = [];
-            collectFields(targetNs, nsMap, formDefaults, inlineComplex, fields);
-            complexTypes[typeName] = { name: typeName, fields };
-          }
-        }
-
-        if (!typeName) {
-          typeName = toClark(XSD_NS, 'string');
-        }
-
-        const qname = toClark(targetNs, name);
-        elements[qname] = {
-          name: qname,
-          typeName,
-          cardinality: parseCardinality(child),
-          nillable: child['@_nillable'] === true || child['@_nillable'] === 'true'
-        };
-        rootElements.push(qname);
+        elementNodes.push({ node: child });
+        continue;
       }
+    }
+
+    // Pass 2: process top-level elements (populates `elements` for ref resolution)
+    for (const { node: child } of elementNodes) {
+      const name = String(child['@_name'] ?? '');
+      if (!name) continue;
+
+      let typeName = child['@_type'] ? resolveTypeQName(String(child['@_type']), { ...nsMap, '': targetNs }) : undefined;
+
+      if (!typeName) {
+        const inlineComplex = nodeChildren(child).find(([key]) => getNodeTagLocalName(key) === 'complexType')?.[1];
+        if (inlineComplex) {
+          typeName = toClark(targetNs, `${name}Type`);
+          const fields: IrField[] = [];
+          collectFields(targetNs, nsMap, formDefaults, inlineComplex, fields);
+          complexTypes[typeName] = { name: typeName, fields };
+        }
+      }
+
+      if (!typeName) {
+        typeName = toClark(XSD_NS, 'string');
+      }
+
+      const qname = toClark(targetNs, name);
+      elements[qname] = {
+        name: qname,
+        typeName,
+        cardinality: parseCardinality(child),
+        nillable: child['@_nillable'] === true || child['@_nillable'] === 'true'
+      };
+      rootElements.push(qname);
+    }
+
+    // Pass 3: process complex types (elements now available for ref resolution)
+    for (const { node: child } of complexTypeNodes) {
+      const name = String(child['@_name'] ?? '');
+      if (!name) continue;
+      const qname = toClark(targetNs, name);
+      const fields: IrField[] = [];
+      collectFields(targetNs, nsMap, formDefaults, child, fields, undefined, undefined, elements);
+      const extension = nodeChildren(child)
+        .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
+      const extensionNode = extension
+        ? nodeChildren(extension).find(([key]) => getNodeTagLocalName(key) === 'extension')?.[1]
+        : undefined;
+      const baseType = extensionNode?.['@_base'] ? resolveTypeQName(String(extensionNode['@_base']), nsMap) : undefined;
+
+      complexTypes[qname] = { name: qname, fields, baseType };
     }
   }
 
