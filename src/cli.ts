@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseXsd } from './parseXsd.js';
 import { irToZod } from './irToZod.js';
 import { runPostGenerationFormatting } from './postProcess.js';
 
-const USAGE = `Usage: xsd2zod <files...> [options]
+export const USAGE = `Usage: xsd2zod <files...> [options]
 
 Generate Zod schemas and runtime metadata from XSD files.
 
@@ -19,6 +20,11 @@ Options:
   --help, -h                Show this help message
 `;
 
+export type ParseArgsResult =
+  | { ok: true; help: true }
+  | { ok: true; help: false; files: string[]; out: string; name: string; format: boolean }
+  | { ok: false; error: string };
+
 const isFlag = (arg: string): string | undefined => {
   if (arg === '--help' || arg === '-h') return 'help';
   if (arg === '--out' || arg === '-o') return 'out';
@@ -27,7 +33,7 @@ const isFlag = (arg: string): string | undefined => {
   return undefined;
 };
 
-const parseArgs = (args: string[]): { files: string[]; out: string; name?: string; format: boolean } => {
+export const parseArgs = (args: string[]): ParseArgsResult => {
   const files: string[] = [];
   let out = '.';
   let name: string | undefined;
@@ -37,21 +43,18 @@ const parseArgs = (args: string[]): { files: string[]; out: string; name?: strin
   while (i < args.length) {
     const flag = isFlag(args[i]);
     if (flag === 'help') {
-      console.log(USAGE);
-      process.exit(0);
+      return { ok: true, help: true };
     } else if (flag === 'out') {
       i++;
       out = args[i];
       if (!out || isFlag(out) !== undefined) {
-        console.error('error: --out/-o requires a directory argument');
-        process.exit(1);
+        return { ok: false, error: '--out/-o requires a directory argument' };
       }
     } else if (flag === 'name') {
       i++;
       name = args[i];
       if (!name || isFlag(name) !== undefined) {
-        console.error('error: --name/-n requires a string argument');
-        process.exit(1);
+        return { ok: false, error: '--name/-n requires a string argument' };
       }
     } else if (flag === 'format') {
       format = true;
@@ -62,14 +65,11 @@ const parseArgs = (args: string[]): { files: string[]; out: string; name?: strin
   }
 
   if (files.length === 0) {
-    console.error('error: at least one XSD file is required');
-    console.error(USAGE);
-    process.exit(1);
+    return { ok: false, error: 'at least one XSD file is required' };
   }
 
   if (files.length > 1 && !name) {
-    console.error('error: --name/-n is required when processing multiple XSD files');
-    process.exit(1);
+    return { ok: false, error: '--name/-n is required when processing multiple XSD files' };
   }
 
   if (!name) {
@@ -77,13 +77,29 @@ const parseArgs = (args: string[]): { files: string[]; out: string; name?: strin
     name = stem;
   }
 
-  return { files, out, name, format };
+  return { ok: true, help: false, files, out, name, format };
 };
 
 const main = (): void => {
-  const { files, out, name, format } = parseArgs(process.argv.slice(2));
+  const result = parseArgs(process.argv.slice(2));
+
+  if (!result.ok) {
+    console.error(`error: ${result.error}`);
+    process.exit(1);
+  }
+
+  if (result.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+
+  const { files, out, name, format } = result;
   const outDir = resolve(out);
-  mkdirSync(outDir, { recursive: true });
+
+  if (!existsSync(outDir)) {
+    console.error(`error: output directory does not exist: ${outDir}`);
+    process.exit(1);
+  }
 
   const ir = parseXsd(files);
   const { schemas, metadata } = irToZod(ir);
@@ -104,4 +120,6 @@ const main = (): void => {
   console.log(`Wrote ${metaFile}`);
 };
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
