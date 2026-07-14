@@ -1,0 +1,255 @@
+import XMLParser from '@nodable/flexible-xml-parser';
+import type { RuntimeFieldMetadata, RuntimeRootMetadata } from './types.js';
+
+const parser = new XMLParser({
+  skip: { attributes: false },
+  attributes: { prefix: '@_' }
+});
+
+const toArray = <T>(value: T | T[] | undefined): T[] => (value === undefined ? [] : Array.isArray(value) ? value : [value]);
+
+const splitClark = (qname: string): { namespace: string; local: string } => {
+  const match = qname.match(/^\{(.*)}(.*)$/);
+  if (!match) {
+    return { namespace: '', local: qname };
+  }
+  return { namespace: match[1], local: match[2] };
+};
+
+const splitXmlName = (name: string): { prefix: string; local: string } => {
+  const idx = name.indexOf(':');
+  return idx === -1 ? { prefix: '', local: name } : { prefix: name.slice(0, idx), local: name.slice(idx + 1) };
+};
+
+const escapeXml = (value: string): string =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+
+const parsePrimitive = (raw: unknown, typeName: string): unknown => {
+  const [, ns, local] = typeName.match(/^\{(.*)}(.*)$/) ?? [];
+  if (ns !== 'http://www.w3.org/2001/XMLSchema') {
+    return raw;
+  }
+
+  if (raw === null || raw === undefined) {
+    return raw;
+  }
+
+  switch (local) {
+    case 'boolean':
+      return raw === true || raw === 'true';
+    case 'int':
+    case 'integer':
+    case 'decimal':
+    case 'double':
+    case 'float':
+      return Number(raw);
+    default:
+      return String(raw);
+  }
+};
+
+const findAttributeValue = (node: Record<string, unknown>, local: string): unknown => {
+  for (const [key, value] of Object.entries(node)) {
+    if (!key.startsWith('@_')) {
+      continue;
+    }
+    if (splitXmlName(key.slice(2)).local === local) {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const findElementValues = (node: Record<string, unknown>, local: string): unknown[] => {
+  for (const [key, value] of Object.entries(node)) {
+    if (key.startsWith('@_') || key === '#text') {
+      continue;
+    }
+    if (splitXmlName(key).local === local) {
+      return toArray(value);
+    }
+  }
+  return [];
+};
+
+const readValue = (field: RuntimeFieldMetadata, node: Record<string, unknown>): unknown => {
+  if (field.kind === 'text') {
+    return parsePrimitive(node['#text'], field.typeName);
+  }
+
+  const local = splitClark(field.qname).local;
+  const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
+
+  if (field.kind === 'attribute') {
+    const value = findAttributeValue(node, local);
+    return value === undefined ? undefined : parsePrimitive(value, field.typeName);
+  }
+
+  const values = findElementValues(node, local).map((entry) => {
+    if (entry && typeof entry === 'object') {
+      const entryNode = entry as Record<string, unknown>;
+      const nilValue = findAttributeValue(entryNode, 'nil');
+      if (nilValue === 'true' || nilValue === true) {
+        return null;
+      }
+      return parsePrimitive(entryNode['#text'] ?? entry, field.typeName);
+    }
+    return parsePrimitive(entry, field.typeName);
+  });
+
+  if (isArray) {
+    return values;
+  }
+
+  return values[0];
+};
+
+const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
+  if (prefixMap.has(uri)) {
+    return prefixMap.get(uri)!;
+  }
+  const next = `ns${prefixMap.size}`;
+  prefixMap.set(uri, next);
+  return next;
+};
+
+const elementName = (qname: string, prefixMap: Map<string, string>, preferredRootNs: string): string => {
+  const { namespace, local } = splitClark(qname);
+  if (!namespace || namespace === preferredRootNs) {
+    return local;
+  }
+  return `${choosePrefix(namespace, prefixMap)}:${local}`;
+};
+
+const serializePrimitive = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  return escapeXml(String(value));
+};
+
+const serializeField = (
+  field: RuntimeFieldMetadata,
+  value: unknown,
+  prefixMap: Map<string, string>,
+  rootNs: string
+): { attr?: string; elements: string[]; usesXsi: boolean } => {
+  const localName = elementName(field.qname, prefixMap, rootNs);
+  if (field.kind === 'attribute') {
+    if (value === undefined) {
+      return { elements: [], usesXsi: false };
+    }
+    return { attr: `${localName}="${serializePrimitive(value)}"`, elements: [], usesXsi: false };
+  }
+
+  if (field.kind === 'text') {
+    return { elements: [serializePrimitive(value)], usesXsi: false };
+  }
+
+  const values = field.maxOccurs === 'unbounded' || field.maxOccurs > 1 ? (Array.isArray(value) ? value : value === undefined ? [] : [value]) : [value];
+  const pieces: string[] = [];
+  let usesXsi = false;
+
+  for (const current of values) {
+    if (current === undefined) {
+      continue;
+    }
+    if (current === null) {
+      usesXsi = true;
+      pieces.push(`<${localName} xsi:nil="true"/>`);
+      continue;
+    }
+    pieces.push(`<${localName}>${serializePrimitive(current)}</${localName}>`);
+  }
+
+  return { elements: pieces, usesXsi };
+};
+
+const extractRoot = (parsed: Record<string, unknown>, expectedLocal: string): Record<string, unknown> => {
+  const entry = Object.entries(parsed).find(([key]) => splitXmlName(key).local === expectedLocal);
+  if (!entry) {
+    throw new Error(`Root element '${expectedLocal}' not found in XML payload`);
+  }
+  if (entry[1] && typeof entry[1] === 'object') {
+    return entry[1] as Record<string, unknown>;
+  }
+  return { '#text': entry[1] };
+};
+
+export const parseXmlWithMetadata = <T>(xml: string, metadata: RuntimeRootMetadata): T => {
+  const parsed = parser.parse(xml) as Record<string, unknown>;
+  const rootLocal = splitClark(metadata.rootElement).local;
+  const root = extractRoot(parsed, rootLocal);
+
+  const result: Record<string, unknown> = {};
+  for (const field of metadata.fields) {
+    const value = readValue(field, root);
+    const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
+    if (value === undefined) {
+      if (isArray) {
+        result[field.key] = [];
+      }
+      continue;
+    }
+    result[field.key] = value;
+    if (field.choiceGroup && value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
+      result.__choice = field.key;
+    }
+  }
+
+  return result as T;
+};
+
+export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(obj: T, metadata: RuntimeRootMetadata): string => {
+  const rootInfo = splitClark(metadata.rootElement);
+  const prefixMap = new Map<string, string>();
+  const attributes: string[] = [];
+  const elements: string[] = [];
+  let usesXsi = false;
+
+  for (const field of metadata.fields) {
+    if (field.choiceGroup && obj.__choice && obj.__choice !== field.key) {
+      continue;
+    }
+    const fieldResult = serializeField(field, obj[field.key], prefixMap, rootInfo.namespace);
+    if (fieldResult.attr) {
+      attributes.push(fieldResult.attr);
+    }
+    elements.push(...fieldResult.elements);
+    usesXsi = usesXsi || fieldResult.usesXsi;
+  }
+
+  const nsDecls: string[] = [];
+  if (rootInfo.namespace) {
+    nsDecls.push(`xmlns="${rootInfo.namespace}"`);
+  }
+  for (const [uri, prefix] of prefixMap.entries()) {
+    if (!uri || uri === rootInfo.namespace) {
+      continue;
+    }
+    nsDecls.push(`xmlns:${prefix}="${uri}"`);
+  }
+  if (usesXsi) {
+    nsDecls.push('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');
+  }
+
+  const attrs = [...nsDecls, ...attributes].join(' ');
+  const opening = attrs ? `<${rootInfo.local} ${attrs}>` : `<${rootInfo.local}>`;
+  return `${opening}${elements.join('')}</${rootInfo.local}>`;
+};
+
+export const createRootHelpers = <T>(metadata: RuntimeRootMetadata): {
+  parseXml: (xml: string) => T;
+  serializeXml: (obj: T) => string;
+} => ({
+  parseXml: (xml) => parseXmlWithMetadata<T>(xml, metadata),
+  serializeXml: (obj) => serializeXmlWithMetadata(obj as Record<string, unknown>, metadata)
+});

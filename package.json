@@ -1,0 +1,36 @@
+{
+  "name": "xsd2zod",
+  "version": "1.0.0",
+  "description": "",
+  "main": "./dist/index.js",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaulDebus/xsd2zod.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/PaulDebus/xsd2zod/issues"
+  },
+  "homepage": "https://github.com/PaulDebus/xsd2zod#readme",
+  "dependencies": {
+    "@nodable/compact-builder": "^2.0.0",
+    "@nodable/flexible-xml-parser": "^1.10.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "types": "./dist/index.d.ts"
+}
