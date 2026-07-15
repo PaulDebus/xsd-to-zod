@@ -1,7 +1,7 @@
 {
   "name": "xsd2zod",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Turn XSD schemas into type-safe Zod parsers for XML, with a metadata-driven runtime for parseXml/serializeXml round-trips.",
   "main": "./dist/index.js",
   "bin": {
     "xsd2zod": "./dist/cli.js"
@@ -10,20 +10,39 @@
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
     "test:watch": "vitest",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PaulDebus/xsd2zod.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "xsd",
+    "zod",
+    "xml",
+    "schema",
+    "code-generation",
+    "xml-parsing",
+    "typescript",
+    "validation"
+  ],
+  "author": "Paul Debus",
   "license": "ISC",
   "type": "module",
   "bugs": {
     "url": "https://github.com/PaulDebus/xsd2zod/issues"
   },
   "homepage": "https://github.com/PaulDebus/xsd2zod#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@nodable/compact-builder": "^2.0.0",
     "@nodable/flexible-xml-parser": "^1.10.0",

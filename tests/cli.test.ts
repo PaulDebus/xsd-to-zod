@@ -80,13 +80,13 @@ describe('CLI e2e', () => {
   const cliEntry = path.resolve('src/cli.ts');
 
   it('prints USAGE on --help', () => {
-    const out = execSync(`npx tsx ${cliEntry} --help`, { encoding: 'utf8' });
+    const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} --help`, { encoding: 'utf8' });
     expect(out.trim()).toBe(USAGE.trim());
   });
 
   it('exits with error when no files given', () => {
     try {
-      execSync(`npx tsx ${cliEntry}`, { encoding: 'utf8', stdio: 'pipe' });
+      execSync(`npx tsx ${JSON.stringify(cliEntry)}`, { encoding: 'utf8', stdio: 'pipe' });
       expect.fail('should have thrown');
     } catch (e: unknown) {
       const err = e as Error & { stderr?: Buffer };
@@ -100,7 +100,7 @@ describe('CLI e2e', () => {
       fs.writeFileSync(xsdFile, XSD);
       const fakeDir = path.join(dir, 'does-not-exist');
       try {
-        execSync(`npx tsx ${cliEntry} ${xsdFile} -o ${fakeDir}`, { encoding: 'utf8', stdio: 'pipe' });
+        execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(fakeDir)}`, { encoding: 'utf8', stdio: 'pipe' });
         expect.fail('should have thrown');
       } catch (e: unknown) {
         const err = e as Error & { stderr?: Buffer };
@@ -113,7 +113,7 @@ describe('CLI e2e', () => {
     withTempDir((dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      const out = execSync(`npx tsx ${cliEntry} ${xsdFile} -o ${dir} --name my`, { encoding: 'utf8' });
+      const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(dir)} --name my`, { encoding: 'utf8' });
 
       expect(out).toContain('Wrote');
       expect(fs.existsSync(path.join(dir, 'my.zod.ts'))).toBe(true);
@@ -125,7 +125,7 @@ describe('CLI e2e', () => {
     withTempDir((dir) => {
       const xsdFile = path.join(dir, 'my-stem.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      execSync(`npx tsx ${cliEntry} ${xsdFile} -o ${dir}`, { encoding: 'utf8' });
+      execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(dir)}`, { encoding: 'utf8' });
 
       expect(fs.existsSync(path.join(dir, 'my-stem.zod.ts'))).toBe(true);
     });
