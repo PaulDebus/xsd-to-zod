@@ -85,7 +85,13 @@ describe('CLI e2e', () => {
   });
 
   it('exits with error when no files given', () => {
-    expect(() => execSync(`npx tsx ${cliEntry}`, { encoding: 'utf8' })).toThrow('at least one XSD file');
+    try {
+      execSync(`npx tsx ${cliEntry}`, { encoding: 'utf8', stdio: 'pipe' });
+      expect.fail('should have thrown');
+    } catch (e: unknown) {
+      const err = e as Error & { stderr?: Buffer };
+      expect(err.message).toContain('at least one XSD file');
+    }
   });
 
   it('exits with error when output dir does not exist', () => {
@@ -93,9 +99,13 @@ describe('CLI e2e', () => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
       const fakeDir = path.join(dir, 'does-not-exist');
-      expect(() =>
-        execSync(`npx tsx ${cliEntry} ${xsdFile} -o ${fakeDir}`, { encoding: 'utf8' })
-      ).toThrow('output directory does not exist');
+      try {
+        execSync(`npx tsx ${cliEntry} ${xsdFile} -o ${fakeDir}`, { encoding: 'utf8', stdio: 'pipe' });
+        expect.fail('should have thrown');
+      } catch (e: unknown) {
+        const err = e as Error & { stderr?: Buffer };
+        expect(err.message).toContain('output directory does not exist');
+      }
     });
   });
 
