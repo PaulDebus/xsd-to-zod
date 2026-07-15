@@ -9,8 +9,8 @@ const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection-default', '#8 — serializeXml fails on nested complex types'],
   ['xmlschema/collection/collection3bis', '#8 — serializeXml fails on nested complex types'],
   ['xmlschema/collection/collection4', '#8 — serializeXml fails on nested complex types'],
-  ['xmlschema/collection/collection6', 'root <xs:import> is not a document element'],
-  ['xmlschema/menù/menù-ascii', 'numeric character references in root tag not supported by string-based root matching'],
+  ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
+  ['xmlschema/menù/menù-ascii', '#15 — numeric character references in root element name not decoded'],
 ]);
 
 function discoverUpstreamCases(): TestCase[] {
