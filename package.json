@@ -7,9 +7,7 @@
     "xsd2zod": "./dist/cli.js"
   },
   "scripts": {
-    "test": "vitest run --project fast",
-    "test:extended": "vitest run --project extended",
-    "test:nightly": "vitest run --project nightly",
+    "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit"

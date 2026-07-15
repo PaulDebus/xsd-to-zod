@@ -3,18 +3,7 @@ name: Test
 on: [push, pull_request]
 
 jobs:
-  fast:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm ci
-      - run: npm test
-
-  extended:
-    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,4 +13,4 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
-      - run: npm run test:extended
+      - run: npm test
