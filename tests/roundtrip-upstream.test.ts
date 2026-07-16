@@ -13,12 +13,10 @@ const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection4', 'serialized XML fails XSD validation — elementFormDefault handling (#35)'],
   ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
   ['xmlschema/collection/collection-redef-xmlns', 'serialized XML fails XSD validation — elementFormDefault handling (#35)'],
+  ['xmlschema/vehicles/vehicles-ns-mix', 'serialized XML fails XSD validation — child element namespace context resolution (#36 follow-up)'],
   ['xmlschema/menù/menù-ascii', '#15 — numeric character references in root element name not decoded'],
   ['xmlschema/menù/menù-cp1252', 'serialized XML fails XSD validation — encoding issues in schema file name'],
-  ['xmlschema/vehicles/vehicles', 'serialized XML fails XSD validation — anonymous inline complex types on root elements not handled (#36)'],
-  ['xmlschema/vehicles/vehicles2', 'serialized XML fails XSD validation — anonymous inline complex types on root elements not handled (#36)'],
-  ['xmlschema/vehicles/vehicles-ns-mix', 'serialized XML fails XSD validation — anonymous inline complex types on root elements not handled (#36)'],
-  ['xmlschema/vehicles/vehicles-redef', 'serialized XML fails XSD validation — anonymous inline complex types on root elements not handled (#36)'],
+
 ]);
 
 function discoverUpstreamCases(): TestCase[] {
