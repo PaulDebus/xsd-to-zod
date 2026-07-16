@@ -9,6 +9,16 @@ import type {
   XsdIr
 } from './types.js';
 
+const textFieldFor = (typeName: QName): RuntimeFieldMetadata => ({
+  key: '_text',
+  kind: 'text',
+  qname: `{}_text` as QName,
+  typeName,
+  minOccurs: 1,
+  maxOccurs: 1,
+  nillable: false
+});
+
 const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
 const primitiveToZod = (typeName: QName): string => {
@@ -134,16 +144,12 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
     .map((root) => {
       const rootDef = ir.elements[root];
       const typeMetadata = metadataTypes.find((type) => type.typeName === rootDef.typeName);
-      if (!typeMetadata) {
-        return undefined;
-      }
       return {
         rootElement: root,
         typeName: rootDef.typeName,
-        fields: typeMetadata.fields
+        fields: typeMetadata?.fields ?? [textFieldFor(rootDef.typeName)]
       };
-    })
-    .filter((entry): entry is RuntimeRootMetadata => Boolean(entry));
+    });
 
   return {
     schemas: `${schemaLines.join('\n')}\n`,
