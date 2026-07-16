@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { createRootHelpers } from '../src/index.js';
-import { extractRootLocalName, findRootMetadata, getRuntimeMetadata } from './helpers.js';
+import { findRootMetadata, getRuntimeMetadata } from './helpers.js';
 
 const NEGATIVE_DIR = path.resolve('testdata/curated/negative');
 

@@ -110,7 +110,7 @@ describe('xsd2zod v1 pipeline', () => {
 
       const serialized = serializeXml(parsed);
       expect(serialized).toContain('xsi:nil="true"');
-      expect(serialized).toContain('<sku>A1</sku>');
+      expect(serialized).toContain('<ns0:sku>A1</ns0:sku>');
     });
   });
 
@@ -236,8 +236,8 @@ describe('xsd2zod v1 pipeline', () => {
 
       const serialized = serializeXml(parsed);
       expect(serialized).not.toContain('[object Object]');
-      expect(serialized).toContain('<productId>P-100</productId>');
-      expect(serialized).toContain('<quantity>5</quantity>');
+      expect(serialized).toContain('<ns0:productId>P-100</ns0:productId>');
+      expect(serialized).toContain('<ns0:quantity>5</ns0:quantity>');
 
       const reparsed = parseXml(serialized);
       expect(reparsed).toEqual(parsed);

@@ -27,9 +27,7 @@ function discoverCuratedCases(): TestCase[] {
 
 const curatedCases = discoverCuratedCases();
 
-const KNOWN_FAILURES = new Map<string, string>([
-  ['namespaces/unqualified', 'elementFormDefault="unqualified" produces qualified child elements in serializer — libxml2 rejects them'],
-]);
+const KNOWN_FAILURES = new Map<string, string>([]);
 
 describe('curated round-trip', () => {
   for (const c of curatedCases) {

@@ -115,6 +115,9 @@ const findElementValues = (
     if (local === expected.local && namespace === expected.namespace) {
       return toArray(value);
     }
+    if (local === expected.local && expected.namespace === '' && !prefix) {
+      return toArray(value);
+    }
   }
   return [];
 };
@@ -173,9 +176,9 @@ const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
   return next;
 };
 
-const elementName = (qname: string, prefixMap: Map<string, string>, preferredRootNs: string): string => {
+const elementName = (qname: string, prefixMap: Map<string, string>): string => {
   const { namespace, local } = splitClark(qname);
-  if (!namespace || namespace === preferredRootNs) {
+  if (!namespace) {
     return local;
   }
   return `${choosePrefix(namespace, prefixMap)}:${local}`;
@@ -183,7 +186,6 @@ const elementName = (qname: string, prefixMap: Map<string, string>, preferredRoo
 
 type SerializeCtx = {
   prefixMap: Map<string, string>;
-  rootNs: string;
   types: Record<string, RuntimeTypeMetadata>;
 };
 
@@ -202,7 +204,7 @@ const serializeField = (
   value: unknown,
   ctx: SerializeCtx
 ): { attr?: string; elements: string[]; usesXsi: boolean } => {
-  const localName = elementName(field.qname, ctx.prefixMap, ctx.rootNs);
+  const localName = elementName(field.qname, ctx.prefixMap);
   if (field.kind === 'attribute') {
     if (value === undefined) {
       return { elements: [], usesXsi: false };
@@ -328,14 +330,16 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
   const rootInfo = splitClark(root.rootElement);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
-    rootNs: rootInfo.namespace,
     types,
   };
   const { attributes, elements, usesXsi } = serializeTypeFields(obj, root, ctx);
 
   const nsDecls: string[] = [];
+  let rootTag = rootInfo.local;
   if (rootInfo.namespace) {
-    nsDecls.push(`xmlns="${rootInfo.namespace}"`);
+    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap);
+    rootTag = `${rootPrefix}:${rootInfo.local}`;
+    nsDecls.push(`xmlns:${rootPrefix}="${rootInfo.namespace}"`);
   }
   for (const [uri, prefix] of ctx.prefixMap.entries()) {
     if (!uri || uri === rootInfo.namespace) {
@@ -348,8 +352,8 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
   }
 
   const attrs = [...nsDecls, ...attributes].join(' ');
-  const opening = attrs ? `<${rootInfo.local} ${attrs}>` : `<${rootInfo.local}>`;
-  return `${opening}${elements.join('')}</${rootInfo.local}>`;
+  const opening = attrs ? `<${rootTag} ${attrs}>` : `<${rootTag}>`;
+  return `${opening}${elements.join('')}</${rootTag}>`;
 };
 
 export const createRootHelpers = <T>(
