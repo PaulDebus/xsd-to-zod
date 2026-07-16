@@ -176,7 +176,7 @@ const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
   return next;
 };
 
-const elementName = (qname: string, prefixMap: Map<string, string>, preferredRootNs: string): string => {
+const elementName = (qname: string, prefixMap: Map<string, string>): string => {
   const { namespace, local } = splitClark(qname);
   if (!namespace) {
     return local;
@@ -186,7 +186,6 @@ const elementName = (qname: string, prefixMap: Map<string, string>, preferredRoo
 
 type SerializeCtx = {
   prefixMap: Map<string, string>;
-  rootNs: string;
   types: Record<string, RuntimeTypeMetadata>;
 };
 
@@ -205,7 +204,7 @@ const serializeField = (
   value: unknown,
   ctx: SerializeCtx
 ): { attr?: string; elements: string[]; usesXsi: boolean } => {
-  const localName = elementName(field.qname, ctx.prefixMap, ctx.rootNs);
+  const localName = elementName(field.qname, ctx.prefixMap);
   if (field.kind === 'attribute') {
     if (value === undefined) {
       return { elements: [], usesXsi: false };
@@ -331,7 +330,6 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
   const rootInfo = splitClark(root.rootElement);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
-    rootNs: rootInfo.namespace,
     types,
   };
   const { attributes, elements, usesXsi } = serializeTypeFields(obj, root, ctx);
