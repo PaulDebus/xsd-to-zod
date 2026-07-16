@@ -81,6 +81,12 @@ const metadataForType = (type: ComplexTypeDef): RuntimeTypeMetadata => ({
 export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
   const schemaLines: string[] = [];
   const metadataTypes: RuntimeTypeMetadata[] = Object.values(ir.complexTypes).map(metadataForType);
+  for (const simpleType of Object.values(ir.simpleTypes)) {
+    metadataTypes.push({
+      typeName: simpleType.name,
+      fields: [textFieldFor(simpleType.baseType)]
+    });
+  }
   const typesByQName: Record<string, RuntimeTypeMetadata> = {};
   for (const type of metadataTypes) {
     typesByQName[type.typeName] = type;
