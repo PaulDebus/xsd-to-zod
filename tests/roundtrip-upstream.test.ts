@@ -13,7 +13,6 @@ const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection4', '#18 — type name collisions when globbing all sibling XSDs (passes with collection4.xsd only)'],
   ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
   ['xmlschema/collection/collection-redef-xmlns', '#18 — type name collisions when globbing all sibling XSDs (passes with collection.xsd only)'],
-  ['xmlschema/vehicles/vehicles-ns-mix', '#42 — parser ignores child element xmlns:prefix override when resolving tag name'],
   ['xmlschema/menù/menù-ascii', '#15 — numeric character references in root element name not decoded'],
   ['xmlschema/menù/menù-cp1252', 'serialized XML fails XSD validation — encoding issues in schema file name'],
 

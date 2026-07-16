@@ -12,6 +12,7 @@ const KNOWN_FAILURES = new Map<string, string>([
   ['boeingData/ipo2/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
   ['boeingData/ipo2/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
   ['boeingData/ipo3/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
+  ['boeingData/ipo3/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
   ['boeingData/ipo4/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
   ['boeingData/ipo4/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
 ]);

@@ -111,7 +111,11 @@ const findElementValues = (
       continue;
     }
     const { prefix, local } = splitXmlName(key);
-    const namespace = prefix ? (namespaceContext[prefix] ?? '') : (namespaceContext[''] ?? '');
+    const childNode = (Array.isArray(value) ? value[0] : value) as Record<string, unknown> | undefined;
+    const childNsContext = childNode && typeof childNode === 'object'
+      ? withNamespaceContext(namespaceContext, childNode)
+      : namespaceContext;
+    const namespace = prefix ? (childNsContext[prefix] ?? '') : (childNsContext[''] ?? '');
     if (local === expected.local && namespace === expected.namespace) {
       return toArray(value);
     }
