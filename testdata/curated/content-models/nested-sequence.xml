@@ -1,9 +1,12 @@
 <?xml version="1.0"?>
 <order xmlns="urn:curated">
   <orderId>ORD-001</orderId>
-  <tag>important</tag>
-  <tag>urgent</tag>
-  <quantity>10</quantity>
-  <quantity>20</quantity>
-  <quantity>30</quantity>
+  <lineItem>
+    <productId>P-100</productId>
+    <quantity>2</quantity>
+  </lineItem>
+  <lineItem>
+    <productId>P-200</productId>
+    <quantity>5</quantity>
+  </lineItem>
 </order>

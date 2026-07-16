@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRootHelpers, irToZod, parseXsd } from '../src/index.js';
-import type { RuntimeRootMetadata } from '../src/types.js';
+import type { RuntimeMetadata } from '../src/types.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -59,12 +59,12 @@ const EXTENSION_XSD = `<?xml version="1.0"?>
   </xs:complexType>
 </xs:schema>`;
 
-const extractRuntimeRoots = (metadataCode: string): RuntimeRootMetadata[] => {
+const extractRuntimeMetadata = (metadataCode: string): RuntimeMetadata => {
   const match = metadataCode.match(/runtimeMetadata = ([\s\S]+) as const;/);
   if (!match) {
     throw new Error('runtime metadata not found');
   }
-  return JSON.parse(match[1]).roots as RuntimeRootMetadata[];
+  return JSON.parse(match[1]) as RuntimeMetadata;
 };
 
 const withTempDir = (fn: (dir: string) => void): void => {
@@ -87,17 +87,17 @@ describe('xsd2zod v1 pipeline', () => {
       expect(generated.schemas).toContain('z.union([z.discriminatedUnion');
       expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
       expect(generated.schemas).toContain('"approved": z.boolean().optional()');
-      const runtimeRoots = extractRuntimeRoots(generated.metadata);
+      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
 
       const orderType = ir.complexTypes['{urn:test}OrderType'];
       expect(orderType).toBeDefined();
       expect(orderType.fields.find((field) => field.qname === '{urn:test}sku')?.minOccurs).toBe(0);
       expect(orderType.fields.find((field) => field.qname === '{}item')?.kind).toBe('attribute');
 
-      const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
+      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
       expect(orderMeta).toBeDefined();
 
-      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
+      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
 
       const xml = `<order xmlns="urn:test" item="shadow"><item>one</item><sku>A1</sku><approved>1</approved><note xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></order>`;
       const parsed = parseXml(xml);
@@ -121,11 +121,11 @@ describe('xsd2zod v1 pipeline', () => {
 
       const ir = parseXsd([file]);
       const generated = irToZod(ir);
-      const runtimeRoots = extractRuntimeRoots(generated.metadata);
-      const orderMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}order'));
+      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
       expect(orderMeta).toBeDefined();
 
-      const { parseXml } = createRootHelpers<Record<string, unknown>>(orderMeta!);
+      const { parseXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
       const parsed = parseXml('<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>');
       expect(parsed.note).toBe('kept');
       expect(parsed.approved).toBe(false);
@@ -143,12 +143,12 @@ describe('xsd2zod v1 pipeline', () => {
 
       const ir = parseXsd([file]);
       const generated = irToZod(ir);
-      const runtimeRoots = extractRuntimeRoots(generated.metadata);
+      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
 
-      const priceMeta = runtimeRoots.find((root) => root.rootElement.endsWith('}price'));
+      const priceMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}price'));
       expect(priceMeta).toBeDefined();
 
-      const { parseXml } = createRootHelpers<Record<string, unknown>>(priceMeta!);
+      const { parseXml } = createRootHelpers<Record<string, unknown>>(priceMeta!, runtimeMetadata.types);
       const parsed = parseXml('<price xmlns="urn:test" currency="USD">42</price>');
 
       expect(parsed._text).toBe(42);
@@ -191,6 +191,56 @@ describe('xsd2zod v1 pipeline', () => {
       expect(sharedField).toBeDefined();
       expect(sharedField?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}string');
       expect(sharedField?.maxOccurs).toBe('unbounded');
+    });
+  });
+
+  it('round-trips nested complex types without producing [object Object] (#8)', () => {
+    const NESTED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:nested-test" xmlns:t="urn:nested-test" elementFormDefault="qualified">
+  <xs:complexType name="LineItemType">
+    <xs:sequence>
+      <xs:element name="productId" type="xs:string"/>
+      <xs:element name="quantity" type="xs:integer"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="OrderType">
+    <xs:sequence>
+      <xs:element name="orderId" type="xs:string"/>
+      <xs:element name="lineItem" type="t:LineItemType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="order" type="t:OrderType"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, NESTED_XSD);
+
+      const ir = parseXsd([file]);
+      const generated = irToZod(ir);
+      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+
+      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
+      expect(orderMeta).toBeDefined();
+
+      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
+
+      const xml = `<order xmlns="urn:nested-test"><orderId>ORD-001</orderId><lineItem><productId>P-100</productId><quantity>2</quantity></lineItem><lineItem><productId>P-200</productId><quantity>5</quantity></lineItem></order>`;
+      const parsed = parseXml(xml);
+
+      expect(parsed.orderId).toBe('ORD-001');
+      expect(parsed.lineItem).toEqual([
+        { productId: 'P-100', quantity: 2 },
+        { productId: 'P-200', quantity: 5 }
+      ]);
+
+      const serialized = serializeXml(parsed);
+      expect(serialized).not.toContain('[object Object]');
+      expect(serialized).toContain('<productId>P-100</productId>');
+      expect(serialized).toContain('<quantity>5</quantity>');
+
+      const reparsed = parseXml(serialized);
+      expect(reparsed).toEqual(parsed);
     });
   });
 });

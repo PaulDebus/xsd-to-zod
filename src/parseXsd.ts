@@ -56,7 +56,7 @@ const resolveTypeQName = (rawType: string | undefined, nsMap: Record<string, str
   }
   const { prefix, local } = splitQName(rawType);
   if (prefix === '') {
-    return toClark('', local);
+    return toClark(nsMap[''] ?? '', local);
   }
   return toClark(nsMap[prefix] ?? '', local);
 };

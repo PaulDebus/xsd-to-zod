@@ -55,3 +55,8 @@ export type RuntimeRootMetadata = {
   typeName: QName;
   fields: RuntimeFieldMetadata[];
 };
+
+export type RuntimeMetadata = {
+  types: Record<string, RuntimeTypeMetadata>;
+  roots: RuntimeRootMetadata[];
+};

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { expect } from 'vitest';
 import { createRootHelpers, irToZod, parseXsd } from '../src/index.js';
-import type { RuntimeRootMetadata } from '../src/types.js';
+import type { RuntimeMetadata, RuntimeRootMetadata } from '../src/types.js';
 
 export interface TestCase {
   name: string;
@@ -17,21 +17,21 @@ export function extractRootLocalName(xml: string): string {
   return colonIdx >= 0 ? name.slice(colonIdx + 1) : name;
 }
 
-export function getRuntimeRoots(xsdFiles: string[]): RuntimeRootMetadata[] {
+export function getRuntimeMetadata(xsdFiles: string[]): RuntimeMetadata {
   const ir = parseXsd(xsdFiles);
   const generated = irToZod(ir);
 
   const metadataMatch = generated.metadata.match(/runtimeMetadata = ([\s\S]+) as const;/);
   if (!metadataMatch) throw new Error('runtime metadata not found in generated output');
-  return JSON.parse(metadataMatch[1]).roots as RuntimeRootMetadata[];
+  return JSON.parse(metadataMatch[1]) as RuntimeMetadata;
 }
 
 export function findRootMetadata(
-  runtimeRoots: RuntimeRootMetadata[],
+  metadata: RuntimeMetadata,
   xml: string,
 ): RuntimeRootMetadata {
   const xmlRootTag = extractRootLocalName(xml);
-  const rootMeta = runtimeRoots.find(r => {
+  const rootMeta = metadata.roots.find(r => {
     const localName = r.rootElement.split('}').pop()!;
     return localName === xmlRootTag;
   });
@@ -42,11 +42,11 @@ export function findRootMetadata(
 }
 
 export function runRoundTrip(xsdFiles: string[], xmlFile: string): void {
-  const runtimeRoots = getRuntimeRoots(xsdFiles);
+  const metadata = getRuntimeMetadata(xsdFiles);
   const xml = fs.readFileSync(xmlFile, 'utf8');
-  const rootMeta = findRootMetadata(runtimeRoots, xml);
+  const rootMeta = findRootMetadata(metadata, xml);
 
-  const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta);
+  const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta, metadata.types);
 
   const objectA = parseXml(xml);
   const serialized = serializeXml(objectA);

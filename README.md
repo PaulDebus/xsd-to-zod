@@ -53,7 +53,7 @@ import { orderSchema } from './generated/order.zod.js';
 import { runtimeMetadata } from './generated/order.meta.js';
 
 const orderMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}order'))!;
-const { parseXml } = createRootHelpers<z.infer<typeof orderSchema>>(orderMeta);
+const { parseXml } = createRootHelpers<z.infer<typeof orderSchema>>(orderMeta, runtimeMetadata.types);
 
 const data = parseXml(`
   <order xmlns="urn:example" id="42">
@@ -142,7 +142,7 @@ import { orderSchema } from './schema.zod.js';
 import { runtimeMetadata } from './schema.meta.js';
 
 const orderMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}order'))!;
-const { parseXml, serializeXml } = createRootHelpers<z.infer<typeof orderSchema>>(orderMeta);
+const { parseXml, serializeXml } = createRootHelpers<z.infer<typeof orderSchema>>(orderMeta, runtimeMetadata.types);
 
 const order = parseXml(`<order xmlns="urn:example" id="42">...</order>`);
 const xml = serializeXml(order);

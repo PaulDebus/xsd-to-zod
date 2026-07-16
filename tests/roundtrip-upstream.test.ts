@@ -4,11 +4,6 @@ import { describe, it } from 'vitest';
 import { runRoundTrip, type TestCase } from './helpers.js';
 
 const KNOWN_FAILURES = new Map<string, string>([
-  ['oasis-ubl-2.4/xml/UBL-Invoice-2.1-Example', '#8 — serializeXml fails on nested complex types'],
-  ['oasis-ubl-2.4/xml/UBL-Order-2.0-Example', '#8 — serializeXml fails on nested complex types'],
-  ['xmlschema/collection/collection-default', '#8 — serializeXml fails on nested complex types'],
-  ['xmlschema/collection/collection3bis', '#8 — serializeXml fails on nested complex types'],
-  ['xmlschema/collection/collection4', '#8 — serializeXml fails on nested complex types'],
   ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
   ['xmlschema/menù/menù-ascii', '#15 — numeric character references in root element name not decoded'],
 ]);

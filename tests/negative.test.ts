@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { createRootHelpers } from '../src/index.js';
-import { extractRootLocalName, findRootMetadata, getRuntimeRoots } from './helpers.js';
+import { extractRootLocalName, findRootMetadata, getRuntimeMetadata } from './helpers.js';
 
 const NEGATIVE_DIR = path.resolve('testdata/curated/negative');
 
@@ -35,23 +35,23 @@ describe('negative — invalid XML handling', () => {
     return;
   }
 
-  const runtimeRoots = getRuntimeRoots([xsdPath]);
+  const runtimeMetadata = getRuntimeMetadata([xsdPath]);
 
   for (const c of negativeCases) {
     if (c.expectedToThrow) {
       it(`rejects ${c.name}`, () => {
         const xml = fs.readFileSync(c.xmlFile, 'utf8');
-        const rootMeta = findRootMetadata(runtimeRoots, xml);
+        const rootMeta = findRootMetadata(runtimeMetadata, xml);
 
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta);
+        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
         expect(() => parseXml(xml)).toThrow();
       });
     } else {
       it(`gracefully handles ${c.name} (no throw — lenient validation)`, () => {
         const xml = fs.readFileSync(c.xmlFile, 'utf8');
-        const rootMeta = findRootMetadata(runtimeRoots, xml);
+        const rootMeta = findRootMetadata(runtimeMetadata, xml);
 
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta);
+        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
         expect(() => parseXml(xml)).not.toThrow();
       });
     }

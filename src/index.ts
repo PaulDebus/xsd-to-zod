@@ -8,6 +8,7 @@ export type {
   IrField,
   QName,
   RuntimeFieldMetadata,
+  RuntimeMetadata,
   RuntimeRootMetadata,
   RuntimeTypeMetadata,
   SimpleTypeDef,
