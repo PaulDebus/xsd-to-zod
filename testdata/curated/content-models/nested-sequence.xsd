@@ -1,10 +1,15 @@
 <?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:curated" xmlns:t="urn:curated" elementFormDefault="qualified">
+  <xs:complexType name="LineItemType">
+    <xs:sequence>
+      <xs:element name="productId" type="xs:string"/>
+      <xs:element name="quantity" type="xs:integer"/>
+    </xs:sequence>
+  </xs:complexType>
   <xs:complexType name="OrderType">
     <xs:sequence>
       <xs:element name="orderId" type="xs:string"/>
-      <xs:element name="tag" type="xs:string" maxOccurs="unbounded"/>
-      <xs:element name="quantity" type="xs:integer" maxOccurs="unbounded"/>
+      <xs:element name="lineItem" type="t:LineItemType" maxOccurs="unbounded"/>
     </xs:sequence>
   </xs:complexType>
   <xs:element name="order" type="t:OrderType"/>

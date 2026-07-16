@@ -1,5 +1,5 @@
 import XMLParser from '@nodable/flexible-xml-parser';
-import type { RuntimeFieldMetadata, RuntimeRootMetadata } from './types.js';
+import type { RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
 
@@ -122,7 +122,8 @@ const findElementValues = (
 const readValue = (
   field: RuntimeFieldMetadata,
   node: Record<string, unknown>,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
+  types: Record<string, RuntimeTypeMetadata>
 ): unknown => {
   if (field.kind === 'text') {
     return parsePrimitive(node['#text'], field.typeName);
@@ -135,6 +136,8 @@ const readValue = (
     return value === undefined ? undefined : parsePrimitive(value, field.typeName);
   }
 
+  const complexType = types[field.typeName];
+
   const values = findElementValues(node, field.qname, namespaceContext).map((entry) => {
     if (entry && typeof entry === 'object') {
       const entryNode = entry as Record<string, unknown>;
@@ -143,7 +146,13 @@ const readValue = (
       if (nilValue === 'true' || nilValue === true || nilValue === '1' || nilValue === 1) {
         return null;
       }
+      if (complexType) {
+        return parseTypeFields(entryNode, complexType, entryNamespaceContext, types);
+      }
       return parsePrimitive(entryNode['#text'] ?? entry, field.typeName);
+    }
+    if (complexType) {
+      return parseTypeFields({}, complexType, namespaceContext, types);
     }
     return parsePrimitive(entry, field.typeName);
   });
@@ -186,7 +195,8 @@ const serializeField = (
   field: RuntimeFieldMetadata,
   value: unknown,
   prefixMap: Map<string, string>,
-  rootNs: string
+  rootNs: string,
+  types: Record<string, RuntimeTypeMetadata>
 ): { attr?: string; elements: string[]; usesXsi: boolean } => {
   const localName = elementName(field.qname, prefixMap, rootNs);
   if (field.kind === 'attribute') {
@@ -203,6 +213,7 @@ const serializeField = (
   const values = field.maxOccurs === 'unbounded' || field.maxOccurs > 1 ? (Array.isArray(value) ? value : value === undefined ? [] : [value]) : [value];
   const pieces: string[] = [];
   let usesXsi = false;
+  const complexType = types[field.typeName];
 
   for (const current of values) {
     if (current === undefined) {
@@ -213,10 +224,65 @@ const serializeField = (
       pieces.push(`<${localName} xsi:nil="true"/>`);
       continue;
     }
+    if (complexType && typeof current === 'object') {
+      const inner = serializeTypeFields(current as Record<string, unknown>, complexType, prefixMap, rootNs, types);
+      usesXsi = usesXsi || inner.usesXsi;
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+      pieces.push(`<${localName}${attrStr}>${inner.elements.join('')}</${localName}>`);
+      continue;
+    }
     pieces.push(`<${localName}>${serializePrimitive(current)}</${localName}>`);
   }
 
   return { elements: pieces, usesXsi };
+};
+
+const parseTypeFields = (
+  node: Record<string, unknown>,
+  metadata: RuntimeTypeMetadata,
+  namespaceContext: Record<string, string>,
+  types: Record<string, RuntimeTypeMetadata>
+): Record<string, unknown> => {
+  const result: Record<string, unknown> = {};
+  for (const field of metadata.fields) {
+    const value = readValue(field, node, namespaceContext, types);
+    const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
+    if (value === undefined) {
+      if (isArray) {
+        result[field.key] = [];
+      }
+      continue;
+    }
+    result[field.key] = value;
+    if (field.choiceGroup && value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
+      result.__choice = field.key;
+    }
+  }
+  return result;
+};
+
+const serializeTypeFields = (
+  obj: Record<string, unknown>,
+  metadata: RuntimeTypeMetadata,
+  prefixMap: Map<string, string>,
+  rootNs: string,
+  types: Record<string, RuntimeTypeMetadata>
+): { attributes: string[]; elements: string[]; usesXsi: boolean } => {
+  const attributes: string[] = [];
+  const elements: string[] = [];
+  let usesXsi = false;
+  for (const field of metadata.fields) {
+    if (field.choiceGroup && obj.__choice && obj.__choice !== field.key) {
+      continue;
+    }
+    const fieldResult = serializeField(field, obj[field.key], prefixMap, rootNs, types);
+    if (fieldResult.attr) {
+      attributes.push(fieldResult.attr);
+    }
+    elements.push(...fieldResult.elements);
+    usesXsi = usesXsi || fieldResult.usesXsi;
+  }
+  return { attributes, elements, usesXsi };
 };
 
 const extractRoot = (
@@ -241,47 +307,25 @@ const extractRoot = (
   return { root: { '#text': entry[1] }, namespaceContext: {} };
 };
 
-export const parseXmlWithMetadata = <T>(xml: string, metadata: RuntimeRootMetadata): T => {
+export const parseXmlWithMetadata = <T>(
+  xml: string,
+  root: RuntimeRootMetadata,
+  types: Record<string, RuntimeTypeMetadata>
+): T => {
   const parsed = parser.parse(xml) as Record<string, unknown>;
-  const { root, namespaceContext } = extractRoot(parsed, metadata.rootElement);
+  const { root: rootNode, namespaceContext } = extractRoot(parsed, root.rootElement);
 
-  const result: Record<string, unknown> = {};
-  for (const field of metadata.fields) {
-    const value = readValue(field, root, namespaceContext);
-    const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
-    if (value === undefined) {
-      if (isArray) {
-        result[field.key] = [];
-      }
-      continue;
-    }
-    result[field.key] = value;
-    if (field.choiceGroup && value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
-      result.__choice = field.key;
-    }
-  }
-
-  return result as T;
+  return parseTypeFields(rootNode, root, namespaceContext, types) as T;
 };
 
-export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(obj: T, metadata: RuntimeRootMetadata): string => {
-  const rootInfo = splitClark(metadata.rootElement);
+export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
+  obj: T,
+  root: RuntimeRootMetadata,
+  types: Record<string, RuntimeTypeMetadata>
+): string => {
+  const rootInfo = splitClark(root.rootElement);
   const prefixMap = new Map<string, string>();
-  const attributes: string[] = [];
-  const elements: string[] = [];
-  let usesXsi = false;
-
-  for (const field of metadata.fields) {
-    if (field.choiceGroup && obj.__choice && obj.__choice !== field.key) {
-      continue;
-    }
-    const fieldResult = serializeField(field, obj[field.key], prefixMap, rootInfo.namespace);
-    if (fieldResult.attr) {
-      attributes.push(fieldResult.attr);
-    }
-    elements.push(...fieldResult.elements);
-    usesXsi = usesXsi || fieldResult.usesXsi;
-  }
+  const { attributes, elements, usesXsi } = serializeTypeFields(obj, root, prefixMap, rootInfo.namespace, types);
 
   const nsDecls: string[] = [];
   if (rootInfo.namespace) {
@@ -302,10 +346,13 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(obj:
   return `${opening}${elements.join('')}</${rootInfo.local}>`;
 };
 
-export const createRootHelpers = <T>(metadata: RuntimeRootMetadata): {
+export const createRootHelpers = <T>(
+  root: RuntimeRootMetadata,
+  types: Record<string, RuntimeTypeMetadata>
+): {
   parseXml: (xml: string) => T;
   serializeXml: (obj: T) => string;
 } => ({
-  parseXml: (xml) => parseXmlWithMetadata<T>(xml, metadata),
-  serializeXml: (obj) => serializeXmlWithMetadata(obj as Record<string, unknown>, metadata)
+  parseXml: (xml) => parseXmlWithMetadata<T>(xml, root, types),
+  serializeXml: (obj) => serializeXmlWithMetadata(obj as Record<string, unknown>, root, types)
 });

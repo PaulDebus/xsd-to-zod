@@ -7,13 +7,13 @@ import { parseXsd } from '../src/index.js';
 const W3C_DIR = path.resolve('testdata/upstream/w3c-xsdtests');
 
 const KNOWN_FAILURES = new Map<string, string>([
-  ['boeingData/ipo1/ipo_1.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo1/ipo_2.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo2/ipo_1.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo2/ipo_2.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo3/ipo_1.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo3/ipo_2.xml', '#8 — serializeXml fails on nested complex types'],
-  ['boeingData/ipo4/ipo_2.xml', '#8 — serializeXml fails on nested complex types'],
+  ['boeingData/ipo1/ipo_1.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo1/ipo_2.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo2/ipo_1.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo2/ipo_2.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo3/ipo_1.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo3/ipo_2.xml', 'inline anonymous complex types on local elements + unqualified element form not yet supported by serializeXml'],
+  ['boeingData/ipo4/ipo_2.xml', 'inline anonymous complex types on local elements + unqualified element form + xsd:redefine not yet supported by serializeXml'],
 ]);
 
 describe('nightly round-trip (W3C smoke)', () => {

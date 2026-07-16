@@ -71,6 +71,10 @@ const metadataForType = (type: ComplexTypeDef): RuntimeTypeMetadata => ({
 export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
   const schemaLines: string[] = [];
   const metadataTypes: RuntimeTypeMetadata[] = Object.values(ir.complexTypes).map(metadataForType);
+  const typesByQName: Record<string, RuntimeTypeMetadata> = {};
+  for (const type of metadataTypes) {
+    typesByQName[type.typeName] = type;
+  }
 
   schemaLines.push('// AUTO-GENERATED — DO NOT EDIT');
   schemaLines.push("import { z } from 'zod';");
@@ -145,7 +149,7 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
     schemas: `${schemaLines.join('\n')}\n`,
     metadata: `// AUTO-GENERATED — DO NOT EDIT\nexport const runtimeMetadata = ${JSON.stringify(
       {
-        types: metadataTypes,
+        types: typesByQName,
         roots: rootMetadata
       },
       null,
