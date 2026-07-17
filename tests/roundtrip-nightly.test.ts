@@ -7,14 +7,10 @@ import { parseXsd } from '../src/index.js';
 const W3C_DIR = path.resolve('testdata/upstream/w3c-xsdtests');
 
 const KNOWN_FAILURES = new Map<string, string>([
-  ['boeingData/ipo1/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo1/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo2/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo2/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo3/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo3/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo4/ipo_1.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
-  ['boeingData/ipo4/ipo_2.xml', 'serialized XML fails XSD validation — element ordering, choice resolution, and/or missing attributes (#43)'],
+  ['boeingData/ipo3/ipo_1.xml', 'chameleon include (itematt.xsd no targetNamespace) — attributeGroup namespace mismatch'],
+  ['boeingData/ipo3/ipo_2.xml', 'chameleon include (itematt.xsd no targetNamespace) — attributeGroup namespace mismatch'],
+  ['boeingData/ipo4/ipo_1.xml', 'xs:redefine not supported — AddressType missing country element'],
+  ['boeingData/ipo4/ipo_2.xml', 'xs:redefine not supported — AddressType missing country element'],
 ]);
 
 describe('nightly round-trip (W3C smoke)', () => {

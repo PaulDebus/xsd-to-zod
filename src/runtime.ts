@@ -280,9 +280,6 @@ const serializeTypeFields = (
   const elements: string[] = [];
   let usesXsi = false;
   for (const field of metadata.fields) {
-    if (field.choiceGroup && obj.__choice && obj.__choice !== field.key) {
-      continue;
-    }
     const fieldResult = serializeField(field, obj[field.key], ctx);
     if (fieldResult.attr) {
       attributes.push(fieldResult.attr);
