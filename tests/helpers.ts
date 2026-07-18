@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import iconv from 'iconv-lite';
 import { expect } from 'vitest';
-import { createRootHelpers, decodeXmlEntities, irToZod, parseXsd } from '../src/index.js';
+import { createRootHelpers, decodeXmlEntities, irToZod, parseXsd, readXmlFile } from '../src/index.js';
 import type { RuntimeMetadata, RuntimeRootMetadata } from '../src/types.js';
 
 export interface TestCase {
@@ -11,16 +10,7 @@ export interface TestCase {
   xmlFile: string;
 }
 
-export function readXmlFile(filePath: string): string {
-  const raw = fs.readFileSync(filePath);
-  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/);
-  const encoding = declMatch ? declMatch[1] : 'utf-8';
-  try {
-    return iconv.decode(raw, encoding);
-  } catch {
-    return raw.toString('utf-8');
-  }
-}
+export { readXmlFile };
 
 export function extractRootLocalName(xml: string): string {
   const match = xml.match(/<([^!?][^\s?>/]*)/);

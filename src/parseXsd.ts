@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import iconv from 'iconv-lite';
 import XMLParser from '@nodable/flexible-xml-parser';
+import { readXmlFile } from './readXmlFile.js';
 import type {
   Cardinality,
   ComplexTypeDef,
@@ -117,17 +116,6 @@ const collectNamespaceMap = (schemaNode: AnyNode): Record<string, string> => {
 };
 
 const getNodeTagLocalName = (tag: string): string => splitQName(tag).local;
-
-const readXmlFile = (filePath: string): string => {
-  const raw = fs.readFileSync(filePath);
-  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/);
-  const encoding = declMatch ? declMatch[1] : 'utf-8';
-  try {
-    return iconv.decode(raw, encoding);
-  } catch {
-    return raw.toString('utf-8');
-  }
-};
 
 const readSchema = (
   filePath: string
