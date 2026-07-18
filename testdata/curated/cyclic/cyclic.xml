@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<person xmlns="urn:curated">
+  <name>Alice</name>
+  <manager>
+    <name>Bob</name>
+    <manager>
+      <name>Carol</name>
+    </manager>
+  </manager>
+</person>

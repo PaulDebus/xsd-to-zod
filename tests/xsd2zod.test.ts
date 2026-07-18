@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createRootHelpers, irToZod, parseXsd } from '../src/index.js';
 import type { RuntimeMetadata } from '../src/types.js';
@@ -321,5 +322,60 @@ describe('xsd2zod v1 pipeline', () => {
       const reparsed = parseXml(serialized);
       expect(reparsed).toEqual(parsed);
     });
+  });
+
+  it('wraps cyclic complex types in z.lazy so generated module loads without ReferenceError (#31)', async () => {
+    const CYCLIC_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:cyclic" xmlns:t="urn:cyclic" elementFormDefault="qualified">
+  <xs:complexType name="PersonType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="manager" type="t:PersonType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="TeamType">
+    <xs:sequence>
+      <xs:element name="lead" type="t:PersonType"/>
+      <xs:element name="member" type="t:PersonType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="person" type="t:PersonType"/>
+  <xs:element name="team" type="t:TeamType"/>
+</xs:schema>`;
+
+    const xsdFile = path.join(os.tmpdir(), `cyclic-${Date.now()}.xsd`);
+    fs.writeFileSync(xsdFile, CYCLIC_XSD);
+
+    const zodFile = path.join(process.cwd(), `.cyclic-${Date.now()}.zod.ts`);
+    try {
+      const ir = parseXsd([xsdFile]);
+      const { schemas } = irToZod(ir);
+
+      expect(schemas).toContain('schemas["{urn:cyclic}PersonType"] = z.lazy(() => z.object({');
+      expect(schemas).toContain('schemas["{urn:cyclic}TeamType"] = z.lazy(() => z.object({');
+      expect(schemas).toContain('export const personSchema = schemas["{urn:cyclic}PersonType"];');
+      expect(schemas).toContain('export const teamSchema = schemas["{urn:cyclic}TeamType"];');
+
+      fs.writeFileSync(zodFile, schemas);
+
+      const mod = await import(`${pathToFileURL(zodFile).href}?t=${Date.now()}`) as {
+        personSchema: { parse: (v: unknown) => unknown };
+        teamSchema: { parse: (v: unknown) => unknown };
+      };
+      expect(mod.personSchema).toBeDefined();
+      expect(mod.teamSchema).toBeDefined();
+
+      const parsed = mod.personSchema.parse({
+        name: 'Alice',
+        manager: { name: 'Bob', manager: { name: 'Carol' } }
+      });
+      expect(parsed).toEqual({
+        name: 'Alice',
+        manager: { name: 'Bob', manager: { name: 'Carol' } }
+      });
+    } finally {
+      fs.rmSync(xsdFile, { force: true });
+      fs.rmSync(zodFile, { force: true });
+    }
   });
 });

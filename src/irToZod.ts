@@ -129,16 +129,16 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
         const discriminatedUnion = `z.discriminatedUnion('__choice', [${branchSchemas}])`;
         if (branches.every((branch) => branch.minOccurs === 0)) {
           const withoutChoice = `z.object({ ${commonProps} })`;
-          schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.union([${discriminatedUnion}, ${withoutChoice}]);`);
+          schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.union([${discriminatedUnion}, ${withoutChoice}]));`);
           continue;
         }
 
-        schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = ${discriminatedUnion};`);
+        schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => ${discriminatedUnion});`);
         continue;
       }
     }
 
-    schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.object({${props}});`);
+    schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}}));`);
   }
 
   for (const root of ir.rootElements) {

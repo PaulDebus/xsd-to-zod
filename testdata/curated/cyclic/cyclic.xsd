@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:curated" xmlns:t="urn:curated" elementFormDefault="qualified">
+  <xs:complexType name="PersonType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="manager" type="t:PersonType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="TeamType">
+    <xs:sequence>
+      <xs:element name="lead" type="t:PersonType"/>
+      <xs:element name="members" type="t:PersonType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="person" type="t:PersonType"/>
+  <xs:element name="team" type="t:TeamType"/>
+</xs:schema>

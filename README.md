@@ -79,6 +79,7 @@ const data = parseXml(`
 - **Cardinality**: `minOccurs`/`maxOccurs` → `z.array()` / `.optional()`, `unbounded`
 - **Nillable**: `xsi:nil="true"` → `.nullable()` in schema, round-trips through `serializeXml`
 - **Element refs**: `<xs:element ref="t:global"/>` resolved via global element declarations
+- **Cyclic references**: every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so forward references and true cycles (e.g. `Person.manager: Person`) load without `ReferenceError`
 - **Runtime**: metadata-driven XML parsing and serialization with full namespace prefix management
 
 ## Install
@@ -150,6 +151,19 @@ const order = parseXml(`<order xmlns="urn:example" id="42">...</order>`);
 const xml = serializeXml(order);
 ```
 
+### Working with generated schemas
+
+Every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so cyclic type references (e.g. `Person.manager: Person`) and forward references load without `ReferenceError`. `z.infer<typeof FooSchema>` resolves through the lazy wrapper transparently.
+
+If you need to call `.extend()`, `.pick()`, `.omit()` or any object-only method on a generated schema, unwrap it first via the Zod v4 lazy getter:
+
+```ts
+import { orderSchema } from './schema.zod.js';
+
+const inner = orderSchema.def.getter();   // ZodObject
+const extended = inner.extend({ extra: z.string() });
+```
+
 ## Why trust this?
 
 We ship a **multi-tier test suite** that exercises the full pipeline on real-world and curated fixtures. Every round-trip test validates: XSD → Zod schemas → parse XML → serialize back → re-parse → deep-compare. Additionally, the serialized XML is validated against the original XSD using [libxml2-wasm](https://www.npmjs.com/package/libxml2-wasm) (the reference libxml2 engine ported to WebAssembly), catching mismatches that round-trip-only testing would miss.
@@ -160,20 +174,20 @@ Run it locally:
 npm test
 ```
 
-**Test matrix** (~78 tests, ~10 s):
+**Test matrix** (~80 tests, ~10 s):
 
 | Category | Count | What it covers |
 |----------|------:|----------------|
-| Curated round-trip | 23 (23 ✅) | Basic declarations, content models, cardinality, types, namespaces, imports — serialized XML validated against libxml2 |
+| Curated round-trip | 24 (24 ✅) | Basic declarations, content models, cardinality, types, namespaces, imports, cyclic refs — serialized XML validated against libxml2 |
 | Upstream round-trip | 17 (10 ✅, 7 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order — serialized XML validated against libxml2 |
 | W3C smoke | 8 (4 ✅, 4 ⏭️) | Boeing IPO variants via [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule — serialized XML validated against libxml2 |
-| Pipeline / CLI | 22 | CLI entry point (16), code generation + runtime unit tests (6) |
+| Pipeline / CLI | 23 | CLI entry point (16), code generation + runtime unit tests (7) |
 | Benchmark | 1 | Parses all upstream XSDs in under 5 s |
 | Negative | 7 | Namespace rejection and graceful handling of lenient validation |
 
 **Test data sources**
 
-- `testdata/curated/` — 22 hand-authored XSD/XML pairs + 7 negative variants (CC0-1.0)
+- `testdata/curated/` — 23 hand-authored XSD/XML pairs + 7 negative variants (CC0-1.0)
 - `testdata/upstream/xmlschema/` — vehicles, collection, stockquote, menù examples from [brunato/xmlschema](https://github.com/brunato/xmlschema) (MIT)
 - `testdata/upstream/oasis-ubl-2.4/` — UBL Invoice + Order subset (OASIS RF on Limited Terms)
 - `testdata/upstream/w3c-xsdtests/` — git submodule of [w3c/xsdtests](https://github.com/w3c/xsdtests), pinned commit (W3C Document License)
