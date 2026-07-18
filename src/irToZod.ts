@@ -94,7 +94,9 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
       metadataTypes.push({
         typeName: simpleType.name,
         fields: [],
+        baseType: simpleType.baseType,
         listItemType: simpleType.itemType,
+        ...(simpleType.facets ? { facets: simpleType.facets } : {})
       });
       continue;
     }
@@ -102,7 +104,9 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
       metadataTypes.push({
         typeName: simpleType.name,
         fields: [],
+        baseType: simpleType.baseType,
         unionMemberTypes: simpleType.memberTypes,
+        ...(simpleType.facets ? { facets: simpleType.facets } : {})
       });
       continue;
     }
@@ -113,6 +117,7 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
     metadataTypes.push({
       typeName: simpleType.name,
       fields: [textField],
+      baseType: simpleType.baseType,
       ...(simpleType.facets ? { facets: simpleType.facets } : {})
     });
   }

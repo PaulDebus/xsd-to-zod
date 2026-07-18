@@ -757,6 +757,15 @@ export const parseXsd = (files: string[]): XsdIr => {
           complexTypes[override.qname] = { name: override.qname, fields, baseType };
         }
       } else if (override.kind === 'simpleType') {
+        // Drop synthetic inline item/member types created for the previous definition
+        // so swapping list ↔ union (or changing item/member shape) does not leave orphans.
+        const orphanPrefix = `${override.qname}_`;
+        for (const existingName of Object.keys(simpleTypes)) {
+          if (existingName.startsWith(orphanPrefix)) {
+            delete simpleTypes[existingName];
+          }
+        }
+
         const listChild = nodeChildren(override.node).find(([key]) => getNodeTagLocalName(key) === 'list')?.[1];
         if (listChild) {
           const itemTypeRaw = listChild['@_itemType'];

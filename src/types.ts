@@ -69,6 +69,7 @@ export type RuntimeTypeMetadata = {
   typeName: QName;
   fields: RuntimeFieldMetadata[];
   facets?: Facet[];
+  baseType?: QName;
   listItemType?: QName;
   unionMemberTypes?: QName[];
 };

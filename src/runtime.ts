@@ -2,6 +2,7 @@ import XMLParser from '@nodable/flexible-xml-parser';
 import type { Facet, RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
+const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
 const parser = new XMLParser({
   skip: { attributes: false },
@@ -138,7 +139,7 @@ const validateFacets = (value: unknown, facets: Facet[], typeName: string): void
 
 const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unknown => {
   const { namespace: ns, local } = splitClark(typeName);
-  if (ns !== 'http://www.w3.org/2001/XMLSchema') {
+  if (ns !== XSD_NS) {
     if (facets) {
       validateFacets(raw, facets, typeName);
     }
@@ -216,17 +217,52 @@ const findElementValues = (
   return [];
 };
 
-const parseListValue = (raw: unknown, listItemType: string): unknown[] => {
-  if (raw === undefined || raw === null) return [];
-  return String(raw).trim().split(/\s+/).filter(Boolean)
-    .map(item => parsePrimitive(item, listItemType, undefined));
+const resolvePrimitiveType = (
+  typeName: string,
+  types: Record<string, RuntimeTypeMetadata>
+): { primitive: string; facets: Facet[] } => {
+  const collected: Facet[] = [];
+  let current: string | undefined = typeName;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const { namespace } = splitClark(current);
+    if (namespace === XSD_NS) {
+      return { primitive: current, facets: collected };
+    }
+    const meta: RuntimeTypeMetadata | undefined = types[current];
+    if (!meta) break;
+    if (meta.facets) collected.unshift(...meta.facets);
+    current = meta.baseType;
+  }
+  return { primitive: current ?? typeName, facets: collected };
 };
 
-const parseUnionValue = (raw: unknown, memberTypes: string[]): unknown => {
+const parseListValue = (
+  raw: unknown,
+  listItemType: string,
+  types: Record<string, RuntimeTypeMetadata>
+): unknown[] => {
+  if (raw === undefined || raw === null) return [];
+  const { primitive, facets } = resolvePrimitiveType(listItemType, types);
+  return String(raw).trim().split(/\s+/).filter(Boolean)
+    .map(item => parsePrimitive(item, primitive, facets.length > 0 ? facets : undefined));
+};
+
+const parseUnionValue = (
+  raw: unknown,
+  memberTypes: string[],
+  types: Record<string, RuntimeTypeMetadata>
+): unknown => {
   if (raw === undefined || raw === null) return raw;
   for (const mt of memberTypes) {
+    const { primitive, facets } = resolvePrimitiveType(mt, types);
     try {
-      return parsePrimitive(raw, mt, undefined);
+      const result = parsePrimitive(raw, primitive, facets.length > 0 ? facets : undefined);
+      if (typeof result === 'number' && Number.isNaN(result)) {
+        continue;
+      }
+      return result;
     } catch {
       continue;
     }
@@ -243,7 +279,10 @@ const readValue = (
   if (field.kind === 'text') {
     const typeMeta = types[field.typeName];
     if (typeMeta?.listItemType) {
-      return parseListValue(node['#text'], typeMeta.listItemType);
+      return parseListValue(node['#text'], typeMeta.listItemType, types);
+    }
+    if (typeMeta?.unionMemberTypes) {
+      return parseUnionValue(node['#text'], typeMeta.unionMemberTypes, types);
     }
     return parsePrimitive(node['#text'], field.typeName, field.facets);
   }
@@ -261,10 +300,10 @@ const readValue = (
     if (effective === undefined) return undefined;
     const typeMeta = types[field.typeName];
     if (typeMeta?.listItemType) {
-      return parseListValue(effective, typeMeta.listItemType);
+      return parseListValue(effective, typeMeta.listItemType, types);
     }
     if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(effective, typeMeta.unionMemberTypes);
+      return parseUnionValue(effective, typeMeta.unionMemberTypes, types);
     }
     return effective;
   }
@@ -284,10 +323,10 @@ const readValue = (
         return parseTypeFields(entryNode, complexType, entryNamespaceContext, types);
       }
       if (typeMeta?.listItemType) {
-        return parseListValue(entryNode['#text'] ?? entry, typeMeta.listItemType);
+        return parseListValue(entryNode['#text'] ?? entry, typeMeta.listItemType, types);
       }
       if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(entryNode['#text'] ?? entry, typeMeta.unionMemberTypes);
+        return parseUnionValue(entryNode['#text'] ?? entry, typeMeta.unionMemberTypes, types);
       }
       return parsePrimitive(entryNode['#text'] ?? entry, field.typeName, field.facets);
     }
@@ -295,10 +334,10 @@ const readValue = (
       return parseTypeFields({ '#text': entry }, complexType, namespaceContext, types);
     }
     if (typeMeta?.listItemType) {
-      return parseListValue(entry, typeMeta.listItemType);
+      return parseListValue(entry, typeMeta.listItemType, types);
     }
     if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(entry, typeMeta.unionMemberTypes);
+      return parseUnionValue(entry, typeMeta.unionMemberTypes, types);
     }
     return parsePrimitive(entry, field.typeName, field.facets);
   });
@@ -311,20 +350,20 @@ const readValue = (
     if (field.fixedValue !== undefined) {
       const typeMeta = types[field.typeName];
       if (typeMeta?.listItemType) {
-        return parseListValue(field.fixedValue, typeMeta.listItemType);
+        return parseListValue(field.fixedValue, typeMeta.listItemType, types);
       }
       if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(field.fixedValue, typeMeta.unionMemberTypes);
+        return parseUnionValue(field.fixedValue, typeMeta.unionMemberTypes, types);
       }
       return parsePrimitive(field.fixedValue, field.typeName, field.facets);
     }
     if (field.defaultValue !== undefined) {
       const typeMeta = types[field.typeName];
       if (typeMeta?.listItemType) {
-        return parseListValue(field.defaultValue, typeMeta.listItemType);
+        return parseListValue(field.defaultValue, typeMeta.listItemType, types);
       }
       if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(field.defaultValue, typeMeta.unionMemberTypes);
+        return parseUnionValue(field.defaultValue, typeMeta.unionMemberTypes, types);
       }
       return parsePrimitive(field.defaultValue, field.typeName, field.facets);
     }

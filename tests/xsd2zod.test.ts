@@ -701,4 +701,183 @@ describe('xsd2zod v1 pipeline', () => {
       fs.rmSync(zodFile, { force: true });
     }
   });
+
+  describe('xs:list and xs:union simple types (#29)', () => {
+    const LIST_INLINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:listunion" xmlns:t="urn:listunion" elementFormDefault="qualified">
+  <xs:simpleType name="InlineIntList">
+    <xs:list>
+      <xs:simpleType>
+        <xs:restriction base="xs:integer"/>
+      </xs:simpleType>
+      </xs:list>
+  </xs:simpleType>
+  <xs:simpleType name="NamedIntList">
+    <xs:list itemType="t:BoundedInt"/>
+  </xs:simpleType>
+  <xs:simpleType name="BoundedInt">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="ListContainer">
+    <xs:sequence>
+      <xs:element name="inlineNumbers" type="t:InlineIntList"/>
+      <xs:element name="namedNumbers" type="t:NamedIntList"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="listContainer" type="t:ListContainer"/>
+</xs:schema>`;
+
+    const UNION_INLINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:listunion" xmlns:t="urn:listunion" elementFormDefault="qualified">
+  <xs:simpleType name="InlineIntOrString">
+    <xs:union>
+      <xs:simpleType>
+        <xs:restriction base="xs:integer"/>
+      </xs:simpleType>
+      <xs:simpleType>
+        <xs:restriction base="xs:string"/>
+      </xs:simpleType>
+    </xs:union>
+  </xs:simpleType>
+  <xs:complexType name="UnionContainer">
+    <xs:sequence>
+      <xs:element name="val" type="t:InlineIntOrString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="unionContainer" type="t:UnionContainer"/>
+</xs:schema>`;
+
+    const runListUnionTest = (xsd: string, fn: (dir: string, file: string) => void): void => {
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, xsd);
+        fn(dir, file);
+      });
+    };
+
+    it('coerces inline list item simpleType to its base XSD primitive (#29)', () => {
+      runListUnionTest(LIST_INLINE_XSD, (_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}listContainer'));
+        expect(rootMeta).toBeDefined();
+        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta!, runtimeMetadata.types);
+
+        const parsed = parseXml(`<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 5 6</namedNumbers></listContainer>`);
+        expect(parsed.inlineNumbers).toEqual([1, 2, 3]);
+        expect(parsed.namedNumbers).toEqual([4, 5, 6]);
+      });
+    });
+
+    it('enforces facets from named list item simpleType at runtime', () => {
+      runListUnionTest(LIST_INLINE_XSD, (_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}listContainer'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+
+        expect(() => parseXml(`<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 99 6</namedNumbers></listContainer>`))
+          .toThrow('exceeds maximum');
+      });
+    });
+
+    it('coerces inline union members and falls through on member mismatch (#29)', () => {
+      runListUnionTest(UNION_INLINE_XSD, (_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}unionContainer'));
+        expect(rootMeta).toBeDefined();
+        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta!, runtimeMetadata.types);
+
+        const numericParsed = parseXml(`<unionContainer xmlns="urn:listunion"><val>42</val></unionContainer>`);
+        expect(numericParsed.val).toBe(42);
+
+        const stringParsed = parseXml(`<unionContainer xmlns="urn:listunion"><val>hello</val></unionContainer>`);
+        expect(stringParsed.val).toBe('hello');
+      });
+    });
+
+    it('handles xs:list attributes and xs:union text fields', () => {
+      const ATTR_UNION_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:listunion" xmlns:t="urn:listunion" elementFormDefault="qualified">
+  <xs:simpleType name="IntOrString">
+    <xs:union memberTypes="xs:int xs:string"/>
+  </xs:simpleType>
+  <xs:simpleType name="TokenList">
+    <xs:list itemType="xs:token"/>
+  </xs:simpleType>
+  <xs:complexType name="Container">
+    <xs:simpleContent>
+      <xs:extension base="t:IntOrString">
+        <xs:attribute name="tags" type="t:TokenList"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:element name="container" type="t:Container"/>
+</xs:schema>`;
+      runListUnionTest(ATTR_UNION_XSD, (_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}container'))!;
+        const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
+
+        const parsed = parseXml(`<container xmlns="urn:listunion" tags="a b c">42</container>`);
+        expect(parsed._text).toBe(42);
+        expect(parsed['@tags']).toEqual(['a', 'b', 'c']);
+
+        const stringParsed = parseXml(`<container xmlns="urn:listunion" tags="x y">hello</container>`);
+        expect(stringParsed._text).toBe('hello');
+        expect(stringParsed['@tags']).toEqual(['x', 'y']);
+
+        const serialized = serializeXml(parsed);
+        const reparsed = parseXml(serialized);
+        expect(reparsed).toEqual(parsed);
+      });
+    });
+
+    it('drops orphaned synthetic item/member types when redefine swaps list → union', () => {
+      const BASE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-swap" xmlns:t="urn:redefine-swap" elementFormDefault="qualified">
+  <xs:simpleType name="SwapType">
+    <xs:list>
+      <xs:simpleType>
+        <xs:restriction base="xs:integer"/>
+      </xs:simpleType>
+    </xs:list>
+  </xs:simpleType>
+</xs:schema>`;
+      const REDEFINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-swap" xmlns:t="urn:redefine-swap" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="base.xsd">
+    <xs:simpleType name="SwapType">
+      <xs:union>
+        <xs:simpleType>
+          <xs:restriction base="xs:string"/>
+        </xs:simpleType>
+      </xs:union>
+    </xs:simpleType>
+  </xs:redefine>
+</xs:schema>`;
+      withTempDir((dir) => {
+        fs.writeFileSync(path.join(dir, 'base.xsd'), BASE_XSD);
+        fs.writeFileSync(path.join(dir, 'redefine.xsd'), REDEFINE_XSD);
+        const ir = parseXsd([path.join(dir, 'redefine.xsd')]);
+
+        const orphanItem = Object.keys(ir.simpleTypes).find(name => name.endsWith('}SwapType_itemType'));
+        expect(orphanItem).toBeUndefined();
+
+        const swapType = ir.simpleTypes['{urn:redefine-swap}SwapType'];
+        expect(swapType).toBeDefined();
+        expect(swapType.itemType).toBeUndefined();
+        expect(swapType.memberTypes).toBeDefined();
+      });
+    });
+  });
 });
