@@ -15,11 +15,18 @@ export function readXmlFile(filePath: string): string {
   const raw = fs.readFileSync(filePath);
   const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/);
   const encoding = declMatch ? declMatch[1] : 'utf-8';
+  let content: string;
   try {
-    return iconv.decode(raw, encoding);
+    content = iconv.decode(raw, encoding);
   } catch {
-    return raw.toString('utf-8');
+    content = raw.toString('utf-8');
   }
+  return declMatch
+    ? content.replace(
+        /^(<\?xml\s+[^>]*?)(encoding\s*=\s*["'])([^"']+)(["'][^>]*?\?>)/,
+        (_, pre, attr, _enc, rest) => `${pre}${attr}UTF-8${rest}`
+      )
+    : content;
 }
 
 export function extractRootLocalName(xml: string): string {

@@ -10,8 +10,6 @@ const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection3', 'original XML violates xs:keyref identity constraint (inherent test data)'],
   ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
   ['xmlschema/collection/collection-redef-xmlns', '#18 — type name collisions when globbing all sibling XSDs (passes with collection.xsd only)'],
-  ['xmlschema/menù/menù-ascii', 'XML parser does not support numeric character references in element tag names'],
-  ['xmlschema/menù/menù-cp1252', 'serialized XML fails XSD validation — encoding issues in schema file name'],
 ]);
 
 function discoverUpstreamCases(): TestCase[] {
