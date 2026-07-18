@@ -1,15 +1,45 @@
 import XMLParser from '@nodable/flexible-xml-parser';
+import { CompactBuilderFactory } from '@nodable/compact-builder';
+import type { BaseOutputBuilderFactory } from '@nodable/base-output-builder';
 import type { Facet, RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
 const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
+// Entity decoding is left to the parser; number/boolean coercion is disabled so
+// that readValue sees the raw lexicals and parsePrimitive stays the single
+// coercion point for elements and attributes (#65).
+// The cast works around a declaration bug in @nodable/compact-builder@2.0.0:
+// its CompactBuilder.addElement(tag, matcher) is declared incompatible with
+// BaseOutputBuilder.addElement(tag).
+const outputBuilder = new CompactBuilderFactory({
+  tags: { valueParsers: ['entity'] },
+  attributes: { valueParsers: ['entity'] },
+}) as unknown as BaseOutputBuilderFactory;
+
 const parser = new XMLParser({
   skip: { attributes: false },
-  attributes: { prefix: '@_' }
+  attributes: { prefix: '@_' },
+  // Keep CDATA under its own key: merged text passes through the entity value
+  // parser, which would corrupt literal entity text inside CDATA sections (#64).
+  nameFor: { cdata: '#cdata' },
+  OutputBuilder: outputBuilder
 });
 
 const toArray = <T>(value: T | T[] | undefined): T[] => (value === undefined ? [] : Array.isArray(value) ? value : [value]);
+
+// Text content of a parsed node: character data plus verbatim CDATA sections.
+// Interleaved order between text and CDATA is not preserved (mixed content is
+// unsupported); the common cases (text-only, CDATA-only) are exact.
+const textOf = (node: Record<string, unknown>): unknown => {
+  const text = node['#text'];
+  const cdata = node['#cdata'];
+  if (cdata === undefined) {
+    return text;
+  }
+  const cdataText = Array.isArray(cdata) ? cdata.join('') : String(cdata);
+  return `${text === undefined ? '' : String(text)}${cdataText}`;
+};
 
 const splitClark = (qname: string): { namespace: string; local: string } => {
   if (!qname.startsWith('{')) {
@@ -68,6 +98,26 @@ export const decodeXmlEntities = (xml: string): string =>
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)));
 
+const CDATA_SECTION = /<!\[CDATA\[[\s\S]*?\]\]>/g;
+const TAG_NAME = /<\/?[^\s>/]+/g;
+const NUMERIC_CHAR_REF = /&#(\d+);|&#x([0-9a-fA-F]+);/g;
+
+// Some producers emit numeric character references inside tag names (not
+// well-formed XML — libxml2 rejects it too), e.g. `<men&#249;>` for `<menù>`.
+// Decode them scoped to tag names only; character data and CDATA stay untouched.
+export const decodeTagNameCharRefs = (xml: string): string => {
+  const cdataBlocks = xml.match(CDATA_SECTION) ?? [];
+  return xml
+    .split(CDATA_SECTION)
+    .map((segment, i) => {
+      const decoded = segment.replace(TAG_NAME, (tag) =>
+        tag.replace(NUMERIC_CHAR_REF, (_, dec: string | undefined, hex: string | undefined) =>
+          String.fromCodePoint(dec !== undefined ? Number(dec) : parseInt(hex!, 16))));
+      return decoded + (cdataBlocks[i] ?? '');
+    })
+    .join('');
+};
+
 const validateFacets = (value: unknown, facets: Facet[], typeName: string): void => {
   const enumValues = facets.filter(f => f.kind === 'enumeration').map(f => f.value);
   if (enumValues.length > 0 && !enumValues.includes(String(value))) {
@@ -118,10 +168,10 @@ const validateFacets = (value: unknown, facets: Facet[], typeName: string): void
         }
         break;
       case 'totalDigits': {
-        const str = String(typeof value === 'number' ? Math.abs(value) : value);
-        const digits = str.replace('.', '').replace('-', '').length;
-        if (digits > facet.value) {
-          throw new Error(`Value ${value} has more than ${facet.value} total digits for ${typeName}`);
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          if (countTotalDigits(value) > facet.value) {
+            throw new Error(`Value ${value} has more than ${facet.value} total digits for ${typeName}`);
+          }
         }
         break;
       }
@@ -137,6 +187,25 @@ const validateFacets = (value: unknown, facets: Facet[], typeName: string): void
   }
 };
 
+// Number of significant digits in the XSD canonical representation of a
+// number: exponent form is expanded so neither 'e'/'-' nor leading zeros count.
+const countTotalDigits = (value: number): number => {
+  const abs = Math.abs(value);
+  if (abs === 0) {
+    return 1;
+  }
+  const [mantissa, exponent] = abs.toExponential(15).split('e');
+  const digits = mantissa.replace('.', '').replace(/0+$/, '') || '0';
+  const exp = Number(exponent);
+  return exp >= 0 ? Math.max(digits.length, exp + 1) : digits.length;
+};
+
+const BOOLEAN_LEXICALS = new Set(['true', 'false', '0', '1']);
+
+const DECIMAL_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
+const INTEGER_LEXICAL = /^[+-]?\d+$/;
+const FLOAT_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
 const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unknown => {
   const { namespace: ns, local } = splitClark(typeName);
   if (ns !== XSD_NS) {
@@ -150,17 +219,42 @@ const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unkno
     return raw;
   }
 
+  const text = String(raw).trim();
   let value: unknown;
   switch (local) {
     case 'boolean':
-      value = raw === true || raw === 1 || raw === 'true' || raw === '1';
+      if (!BOOLEAN_LEXICALS.has(text)) {
+        throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(text)}`);
+      }
+      value = text === 'true' || text === '1';
       break;
     case 'int':
     case 'integer':
+      if (!INTEGER_LEXICAL.test(text)) {
+        throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
+      }
+      value = Number(text);
+      break;
     case 'decimal':
+      if (!DECIMAL_LEXICAL.test(text)) {
+        throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(text)}`);
+      }
+      value = Number(text);
+      break;
     case 'double':
     case 'float':
-      value = Number(raw);
+      if (text === 'INF' || text === '+INF') {
+        value = Infinity;
+      } else if (text === '-INF') {
+        value = -Infinity;
+      } else if (text === 'NaN') {
+        value = NaN;
+      } else {
+        if (!FLOAT_LEXICAL.test(text)) {
+          throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
+        }
+        value = Number(text);
+      }
       break;
     default:
       value = String(raw);
@@ -198,7 +292,7 @@ const findElementValues = (
 ): unknown[] => {
   const expected = splitClark(qname);
   for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith('@_') || key === '#text') {
+    if (key.startsWith('@_') || key === '#text' || key === '#cdata') {
       continue;
     }
     const { prefix, local } = splitXmlName(key);
@@ -279,24 +373,20 @@ const readValue = (
   if (field.kind === 'text') {
     const typeMeta = types[field.typeName];
     if (typeMeta?.listItemType) {
-      return parseListValue(node['#text'], typeMeta.listItemType, types);
+      return parseListValue(textOf(node), typeMeta.listItemType, types);
     }
     if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(node['#text'], typeMeta.unionMemberTypes, types);
+      return parseUnionValue(textOf(node), typeMeta.unionMemberTypes, types);
     }
-    return parsePrimitive(node['#text'], field.typeName, field.facets);
+    const { primitive, facets } = resolvePrimitiveType(field.typeName, types);
+    return parsePrimitive(textOf(node), primitive, facets.length > 0 ? facets : field.facets);
   }
 
   const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
 
   if (field.kind === 'attribute') {
     const value = findAttributeValue(node, field.qname, namespaceContext);
-    const effective = (() => {
-      if (value !== undefined) return value;
-      if (field.fixedValue !== undefined) return parsePrimitive(field.fixedValue, field.typeName, field.facets);
-      if (field.defaultValue !== undefined) return parsePrimitive(field.defaultValue, field.typeName, field.facets);
-      return undefined;
-    })();
+    const effective = value ?? field.fixedValue ?? field.defaultValue;
     if (effective === undefined) return undefined;
     const typeMeta = types[field.typeName];
     if (typeMeta?.listItemType) {
@@ -305,11 +395,16 @@ const readValue = (
     if (typeMeta?.unionMemberTypes) {
       return parseUnionValue(effective, typeMeta.unionMemberTypes, types);
     }
-    return effective;
+    const { primitive, facets } = resolvePrimitiveType(field.typeName, types);
+    return parsePrimitive(effective, primitive, facets.length > 0 ? facets : field.facets);
   }
 
   const typeMeta = types[field.typeName];
-  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes ? typeMeta : undefined;
+  // Only types with real content-model fields are complex; plain restriction
+  // simple types carry no fields and parse to their base primitive (#71).
+  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes && typeMeta.fields.length > 0 ? typeMeta : undefined;
+  const resolved = resolvePrimitiveType(field.typeName, types);
+  const resolvedFacets = resolved.facets.length > 0 ? resolved.facets : field.facets;
 
   const values = findElementValues(node, field.qname, namespaceContext).map((entry) => {
     if (entry && typeof entry === 'object') {
@@ -322,13 +417,14 @@ const readValue = (
       if (complexType) {
         return parseTypeFields(entryNode, complexType, entryNamespaceContext, types);
       }
+      const text = textOf(entryNode);
       if (typeMeta?.listItemType) {
-        return parseListValue(entryNode['#text'] ?? entry, typeMeta.listItemType, types);
+        return parseListValue(text, typeMeta.listItemType, types);
       }
       if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(entryNode['#text'] ?? entry, typeMeta.unionMemberTypes, types);
+        return parseUnionValue(text, typeMeta.unionMemberTypes, types);
       }
-      return parsePrimitive(entryNode['#text'] ?? entry, field.typeName, field.facets);
+      return parsePrimitive(text, resolved.primitive, resolvedFacets);
     }
     if (complexType) {
       return parseTypeFields({ '#text': entry }, complexType, namespaceContext, types);
@@ -339,7 +435,7 @@ const readValue = (
     if (typeMeta?.unionMemberTypes) {
       return parseUnionValue(entry, typeMeta.unionMemberTypes, types);
     }
-    return parsePrimitive(entry, field.typeName, field.facets);
+    return parsePrimitive(entry, resolved.primitive, resolvedFacets);
   });
 
   if (isArray) {
@@ -347,25 +443,16 @@ const readValue = (
   }
 
   if (values.length === 0) {
-    if (field.fixedValue !== undefined) {
+    const fallback = field.fixedValue ?? field.defaultValue;
+    if (fallback !== undefined) {
       const typeMeta = types[field.typeName];
       if (typeMeta?.listItemType) {
-        return parseListValue(field.fixedValue, typeMeta.listItemType, types);
+        return parseListValue(fallback, typeMeta.listItemType, types);
       }
       if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(field.fixedValue, typeMeta.unionMemberTypes, types);
+        return parseUnionValue(fallback, typeMeta.unionMemberTypes, types);
       }
-      return parsePrimitive(field.fixedValue, field.typeName, field.facets);
-    }
-    if (field.defaultValue !== undefined) {
-      const typeMeta = types[field.typeName];
-      if (typeMeta?.listItemType) {
-        return parseListValue(field.defaultValue, typeMeta.listItemType, types);
-      }
-      if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(field.defaultValue, typeMeta.unionMemberTypes, types);
-      }
-      return parsePrimitive(field.defaultValue, field.typeName, field.facets);
+      return parsePrimitive(fallback, resolved.primitive, resolvedFacets);
     }
   }
 
@@ -452,7 +539,7 @@ const serializeField = (
   const values = field.maxOccurs === 'unbounded' || field.maxOccurs > 1 ? (Array.isArray(value) ? value : value === undefined ? [] : [value]) : [value];
   const pieces: string[] = [];
   let usesXsi = false;
-  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes ? typeMeta : undefined;
+  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes && typeMeta.fields.length > 0 ? typeMeta : undefined;
 
   for (const current of values) {
     if (current === undefined) {
@@ -550,8 +637,26 @@ export const parseXmlWithMetadata = <T>(
   root: RuntimeRootMetadata,
   types: Record<string, RuntimeTypeMetadata>
 ): T => {
-  const parsed = parser.parse(decodeXmlEntities(xml)) as Record<string, unknown>;
+  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, root.rootElement);
+
+  const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
+  if (nilValue === 'true' || nilValue === '1') {
+    return null as T;
+  }
+
+  if (root.fields.length === 0) {
+    // Simple-typed root element: the document value is the root's text content (#71).
+    const textField: RuntimeFieldMetadata = {
+      key: '_text',
+      kind: 'text',
+      qname: '{}_text' as RuntimeFieldMetadata['qname'],
+      typeName: root.typeName,
+      minOccurs: 1,
+      maxOccurs: 1
+    };
+    return readValue(textField, rootNode, namespaceContext, types) as T;
+  }
 
   return parseTypeFields(rootNode, root, namespaceContext, types) as T;
 };
@@ -566,7 +671,22 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
     prefixMap: new Map<string, string>(),
     types,
   };
-  const { attributes, elements, usesXsi } = serializeTypeFields(obj, root, ctx);
+
+  let body: string;
+  let attributes: string[] = [];
+  let usesXsi = false;
+  if (obj === null || obj === undefined) {
+    usesXsi = true;
+    body = '';
+  } else if (root.fields.length === 0) {
+    const typeMeta = types[root.typeName];
+    body = typeMeta?.listItemType ? serializeListValue(obj) : serializePrimitive(obj);
+  } else {
+    const inner = serializeTypeFields(obj, root, ctx);
+    attributes = inner.attributes;
+    usesXsi = inner.usesXsi;
+    body = inner.elements.join('');
+  }
 
   const nsDecls: string[] = [];
   let rootTag = rootInfo.local;
@@ -586,8 +706,12 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
   }
 
   const attrs = [...nsDecls, ...attributes].join(' ');
+  if (obj === null || obj === undefined) {
+    const nilAttrs = [...nsDecls, 'xsi:nil="true"'].join(' ');
+    return `<${rootTag} ${nilAttrs}/>`;
+  }
   const opening = attrs ? `<${rootTag} ${attrs}>` : `<${rootTag}>`;
-  return `${opening}${elements.join('')}</${rootTag}>`;
+  return `${opening}${body}</${rootTag}>`;
 };
 
 export const createRootHelpers = <T>(

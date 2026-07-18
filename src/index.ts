@@ -1,5 +1,5 @@
 export { parseXsd } from './parseXsd.js';
-export { buildRuntimeMetadata, irToZod } from './irToZod.js';
+export { buildRuntimeMetadata, irToZod, rootSchemaExportNames, sanitizeIdentifier } from './irToZod.js';
 export { readXmlFile } from './readXmlFile.js';
 export { createRootHelpers, decodeXmlEntities, parseXmlWithMetadata, serializeXmlWithMetadata } from './runtime.js';
 export { runPostGenerationFormatting } from './postProcess.js';

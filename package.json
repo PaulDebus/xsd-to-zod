@@ -45,6 +45,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@nodable/base-output-builder": "^2.0.0",
     "@nodable/compact-builder": "^2.0.0",
     "@nodable/flexible-xml-parser": "^1.10.0",
     "iconv-lite": "^0.7.3",

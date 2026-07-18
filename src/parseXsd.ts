@@ -1,5 +1,7 @@
 import path from 'node:path';
 import XMLParser from '@nodable/flexible-xml-parser';
+import { CompactBuilderFactory } from '@nodable/compact-builder';
+import type { BaseOutputBuilderFactory } from '@nodable/base-output-builder';
 import { readXmlFile } from './readXmlFile.js';
 import type {
   Cardinality,
@@ -16,7 +18,14 @@ const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
 const parser = new XMLParser({
   skip: { attributes: false },
-  attributes: { prefix: '@_' }
+  attributes: { prefix: '@_' },
+  // Decode entities but keep attribute/text lexicals verbatim: default number
+  // coercion would corrupt schema values like fixed="1.0" or enum values (#68).
+  // Cast: see the declaration-bug note in runtime.ts.
+  OutputBuilder: new CompactBuilderFactory({
+    tags: { valueParsers: ['entity'] },
+    attributes: { valueParsers: ['entity'] },
+  }) as unknown as BaseOutputBuilderFactory
 });
 
 type AnyNode = Record<string, unknown>;
@@ -567,7 +576,10 @@ export const parseXsd = (files: string[]): XsdIr => {
       fileNsMap[''] = entry.inheritedTargetNs;
     }
 
-    const resolveNsMap = { ...fileNsMap, '': effectiveNs || fileNsMap[''] || '' };
+    // Unprefixed type references resolve against the schema document's default
+    // namespace when one is declared (e.g. xmlns="...XMLSchema" makes
+    // type="string" mean xs:string); the targetNamespace is only a fallback.
+    const resolveNsMap = { ...fileNsMap, '': fileNsMap[''] || effectiveNs };
 
     const schemaChildren = nodeChildren(schemaNode);
     const elementNodes: Array<{ node: AnyNode }> = [];
@@ -706,7 +718,9 @@ export const parseXsd = (files: string[]): XsdIr => {
         cardinality: parseCardinality(child),
         nillable: child['@_nillable'] === true || child['@_nillable'] === 'true'
       };
-      rootElements.push(qname);
+      if (!rootElements.includes(qname)) {
+        rootElements.push(qname);
+      }
     }
 
     // Pass 3: process complex types
