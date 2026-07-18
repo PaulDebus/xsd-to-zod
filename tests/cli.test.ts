@@ -1,23 +1,28 @@
-import { execSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cmdValidate, loadMetadataFromMetaTs, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
+import { describe, expect, it, vi } from 'vitest';
+import { cmdValidate, loadMetadataFromMetaTs, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
 import { buildRuntimeMetadata } from '../src/irToZod.js';
 import { parseXsd } from '../src/parseXsd.js';
+import { withTempDir } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
   <xs:element name="hello" type="xs:string"/>
 </xs:schema>`;
 
-const withTempDir = (fn: (dir: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-cli-'));
+// Runs the CLI in-process, capturing console output — much faster and less
+// fragile than spawning `npx tsx` per test (#83).
+const runCli = (args: string[]): { code: number; stdout: string; stderr: string } => {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')); });
+  const errSpy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(' ')); });
   try {
-    fn(dir);
+    return { code: main(args), stdout: logs.join('\n'), stderr: errors.join('\n') };
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    logSpy.mockRestore();
+    errSpy.mockRestore();
   }
 };
 
@@ -79,21 +84,16 @@ describe('parseArgs', () => {
 });
 
 describe('CLI e2e', () => {
-  const cliEntry = path.resolve('src/cli.ts');
-
   it('prints USAGE on --help', () => {
-    const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} --help`, { encoding: 'utf8' });
-    expect(out.trim()).toBe(USAGE.trim());
+    const r = runCli(['--help']);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe(USAGE.trim());
   });
 
   it('exits with error when no files given', () => {
-    try {
-      execSync(`npx tsx ${JSON.stringify(cliEntry)}`, { encoding: 'utf8', stdio: 'pipe' });
-      expect.fail('should have thrown');
-    } catch (e: unknown) {
-      const err = e as Error & { stderr?: Buffer };
-      expect(err.message).toContain('at least one XSD file');
-    }
+    const r = runCli([]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('at least one XSD file');
   });
 
   it('exits with error when output dir does not exist', () => {
@@ -101,13 +101,9 @@ describe('CLI e2e', () => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
       const fakeDir = path.join(dir, 'does-not-exist');
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(fakeDir)}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('output directory does not exist');
-      }
+      const r = runCli([xsdFile, '-o', fakeDir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('output directory does not exist');
     });
   });
 
@@ -115,9 +111,10 @@ describe('CLI e2e', () => {
     withTempDir((dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(dir)} --name my`, { encoding: 'utf8' });
+      const r = runCli([xsdFile, '-o', dir, '--name', 'my']);
 
-      expect(out).toContain('Wrote');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Wrote');
       expect(fs.existsSync(path.join(dir, 'my.zod.ts'))).toBe(true);
       expect(fs.existsSync(path.join(dir, 'my.meta.ts'))).toBe(true);
     });
@@ -127,8 +124,9 @@ describe('CLI e2e', () => {
     withTempDir((dir) => {
       const xsdFile = path.join(dir, 'my-stem.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      execSync(`npx tsx ${JSON.stringify(cliEntry)} ${JSON.stringify(xsdFile)} -o ${JSON.stringify(dir)}`, { encoding: 'utf8' });
+      const r = runCli([xsdFile, '-o', dir]);
 
+      expect(r.code).toBe(0);
       expect(fs.existsSync(path.join(dir, 'my-stem.zod.ts'))).toBe(true);
     });
   });
@@ -187,11 +185,10 @@ describe('parseValidateArgs', () => {
 });
 
 describe('CLI validate e2e', () => {
-  const cliEntry = path.resolve('src/cli.ts');
-
   it('prints VALIDATE_USAGE on validate --help', () => {
-    const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} validate --help`, { encoding: 'utf8' });
-    expect(out.trim()).toBe(VALIDATE_USAGE.trim());
+    const r = runCli(['validate', '--help']);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe(VALIDATE_USAGE.trim());
   });
 
   it('validates XML against XSD (success)', () => {
@@ -206,9 +203,10 @@ describe('CLI validate e2e', () => {
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
 
-      const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -x ${JSON.stringify(xsdFile)}`, { encoding: 'utf8' });
-      expect(out).toContain('Validation passed');
-      expect(out).toContain('hello');
+      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Validation passed');
+      expect(r.stdout).toContain('hello');
     });
   });
 
@@ -224,13 +222,9 @@ describe('CLI validate e2e', () => {
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
 
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -x ${JSON.stringify(xsdFile)}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('Validation failed');
-      }
+      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('Validation failed');
     });
   });
 
@@ -253,32 +247,25 @@ describe('CLI validate e2e', () => {
       const xml = '<?xml version="1.0"?><greeting xmlns="urn:test">hi</greeting>';
       fs.writeFileSync(xmlFile, xml);
 
-      const out = execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -m ${JSON.stringify(metaFile)}`, { encoding: 'utf8' });
-      expect(out).toContain('Validation passed');
+      const r = runCli(['validate', xmlFile, '-m', metaFile]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Validation passed');
     });
   });
 
   it('fails when xml file does not exist', () => {
-    try {
-      execSync(`npx tsx ${JSON.stringify(cliEntry)} validate /nonexistent.xml -x /nonexistent.xsd`, { encoding: 'utf8', stdio: 'pipe' });
-      expect.fail('should have thrown');
-    } catch (e: unknown) {
-      const err = e as Error & { stderr?: Buffer };
-      expect(err.message).toContain('xml file not found');
-    }
+    const r = runCli(['validate', '/nonexistent.xml', '-x', '/nonexistent.xsd']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('xml file not found');
   });
 
   it('fails when xsd file does not exist', () => {
     withTempDir((dir) => {
       const xmlFile = path.join(dir, 'test.xml');
       fs.writeFileSync(xmlFile, '<root/>');
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -x ${JSON.stringify('/nonexistent.xsd')}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('xsd file not found');
-      }
+      const r = runCli(['validate', xmlFile, '-x', '/nonexistent.xsd']);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('xsd file not found');
     });
   });
 
@@ -286,13 +273,9 @@ describe('CLI validate e2e', () => {
     withTempDir((dir) => {
       const xmlFile = path.join(dir, 'test.xml');
       fs.writeFileSync(xmlFile, '<root/>');
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -m ${JSON.stringify('/nonexistent.meta.ts')}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('metadata file not found');
-      }
+      const r = runCli(['validate', xmlFile, '-m', '/nonexistent.meta.ts']);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('metadata file not found');
     });
   });
 
@@ -308,13 +291,9 @@ describe('CLI validate e2e', () => {
       const xml = '<?xml version="1.0"?><foo xmlns="urn:test">hi</foo>';
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -x ${JSON.stringify(xsdFile)}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('multiple root elements found');
-      }
+      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('multiple root elements found');
     });
   });
 
@@ -324,13 +303,9 @@ describe('CLI validate e2e', () => {
       const xmlFile = path.join(dir, 'test.xml');
       fs.writeFileSync(metaFile, 'not valid ts');
       fs.writeFileSync(xmlFile, '<root/>');
-      try {
-        execSync(`npx tsx ${JSON.stringify(cliEntry)} validate ${JSON.stringify(xmlFile)} -m ${JSON.stringify(metaFile)}`, { encoding: 'utf8', stdio: 'pipe' });
-        expect.fail('should have thrown');
-      } catch (e: unknown) {
-        const err = e as Error & { stderr?: Buffer };
-        expect(err.message).toContain('failed to parse metadata');
-      }
+      const r = runCli(['validate', xmlFile, '-m', metaFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('failed to parse metadata');
     });
   });
 });

@@ -4,15 +4,23 @@
 
 xsd2zod is tested against a corpus of real-world XSD schemas with corresponding XML instance files. The primary test is a **round-trip**: parse the XSD → generate Zod schemas → parse the XML → serialize back to XML → re-parse → deep-compare the two parsed objects. This ensures the generated Zod schemas and runtime metadata correctly handle real-world XML.
 
+Round-trip tests additionally:
+
+- compare the first parse against a checked-in **golden file** (`*.expected.json` next to each curated XML fixture), so symmetric silent data loss cannot pass undetected
+- validate the `parseXml` output against the **generated Zod schema** for the root element
+- validate the serialized XML against the **XSD whose targetNamespace matches the root element** (not just any candidate schema)
+
+Negative fixtures (`testdata/curated/negative/`) pin the exact lenient parse result, so changes in error handling are visible.
+
 ---
 
 ## Test Levels
 
 | Level | Command | When | Scope | Est. Time |
 |-------|---------|------|-------|-----------|
-| **fast** | `npm test` | Every push/PR | Curated fixtures + xmlschema examples + 1 UBL test | ~1-2s |
-| **extended** | `npm run test:extended` | Merge to main, releases | Fast + UBL full subset + W3C smoke tests | ~10-30s |
-| **nightly** | `npm run test:nightly` | Scheduled / on demand | Extended + full W3C corpus | ~minutes |
+| **fast** | `npm test` | Every push/PR | Curated fixtures + xmlschema examples + UBL examples + W3C smoke tests | ~5s |
+
+Extended and nightly conformance levels (full W3C corpus) are future work; the W3C smoke subset (`tests/roundtrip-w3c.test.ts`) already runs as part of `npm test`.
 
 ---
 
@@ -30,6 +38,7 @@ Small, hand-authored XSD+XML pairs covering specific XSD constructs. Each file i
 | Content models | `sequence`, `choice`, `all`, `nested-sequence` | Particle compositors |
 | Cardinality | `required`, `optional`, `unbounded`, `min-occurs-zero` | minOccurs/maxOccurs |
 | Primitive types | `string`, `boolean`, `decimal`, `integer` | XSD type→Zod type mapping |
+| Entities | `entities-text`, `entities-attr`, `numeric-refs`, `cdata`, `leading-comment` | Entity decoding, CDATA, comments/PIs |
 | Namespaces | `qualified`, `unqualified`, `multi-ns` | elementFormDefault, namespace resolution |
 | Imports | `include`, `import`, `chained-imports` | xs:include, xs:import, multi-file schemas |
 | Negative | 7+ invalid XML variants | Round-trip error handling |
@@ -62,7 +71,7 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 **License:** W3C Document License — from [w3.org](https://www.w3.org/XML/2004/xml-schema-test-suite/)
 
-Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. We use a subset of ~50-100 cases as smoke tests in the extended suite, and the full corpus in the nightly suite.
+Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. A small smoke subset (the Boeing ipo1–ipo4 datasets) runs in the fast suite; running the full corpus is future work.
 
 Features tested include:
 - Built-in datatypes and facets
@@ -80,20 +89,22 @@ Features tested include:
 - [x] Content models (sequence, choice, all)
 - [x] Cardinality (required, optional, unbounded)
 - [x] Primitive types (string, boolean, decimal, integer)
+- [x] Entities, CDATA, comments
 - [x] Namespaces (qualified, unqualified, multi-ns)
 - [x] Imports/includes
-- [x] Negative test variants (10+)
+- [x] Negative test variants (7, with pinned lenient results)
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
-- [x] UBL Invoice round-trip
-- [x] CI workflow (fast on push/PR, extended on main/release)
+- [x] UBL Invoice + Order round-trips
+- [x] W3C smoke subset (Boeing ipo1–ipo4)
+- [x] CI workflow (fast on push/PR)
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] W3C XSD 1.0 smoke tests (50-100)
-- [ ] UBL Order, CreditNote round-trips
+- [ ] Larger W3C XSD 1.0 subset (50-100 cases)
+- [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
-## Phase 3 — Nightly conformance (future)
+## Phase 3 — Full conformance (future)
 
 - [ ] Full W3C XSD 1.0 corpus
 - [ ] XSD 1.1 corpus (if licensing clarified)
@@ -108,7 +119,6 @@ These features exist in the test corpus but are skipped because the tool doesn't
 - `xs:any` / `xs:anyAttribute` wildcards
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
 - Substitution groups
-- Simple type restrictions (enumeration, pattern, length, etc.)
 - Attribute groups
 
 ---

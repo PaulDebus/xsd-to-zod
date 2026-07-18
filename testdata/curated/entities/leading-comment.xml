@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- leading comment -->
+<?processing instruction?>
+<doc xmlns="urn:curated">
+  <!-- comment inside root -->
+  <title>comments</title>
+</doc>

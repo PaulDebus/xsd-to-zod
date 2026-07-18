@@ -1,0 +1,110 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { createRootHelpers } from '../src/index.js';
+import { extractRuntimeMetadata, withTempDir } from './helpers.js';
+import { irToZod, parseXsd } from '../src/index.js';
+import type { RuntimeRootMetadata, RuntimeTypeMetadata } from '../src/types.js';
+
+const XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:rt" xmlns:t="urn:rt" elementFormDefault="qualified">
+  <xs:complexType name="DocType">
+    <xs:sequence>
+      <xs:element name="text" type="xs:string"/>
+      <xs:element name="count" type="xs:int"/>
+      <xs:element name="flag" type="xs:boolean"/>
+      <xs:element name="measure" type="xs:double" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="version" type="xs:int"/>
+    <xs:attribute name="active" type="xs:boolean"/>
+  </xs:complexType>
+  <xs:element name="doc" type="t:DocType" nillable="true"/>
+</xs:schema>`;
+
+let parseXml: (xml: string) => Record<string, unknown>;
+let serializeXml: (obj: Record<string, unknown>) => string;
+
+const doc = (inner: string, attrs = 'version="007" active="1"'): string =>
+  `<doc xmlns="urn:rt" ${attrs}>${inner}</doc>`;
+
+beforeAll(() => {
+  withTempDir((dir) => {
+    const file = path.join(dir, 'schema.xsd');
+    fs.writeFileSync(file, XSD);
+    const metadata = extractRuntimeMetadata(irToZod(parseXsd([file])).metadata);
+    const rootMeta: RuntimeRootMetadata = metadata.roots.find(r => r.rootElement.endsWith('}doc'))!;
+    const helpers = createRootHelpers<Record<string, unknown>>(rootMeta, metadata.types as Record<string, RuntimeTypeMetadata>);
+    parseXml = helpers.parseXml;
+    serializeXml = helpers.serializeXml;
+  });
+});
+
+describe('entities in character data (#64)', () => {
+  it('decodes predefined and numeric entities in text', () => {
+    const parsed = parseXml(doc('<text>a &lt; b &amp; c &gt; d &#65;&#x42;</text><count>1</count><flag>true</flag>'));
+    expect(parsed.text).toBe('a < b & c > d AB');
+  });
+
+  it('decodes entities in attribute values', () => {
+    const parsed = parseXml(`<doc xmlns="urn:rt" version="1" active="true"><text>x</text><count>1</count><flag>0</flag></doc>`.replace('version="1"', 'version="&#49;"'));
+    expect(parsed.version).toBeUndefined();
+    expect(parsed['@version']).toBe(1);
+  });
+
+  it('does not double-decode &amp;lt;', () => {
+    const parsed = parseXml(doc('<text>&amp;lt;</text><count>1</count><flag>1</flag>'));
+    expect(parsed.text).toBe('&lt;');
+  });
+
+  it('keeps CDATA content verbatim, including entity-looking text', () => {
+    const parsed = parseXml(doc('<text><![CDATA[a &lt; b &amp; <tag>]]></text><count>1</count><flag>0</flag>'));
+    expect(parsed.text).toBe('a &lt; b &amp; <tag>');
+  });
+
+  it('round-trips serialized entity text', () => {
+    const parsed = parseXml(doc('<text>a &lt; b &amp; c</text><count>2</count><flag>false</flag>'));
+    const reparsed = parseXml(serializeXml(parsed));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it('skips leading comments and processing instructions', () => {
+    const xml = `<?xml version="1.0"?>\n<!-- a comment -->\n<?pi data?>\n${doc('<text>x</text><count>1</count><flag>1</flag>')}`;
+    expect(parseXml(xml).text).toBe('x');
+  });
+});
+
+describe('type coercion (#65)', () => {
+  it('coerces attribute values through their declared type', () => {
+    const parsed = parseXml(doc('<text>x</text><count>1</count><flag>0</flag>'));
+    expect(parsed['@version']).toBe(7);
+    expect(parsed['@active']).toBe(true);
+    expect(parsed.flag).toBe(false);
+  });
+
+  it('preserves numeric-looking xs:string lexicals', () => {
+    const parsed = parseXml(doc('<text>3.50</text><count>1</count><flag>1</flag>'));
+    expect(parsed.text).toBe('3.50');
+  });
+
+  it('rejects invalid xs:int lexicals instead of producing NaN', () => {
+    expect(() => parseXml(doc('<text>x</text><count>abc</count><flag>1</flag>'))).toThrow('Invalid xs:int lexical');
+  });
+
+  it('rejects empty xs:int elements instead of inventing 0', () => {
+    expect(() => parseXml(doc('<text>x</text><count/><flag>1</flag>'))).toThrow('Invalid xs:int lexical');
+  });
+
+  it('rejects non-boolean lexicals for xs:boolean', () => {
+    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>yes</flag>'))).toThrow('Invalid xs:boolean lexical');
+  });
+
+  it('accepts INF/-INF/NaN for xs:double', () => {
+    const parsed = parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'));
+    expect(parsed.measure).toBe(-Infinity);
+  });
+
+  it('returns null for an xsi:nil root', () => {
+    const xml = '<doc xmlns="urn:rt" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>';
+    expect(parseXml(xml)).toBeNull();
+  });
+});

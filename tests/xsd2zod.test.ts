@@ -1,10 +1,8 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { createRootHelpers, irToZod, parseXsd } from '../src/index.js';
-import type { RuntimeMetadata } from '../src/types.js';
+import { extractRuntimeMetadata, importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -59,23 +57,6 @@ const EXTENSION_XSD = `<?xml version="1.0"?>
     </xs:complexContent>
   </xs:complexType>
 </xs:schema>`;
-
-const extractRuntimeMetadata = (metadataCode: string): RuntimeMetadata => {
-  const match = metadataCode.match(/runtimeMetadata = ([\s\S]+) as const;/);
-  if (!match) {
-    throw new Error('runtime metadata not found');
-  }
-  return JSON.parse(match[1]) as RuntimeMetadata;
-};
-
-const withTempDir = (fn: (dir: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
-  try {
-    fn(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-};
 
 describe('xsd2zod v1 pipeline', () => {
   it('supports array cardinality, collisions, choice, and nillable handling', () => {
@@ -551,6 +532,31 @@ describe('xsd2zod v1 pipeline', () => {
       });
     });
 
+    it('coerces fixed/default values to the field type (#68)', () => {
+      const TYPED_DEFAULTS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:typedDefaults" xmlns:t="urn:typedDefaults" elementFormDefault="qualified">
+  <xs:complexType name="Cfg">
+    <xs:sequence>
+      <xs:element name="ratio" type="xs:decimal" default="1.50" minOccurs="0"/>
+      <xs:element name="level" type="xs:int" fixed="3" minOccurs="0"/>
+      <xs:element name="enabled" type="xs:boolean" default="1" minOccurs="0"/>
+      <xs:element name="note" type="xs:string" default="1.50" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="cfg" type="t:Cfg"/>
+</xs:schema>`;
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, TYPED_DEFAULTS_XSD);
+        const generated = irToZod(parseXsd([file]));
+        expect(generated.schemas).toContain('"ratio": z.number().default(1.5)');
+        expect(generated.schemas).toContain('"level": z.literal(3)');
+        expect(generated.schemas).toContain('"enabled": z.boolean().default(true)');
+        // string-typed fields keep the lexical verbatim
+        expect(generated.schemas).toContain('"note": z.string().default("1.50")');
+      });
+    });
+
     it('round-trips facet-constrained data', () => {
       runFacetTest((_dir, file) => {
         const ir = parseXsd([file]);
@@ -564,15 +570,15 @@ describe('xsd2zod v1 pipeline', () => {
 
         const xml = `<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`;
         const parsed = parseXml(xml);
-        expect(parsed.country).toEqual({ _text: 'DE' });
-        expect(parsed.status).toEqual({ _text: 'active' });
-        expect(parsed.qty).toEqual({ _text: 42 });
-        expect(parsed.price).toEqual({ _text: 19.99 });
-        expect(parsed.temp).toEqual({ _text: 25.5 });
-        expect(parsed.code).toEqual({ _text: 'ADM' });
-        expect(parsed.big).toEqual({ _text: 12345 });
-        expect(parsed.name).toEqual({ _text: 'Alice' });
-        expect(parsed.token).toEqual({ _text: 'hello' });
+        expect(parsed.country).toBe('DE');
+        expect(parsed.status).toBe('active');
+        expect(parsed.qty).toBe(42);
+        expect(parsed.price).toBe(19.99);
+        expect(parsed.temp).toBe(25.5);
+        expect(parsed.code).toBe('ADM');
+        expect(parsed.big).toBe(12345);
+        expect(parsed.name).toBe('Alice');
+        expect(parsed.token).toBe('hello');
 
         const serialized = serializeXml(parsed);
         const reparsed = parseXml(serialized);
@@ -580,69 +586,38 @@ describe('xsd2zod v1 pipeline', () => {
       });
     });
 
-    it('rejects values violating pattern facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>12</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('does not match pattern');
-      });
-    });
+    describe('facet rejection', () => {
+      let parseXml: (xml: string) => unknown;
 
-    it('rejects values violating enumeration facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>bogus</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('not one of the allowed values');
+      beforeAll(() => {
+        withTempDir((dir) => {
+          const file = path.join(dir, 'schema.xsd');
+          fs.writeFileSync(file, FACET_XSD);
+          const runtimeMetadata = extractRuntimeMetadata(irToZod(parseXsd([file])).metadata);
+          const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+          parseXml = createRootHelpers(rootMeta, runtimeMetadata.types).parseXml;
+        });
       });
-    });
 
-    it('rejects values violating minInclusive/maxInclusive facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>0</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('less than minimum');
-      });
-    });
+      const facetXml = (field: string, value: string): string => {
+        const values: Record<string, string> = {
+          country: 'DE', status: 'active', qty: '42', price: '19.99',
+          temp: '25.5', code: 'ADM', big: '12345', name: 'Alice', token: 'hello',
+          [field]: value,
+        };
+        const elements = Object.entries(values).map(([k, v]) => `<${k}>${v}</${k}>`).join('');
+        return `<facets xmlns="urn:facets">${elements}</facets>`;
+      };
 
-    it('rejects values violating fractionDigits facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.999</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('more than');
-      });
-    });
-
-    it('rejects values violating totalDigits facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>123456</big><name>Alice</name><token>hello</token></facets>`)).toThrow('more than');
-      });
-    });
-
-    it('rejects values violating minLength/maxLength facet', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>A</name><token>hello</token></facets>`)).toThrow('shorter than minimum length');
+      it.each([
+        ['pattern', 'country', '12', 'does not match pattern'],
+        ['enumeration', 'status', 'bogus', 'not one of the allowed values'],
+        ['minInclusive', 'qty', '0', 'less than minimum'],
+        ['fractionDigits', 'price', '19.999', 'more than'],
+        ['totalDigits', 'big', '123456', 'more than'],
+        ['minLength', 'name', 'A', 'shorter than minimum length'],
+      ])('rejects values violating %s facet', (_facet, field, value, message) => {
+        expect(() => parseXml(facetXml(field, value))).toThrow(message);
       });
     });
   });
@@ -666,11 +641,10 @@ describe('xsd2zod v1 pipeline', () => {
   <xs:element name="team" type="t:TeamType"/>
 </xs:schema>`;
 
-    const xsdFile = path.join(os.tmpdir(), `cyclic-${Date.now()}.xsd`);
-    fs.writeFileSync(xsdFile, CYCLIC_XSD);
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'cyclic.xsd');
+      fs.writeFileSync(xsdFile, CYCLIC_XSD);
 
-    const zodFile = path.join(process.cwd(), `.cyclic-${Date.now()}.zod.ts`);
-    try {
       const ir = parseXsd([xsdFile]);
       const { schemas } = irToZod(ir);
 
@@ -679,9 +653,7 @@ describe('xsd2zod v1 pipeline', () => {
       expect(schemas).toContain('export const personSchema = schemas["{urn:cyclic}PersonType"];');
       expect(schemas).toContain('export const teamSchema = schemas["{urn:cyclic}TeamType"];');
 
-      fs.writeFileSync(zodFile, schemas);
-
-      const mod = await import(`${pathToFileURL(zodFile).href}?t=${Date.now()}`) as {
+      const mod = await importGeneratedSchemas(schemas) as {
         personSchema: { parse: (v: unknown) => unknown };
         teamSchema: { parse: (v: unknown) => unknown };
       };
@@ -696,10 +668,7 @@ describe('xsd2zod v1 pipeline', () => {
         name: 'Alice',
         manager: { name: 'Bob', manager: { name: 'Carol' } }
       });
-    } finally {
-      fs.rmSync(xsdFile, { force: true });
-      fs.rmSync(zodFile, { force: true });
-    }
+    });
   });
 
   describe('xs:list and xs:union simple types (#29)', () => {

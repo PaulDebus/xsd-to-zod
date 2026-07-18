@@ -1,0 +1,13 @@
+{
+  "orderId": "ORD-001",
+  "lineItem": [
+    {
+      "productId": "P-100",
+      "quantity": 2
+    },
+    {
+      "productId": "P-200",
+      "quantity": 5
+    }
+  ]
+}

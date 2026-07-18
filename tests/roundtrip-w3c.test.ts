@@ -6,9 +6,7 @@ import { parseXsd } from '../src/index.js';
 
 const W3C_DIR = path.resolve('testdata/upstream/w3c-xsdtests');
 
-const KNOWN_FAILURES = new Map<string, string>([]);
-
-describe('nightly round-trip (W3C smoke)', () => {
+describe('W3C smoke round-trip', () => {
   if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
     it('skip — W3C submodule not checked out', () => {});
     return;
@@ -32,20 +30,14 @@ describe('nightly round-trip (W3C smoke)', () => {
     if (xsdFiles.length === 0 || xmlFiles.length === 0) continue;
 
     for (const xmlFile of xmlFiles) {
-      const key = `${subdir}/${xmlFile}`;
-      const reason = KNOWN_FAILURES.get(key);
-      if (reason) {
-        it.skip(`round-trips W3C ${key} — SKIPPED: ${reason}`, () => {});
-      } else {
-        it(`round-trips W3C ${key}`, async () => {
-          await runRoundTrip(xsdFiles, path.join(dir, xmlFile));
-        });
-      }
+      it(`round-trips W3C ${subdir}/${xmlFile}`, async () => {
+        await runRoundTrip(xsdFiles, path.join(dir, xmlFile));
+      });
     }
   }
 });
 
-describe('nightly benchmark', () => {
+describe('upstream parse benchmark', () => {
   it('parseXsds all upstream XSDs under 5s', () => {
     const upstreamDir = path.resolve('testdata/upstream');
 

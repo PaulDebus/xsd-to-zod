@@ -1,16 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'vitest';
-import { runRoundTrip, type TestCase } from './helpers.js';
+import { extractRootInfo, runRoundTrip, type TestCase } from './helpers.js';
 
 const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection2', 'original XML violates xs:key identity constraint on author/@dn (inherent test data)'],
   ['xmlschema/collection/collection3', 'original XML violates xs:keyref identity constraint (inherent test data)'],
 ]);
 
+const XSD_NAMESPACE = 'http://www.w3.org/2001/XMLSchema';
+
+// True when the XML file is itself a schema document or fragment (root element
+// in the XSD namespace, any prefix including the default namespace) — such
+// files are inputs for schema parsers, not instance documents to round-trip.
 function isXsdSchemaRoot(xml: string): boolean {
-  const match = xml.match(/<([\w-]+):(\w+)(?:\s[^>]*)?\s+xmlns:\1="http:\/\/www\.w3\.org\/2001\/XMLSchema"/);
-  return match !== null;
+  try {
+    return extractRootInfo(xml).namespace === XSD_NAMESPACE;
+  } catch {
+    return false;
+  }
 }
 
 function discoverUpstreamCases(): TestCase[] {

@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:curated" xmlns:t="urn:curated" elementFormDefault="qualified">
+  <xs:complexType name="DocType">
+    <xs:sequence>
+      <xs:element name="title" type="xs:string"/>
+      <xs:element name="body" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="label" type="xs:string"/>
+  </xs:complexType>
+  <xs:element name="doc" type="t:DocType"/>
+</xs:schema>

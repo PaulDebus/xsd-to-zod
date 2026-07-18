@@ -1,0 +1,4 @@
+{
+  "mustExist": "I am required",
+  "alsoRequired": 42
+}

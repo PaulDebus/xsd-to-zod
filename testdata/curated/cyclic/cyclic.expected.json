@@ -1,0 +1,9 @@
+{
+  "name": "Alice",
+  "manager": {
+    "name": "Bob",
+    "manager": {
+      "name": "Carol"
+    }
+  }
+}
