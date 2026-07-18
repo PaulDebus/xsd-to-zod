@@ -1,5 +1,5 @@
 import XMLParser from '@nodable/flexible-xml-parser';
-import type { RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
+import type { Facet, RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
 
@@ -67,9 +67,81 @@ export const decodeXmlEntities = (xml: string): string =>
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)));
 
-const parsePrimitive = (raw: unknown, typeName: string): unknown => {
+const validateFacets = (value: unknown, facets: Facet[], typeName: string): void => {
+  const enumValues = facets.filter(f => f.kind === 'enumeration').map(f => f.value);
+  if (enumValues.length > 0 && !enumValues.includes(String(value))) {
+    throw new Error(`Value ${JSON.stringify(value)} is not one of the allowed values for ${typeName}`);
+  }
+
+  for (const facet of facets) {
+    switch (facet.kind) {
+      case 'pattern': {
+        if (typeof value !== 'string' || !new RegExp(facet.value).test(value)) {
+          throw new Error(`Value ${JSON.stringify(value)} does not match pattern ${facet.value} for ${typeName}`);
+        }
+        break;
+      }
+      case 'length':
+        if (typeof value === 'string' && value.length !== facet.value) {
+          throw new Error(`Value ${JSON.stringify(value)} length is not ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'minLength':
+        if (typeof value === 'string' && value.length < facet.value) {
+          throw new Error(`Value ${JSON.stringify(value)} is shorter than minimum length ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'maxLength':
+        if (typeof value === 'string' && value.length > facet.value) {
+          throw new Error(`Value ${JSON.stringify(value)} exceeds maximum length ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'minInclusive':
+        if (typeof value === 'number' && value < facet.value) {
+          throw new Error(`Value ${value} is less than minimum ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'maxInclusive':
+        if (typeof value === 'number' && value > facet.value) {
+          throw new Error(`Value ${value} exceeds maximum ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'minExclusive':
+        if (typeof value === 'number' && value <= facet.value) {
+          throw new Error(`Value ${value} is not greater than ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'maxExclusive':
+        if (typeof value === 'number' && value >= facet.value) {
+          throw new Error(`Value ${value} is not less than ${facet.value} for ${typeName}`);
+        }
+        break;
+      case 'totalDigits': {
+        const str = String(typeof value === 'number' ? Math.abs(value) : value);
+        const digits = str.replace('.', '').replace('-', '').length;
+        if (digits > facet.value) {
+          throw new Error(`Value ${value} has more than ${facet.value} total digits for ${typeName}`);
+        }
+        break;
+      }
+      case 'fractionDigits': {
+        const str = String(value);
+        const frac = str.includes('.') ? str.split('.')[1].length : 0;
+        if (frac > facet.value) {
+          throw new Error(`Value ${value} has more than ${facet.value} fraction digits for ${typeName}`);
+        }
+        break;
+      }
+    }
+  }
+};
+
+const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unknown => {
   const { namespace: ns, local } = splitClark(typeName);
   if (ns !== 'http://www.w3.org/2001/XMLSchema') {
+    if (facets) {
+      validateFacets(raw, facets, typeName);
+    }
     return raw;
   }
 
@@ -77,18 +149,26 @@ const parsePrimitive = (raw: unknown, typeName: string): unknown => {
     return raw;
   }
 
+  let value: unknown;
   switch (local) {
     case 'boolean':
-      return raw === true || raw === 1 || raw === 'true' || raw === '1';
+      value = raw === true || raw === 1 || raw === 'true' || raw === '1';
+      break;
     case 'int':
     case 'integer':
     case 'decimal':
     case 'double':
     case 'float':
-      return Number(raw);
+      value = Number(raw);
+      break;
     default:
-      return String(raw);
+      value = String(raw);
   }
+
+  if (facets) {
+    validateFacets(value, facets, typeName);
+  }
+  return value;
 };
 
 const findAttributeValue = (
@@ -143,14 +223,14 @@ const readValue = (
   types: Record<string, RuntimeTypeMetadata>
 ): unknown => {
   if (field.kind === 'text') {
-    return parsePrimitive(node['#text'], field.typeName);
+    return parsePrimitive(node['#text'], field.typeName, field.facets);
   }
 
   const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
 
   if (field.kind === 'attribute') {
     const value = findAttributeValue(node, field.qname, namespaceContext);
-    return value === undefined ? undefined : parsePrimitive(value, field.typeName);
+    return value === undefined ? undefined : parsePrimitive(value, field.typeName, field.facets);
   }
 
   const complexType = types[field.typeName];
@@ -166,12 +246,12 @@ const readValue = (
       if (complexType) {
         return parseTypeFields(entryNode, complexType, entryNamespaceContext, types);
       }
-      return parsePrimitive(entryNode['#text'] ?? entry, field.typeName);
+      return parsePrimitive(entryNode['#text'] ?? entry, field.typeName, field.facets);
     }
     if (complexType) {
       return parseTypeFields({ '#text': entry }, complexType, namespaceContext, types);
     }
-    return parsePrimitive(entry, field.typeName);
+    return parsePrimitive(entry, field.typeName, field.facets);
   });
 
   if (isArray) {

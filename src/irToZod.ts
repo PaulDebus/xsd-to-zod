@@ -71,21 +71,30 @@ const toFieldKey = (field: IrField): string => {
   return field.kind === 'attribute' ? `@${local}` : local;
 };
 
-const metadataForType = (type: ComplexTypeDef): RuntimeTypeMetadata => ({
+const metadataForType = (type: ComplexTypeDef, ir: XsdIr): RuntimeTypeMetadata => ({
   typeName: type.name,
-  fields: type.fields.map((field) => ({
-    ...field,
-    key: toFieldKey(field)
-  }))
+  fields: type.fields.map((field) => {
+    const simpleType = ir.simpleTypes[field.typeName];
+    return {
+      ...field,
+      key: toFieldKey(field),
+      ...(simpleType?.facets ? { facets: simpleType.facets } : {})
+    };
+  })
 });
 
 export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
   const schemaLines: string[] = [];
-  const metadataTypes: RuntimeTypeMetadata[] = Object.values(ir.complexTypes).map(metadataForType);
+  const metadataTypes: RuntimeTypeMetadata[] = Object.values(ir.complexTypes).map(t => metadataForType(t, ir));
   for (const simpleType of Object.values(ir.simpleTypes)) {
+    const textField = textFieldFor(simpleType.baseType);
+    if (simpleType.facets) {
+      textField.facets = simpleType.facets;
+    }
     metadataTypes.push({
       typeName: simpleType.name,
-      fields: [textFieldFor(simpleType.baseType)]
+      fields: [textField],
+      ...(simpleType.facets ? { facets: simpleType.facets } : {})
     });
   }
   const typesByQName: Record<string, RuntimeTypeMetadata> = {};

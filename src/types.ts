@@ -58,11 +58,13 @@ export type XsdIr = {
 
 export type RuntimeFieldMetadata = IrField & {
   key: string;
+  facets?: Facet[];
 };
 
 export type RuntimeTypeMetadata = {
   typeName: QName;
   fields: RuntimeFieldMetadata[];
+  facets?: Facet[];
 };
 
 export type RuntimeRootMetadata = {

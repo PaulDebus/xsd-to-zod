@@ -579,6 +579,72 @@ describe('xsd2zod v1 pipeline', () => {
         expect(reparsed).toEqual(parsed);
       });
     });
+
+    it('rejects values violating pattern facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>12</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('does not match pattern');
+      });
+    });
+
+    it('rejects values violating enumeration facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>bogus</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('not one of the allowed values');
+      });
+    });
+
+    it('rejects values violating minInclusive/maxInclusive facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>0</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('less than minimum');
+      });
+    });
+
+    it('rejects values violating fractionDigits facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.999</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`)).toThrow('more than');
+      });
+    });
+
+    it('rejects values violating totalDigits facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>123456</big><name>Alice</name><token>hello</token></facets>`)).toThrow('more than');
+      });
+    });
+
+    it('rejects values violating minLength/maxLength facet', () => {
+      runFacetTest((_dir, file) => {
+        const ir = parseXsd([file]);
+        const generated = irToZod(ir);
+        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
+        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
+        expect(() => parseXml(`<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>A</name><token>hello</token></facets>`)).toThrow('shorter than minimum length');
+      });
+    });
   });
 
   it('wraps cyclic complex types in z.lazy so generated module loads without ReferenceError (#31)', async () => {
