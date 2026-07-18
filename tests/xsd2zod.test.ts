@@ -1152,4 +1152,110 @@ describe('xsd2zod v1 pipeline', () => {
       });
     });
   });
+
+  describe('misc robustness (#79)', () => {
+    it('populates targetNamespaces in the returned IR', () => {
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, XSD);
+
+        const ir = parseXsd([file]);
+        expect(ir.targetNamespaces).toEqual(['urn:test']);
+      });
+    });
+
+    it('cuts circular complexContent extensions without duplicating fields', () => {
+      const CYCLE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:cycle" xmlns:t="urn:cycle" elementFormDefault="qualified">
+  <xs:complexType name="A">
+    <xs:complexContent>
+      <xs:extension base="t:B">
+        <xs:sequence>
+          <xs:element name="aField" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="B">
+    <xs:complexContent>
+      <xs:extension base="t:A">
+        <xs:sequence>
+          <xs:element name="bField" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, CYCLE_XSD);
+
+        const ir = parseXsd([file]);
+        expect(ir.complexTypes['{urn:cycle}A'].fields.map((f) => f.qname))
+          .toEqual(['{urn:cycle}bField', '{urn:cycle}aField']);
+        expect(ir.complexTypes['{urn:cycle}B'].fields.map((f) => f.qname))
+          .toEqual(['{urn:cycle}aField', '{urn:cycle}bField']);
+      });
+    });
+
+    it('does not alias IrField objects across simpleContent derivations', () => {
+      const ALIAS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:alias" xmlns:t="urn:alias">
+  <xs:complexType name="Base">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="a" type="xs:string"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="Derived">
+    <xs:simpleContent>
+      <xs:extension base="t:Base"/>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, ALIAS_XSD);
+
+        const ir = parseXsd([file]);
+        const baseAttr = ir.complexTypes['{urn:alias}Base'].fields.find((f) => f.qname === '{}a');
+        const derivedAttr = ir.complexTypes['{urn:alias}Derived'].fields.find((f) => f.qname === '{}a');
+        expect(derivedAttr).toBeDefined();
+        expect(derivedAttr).toEqual(baseAttr);
+        expect(derivedAttr).not.toBe(baseAttr);
+      });
+    });
+
+    it('rejects invalid minOccurs/maxOccurs values instead of producing NaN', () => {
+      const BAD_MIN_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:occurs" xmlns:t="urn:occurs">
+  <xs:complexType name="C">
+    <xs:sequence>
+      <xs:element name="a" type="xs:string" minOccurs="many"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+      const BAD_MAX_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:occurs" xmlns:t="urn:occurs">
+  <xs:complexType name="C">
+    <xs:sequence>
+      <xs:element name="a" type="xs:string" maxOccurs="lots"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const minFile = path.join(dir, 'min.xsd');
+        const maxFile = path.join(dir, 'max.xsd');
+        fs.writeFileSync(minFile, BAD_MIN_XSD);
+        fs.writeFileSync(maxFile, BAD_MAX_XSD);
+
+        expect(() => parseXsd([minFile])).toThrow('Invalid minOccurs value "many"');
+        expect(() => parseXsd([maxFile])).toThrow('Invalid maxOccurs value "lots"');
+      });
+    });
+  });
 });

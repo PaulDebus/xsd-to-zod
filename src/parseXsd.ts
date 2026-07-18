@@ -156,12 +156,22 @@ const resolveInlineSimpleType = (
   return syntheticName;
 };
 
+const OCCURS_LEXICAL = /^\d+$/;
+
+const parseOccursValue = (raw: unknown, attr: 'minOccurs' | 'maxOccurs'): number => {
+  const text = String(raw).trim();
+  if (!OCCURS_LEXICAL.test(text)) {
+    throw new Error(`Invalid ${attr} value ${JSON.stringify(text)}: expected a non-negative integer`);
+  }
+  return Number(text);
+};
+
 const parseCardinality = (node: AnyNode): Cardinality => {
   const rawMin = node['@_minOccurs'];
   const rawMax = node['@_maxOccurs'];
   return {
-    minOccurs: rawMin === undefined ? 1 : Number(rawMin),
-    maxOccurs: rawMax === undefined ? 1 : rawMax === 'unbounded' ? 'unbounded' : Number(rawMax)
+    minOccurs: rawMin === undefined ? 1 : parseOccursValue(rawMin, 'minOccurs'),
+    maxOccurs: rawMax === undefined ? 1 : rawMax === 'unbounded' ? 'unbounded' : parseOccursValue(rawMax, 'maxOccurs')
   };
 };
 
@@ -495,7 +505,8 @@ const collectFields = (
           for (const f of current.fields) {
             if (f.kind === 'attribute' && !seenAttrs.has(f.qname)) {
               seenAttrs.add(f.qname);
-              fields.push(f);
+              // Copy the field so the derived type does not alias the base's object.
+              fields.push({ ...f });
             }
           }
           textType = tf.typeName;
@@ -679,6 +690,7 @@ export const parseXsd = (files: string[]): XsdIr => {
 
   for (const { entry, schemaNode, nsMap: fileNsMap, targetNs: fileTargetNs, formDefaults: fileFormDefaults } of allFiles) {
     const effectiveNs = fileTargetNs || entry.inheritedTargetNs || '';
+    targetNamespaces.add(effectiveNs);
 
     if (!fileNsMap[''] && entry.inheritedTargetNs) {
       fileNsMap[''] = entry.inheritedTargetNs;
@@ -922,7 +934,9 @@ export const parseXsd = (files: string[]): XsdIr => {
       return type.fields;
     }
     if (stack.has(typeName)) {
-      return type.fields;
+      // Extension cycle (invalid XSD): cut it instead of re-appending the
+      // repeated type's fields, which outer frames have already collected.
+      return [];
     }
     const nextStack = new Set(stack);
     nextStack.add(typeName);
