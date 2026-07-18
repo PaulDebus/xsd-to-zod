@@ -421,17 +421,24 @@ export const parseXsd = (files: string[]): XsdIr => {
   // First pass: collect all files and their dependencies
   const allFiles: Array<{ entry: QueueEntry; schemaNode: AnyNode; nsMap: Record<string, string>; targetNs: string; formDefaults: SchemaFormDefaults }> = [];
 
+  // Helpers for composite scan keys (file + inherited namespace) so chameleon schemas
+  // included by multiple schemas with different target namespaces are scanned once per
+  // distinct inherited namespace rather than once globally.
+  const scanKey = (file: string, inheritedTargetNs?: string): string =>
+    file + '|' + (inheritedTargetNs ?? '');
+
   {
     const pending = new Map<string, QueueEntry>();
-    for (const qe of queue) pending.set(qe.file, qe);
+    for (const qe of queue) pending.set(scanKey(qe.file, qe.inheritedTargetNs), qe);
     const scanned = new Set<string>();
 
     while (pending.size > 0) {
       const firstKey = pending.keys().next().value as string;
       const entry = pending.get(firstKey)!;
       pending.delete(firstKey);
-      if (scanned.has(entry.file)) continue;
-      scanned.add(entry.file);
+      const entryKey = scanKey(entry.file, entry.inheritedTargetNs);
+      if (scanned.has(entryKey)) continue;
+      scanned.add(entryKey);
 
       const { schemaNode, nsMap, targetNs, formDefaults } = readSchema(entry.file);
       allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
@@ -443,23 +450,16 @@ export const parseXsd = (files: string[]): XsdIr => {
 
         const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
         addDependency(entry.file, resolved);
-        if (scanned.has(resolved)) continue;
 
         if (localTag === 'import' || localTag === 'include' || localTag === 'redefine') {
-          // TODO: chameleon includes (no targetNamespace) are scanned once under a single
-          // inheritedTargetNs. If a chameleon schema is included by multiple schemas with
-          // different target namespaces, only one includer's namespace is honored; the
-          // others will produce dangling type references. Properly supporting this requires
-          // scanning the chameleon file once per distinct inherited namespace.
-          const existing = pending.get(resolved);
-          if (existing) {
-            if (localTag === 'include') {
-              existing.inheritedTargetNs = targetNs || entry.inheritedTargetNs || '';
-            }
-          } else {
-            pending.set(resolved, {
+          const ns = localTag === 'include' ? (targetNs || entry.inheritedTargetNs || '') : undefined;
+          const depKey = scanKey(resolved, ns);
+          if (scanned.has(depKey)) continue;
+
+          if (!pending.has(depKey)) {
+            pending.set(depKey, {
               file: resolved,
-              inheritedTargetNs: localTag === 'include' ? (targetNs || entry.inheritedTargetNs || '') : undefined,
+              inheritedTargetNs: ns,
             });
           }
         }
