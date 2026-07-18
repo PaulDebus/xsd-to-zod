@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createRootHelpers, irToZod, parseXsd } from '../src/index.js';
-import { extractRuntimeMetadata, importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
+import { z } from 'zod';
+import { irToZod, parseXsd, parseXml, serializeXml, xmlRegistry } from '../src/index.js';
+import { importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -58,84 +59,81 @@ const EXTENSION_XSD = `<?xml version="1.0"?>
   </xs:complexType>
 </xs:schema>`;
 
+// Generate code for an inline XSD and import it as a module (the generated
+// 'xsd2zod' self-reference resolves via the package dotdir).
+const importFromXsd = async (xsd: string): Promise<Record<string, unknown>> => {
+  let mod: Record<string, unknown> = {};
+  await withTempDirAsync(async (dir) => {
+    const file = path.join(dir, 'schema.xsd');
+    fs.writeFileSync(file, xsd);
+    mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+  });
+  return mod;
+};
+
 describe('xsd2zod v1 pipeline', () => {
-  it('supports array cardinality, collisions, choice, and nillable handling', () => {
-    withTempDir((dir) => {
+  it('supports array cardinality, collisions, choice, and nillable handling', async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, 'schema.xsd');
       fs.writeFileSync(file, XSD);
 
       const ir = parseXsd([file]);
       const generated = irToZod(ir);
-      expect(generated.schemas).toContain('z.union([z.discriminatedUnion');
       expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
       expect(generated.schemas).toContain('"approved": z.boolean().optional()');
-      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+      // Choice: no __choice marker anymore — branch fields become optional and
+      // mutual exclusion is a refine on the object schema (#73).
+      expect(generated.schemas).toContain('"sku": z.string().optional()');
+      expect(generated.schemas).toContain('"ean": z.string().optional()');
+      expect(generated.schemas).toContain('{ message: "choice allows at most one of: sku, ean" }');
+      expect(generated.schemas).not.toContain('__choice');
 
       const orderType = ir.complexTypes['{urn:test}OrderType'];
       expect(orderType).toBeDefined();
       expect(orderType.fields.find((field) => field.qname === '{urn:test}sku')?.minOccurs).toBe(0);
       expect(orderType.fields.find((field) => field.qname === '{}item')?.kind).toBe('attribute');
 
-      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
-      expect(orderMeta).toBeDefined();
-
-      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
+      const mod = await importGeneratedSchemas(generated.schemas);
+      const orderSchema = mod.orderSchema as z.ZodType;
+      expect(xmlRegistry.get(orderSchema)?.root).toBe('{urn:test}order');
 
       const xml = `<order xmlns="urn:test" item="shadow"><item>one</item><sku>A1</sku><approved>1</approved><note xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></order>`;
-      const parsed = parseXml(xml);
+      const parsed = parseXml(orderSchema, xml) as Record<string, unknown>;
 
       expect(parsed['@item']).toBe('shadow');
       expect(parsed.item).toEqual(['one']);
-      expect(parsed.__choice).toBe('sku');
+      expect(parsed.sku).toBe('A1');
       expect(parsed.approved).toBe(true);
       expect(parsed.note).toBeNull();
 
-      const serialized = serializeXml(parsed);
+      const serialized = serializeXml(orderSchema, parsed);
       expect(serialized).toContain('xsi:nil="true"');
       expect(serialized).toContain('<ns0:sku>A1</ns0:sku>');
+
+      // Both choice branches present: the refine rejects with a ZodError.
+      expect(() => parseXml(orderSchema, '<order xmlns="urn:test"><sku>A</sku><ean>B</ean></order>'))
+        .toThrow('choice allows at most one of: sku, ean');
     });
   });
 
-  it('does not treat non-xsi nil as xsi:nil and matches root namespace', () => {
-    withTempDir((dir) => {
-      const file = path.join(dir, 'schema.xsd');
-      fs.writeFileSync(file, XSD);
+  it('does not treat non-xsi nil as xsi:nil and matches root namespace', async () => {
+    const mod = await importFromXsd(XSD);
+    const orderSchema = mod.orderSchema as z.ZodType;
+    const parsed = parseXml(orderSchema, '<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>') as Record<string, unknown>;
+    expect(parsed.note).toBe('kept');
+    expect(parsed.approved).toBe(false);
 
-      const ir = parseXsd([file]);
-      const generated = irToZod(ir);
-      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
-      expect(orderMeta).toBeDefined();
-
-      const { parseXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
-      const parsed = parseXml('<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>');
-      expect(parsed.note).toBe('kept');
-      expect(parsed.approved).toBe(false);
-
-      expect(() => parseXml('<order xmlns="urn:other"><note>bad</note></order>')).toThrow(
-        "Root element '{urn:test}order' not found in XML payload"
-      );
-    });
+    expect(() => parseXml(orderSchema, '<order xmlns="urn:other"><note>bad</note></order>')).toThrow(
+      "Root element '{urn:test}order' not found in XML payload"
+    );
   });
 
-  it('supports simpleContent with attributes and text value', () => {
-    withTempDir((dir) => {
-      const file = path.join(dir, 'schema.xsd');
-      fs.writeFileSync(file, XSD);
+  it('supports simpleContent with attributes and text value', async () => {
+    const mod = await importFromXsd(XSD);
+    const parsed = parseXml(mod.priceSchema as z.ZodType, '<price xmlns="urn:test" currency="USD">42</price>') as Record<string, unknown>;
 
-      const ir = parseXsd([file]);
-      const generated = irToZod(ir);
-      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-
-      const priceMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}price'));
-      expect(priceMeta).toBeDefined();
-
-      const { parseXml } = createRootHelpers<Record<string, unknown>>(priceMeta!, runtimeMetadata.types);
-      const parsed = parseXml('<price xmlns="urn:test" currency="USD">42</price>');
-
-      expect(parsed._text).toBe(42);
-      expect(parsed['@currency']).toBe('USD');
-    });
+    expect(parsed._text).toBe(42);
+    expect(parsed['@currency']).toBe('USD');
   });
 
   it('flattens multi-level complex type extension chains', () => {
@@ -255,7 +253,7 @@ describe('xsd2zod v1 pipeline', () => {
     });
   });
 
-  it('round-trips nested complex types without producing [object Object] (#8)', () => {
+  it('round-trips nested complex types without producing [object Object] (#8)', async () => {
     const NESTED_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:nested-test" xmlns:t="urn:nested-test" elementFormDefault="qualified">
   <xs:complexType name="LineItemType">
@@ -273,36 +271,25 @@ describe('xsd2zod v1 pipeline', () => {
   <xs:element name="order" type="t:OrderType"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
-      const file = path.join(dir, 'schema.xsd');
-      fs.writeFileSync(file, NESTED_XSD);
+    const mod = await importFromXsd(NESTED_XSD);
+    const orderSchema = mod.orderSchema as z.ZodType;
 
-      const ir = parseXsd([file]);
-      const generated = irToZod(ir);
-      const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
+    const xml = `<order xmlns="urn:nested-test"><orderId>ORD-001</orderId><lineItem><productId>P-100</productId><quantity>2</quantity></lineItem><lineItem><productId>P-200</productId><quantity>5</quantity></lineItem></order>`;
+    const parsed = parseXml(orderSchema, xml) as Record<string, unknown>;
 
-      const orderMeta = runtimeMetadata.roots.find((root) => root.rootElement.endsWith('}order'));
-      expect(orderMeta).toBeDefined();
+    expect(parsed.orderId).toBe('ORD-001');
+    expect(parsed.lineItem).toEqual([
+      { productId: 'P-100', quantity: 2 },
+      { productId: 'P-200', quantity: 5 }
+    ]);
 
-      const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(orderMeta!, runtimeMetadata.types);
+    const serialized = serializeXml(orderSchema, parsed);
+    expect(serialized).not.toContain('[object Object]');
+    expect(serialized).toContain('<ns0:productId>P-100</ns0:productId>');
+    expect(serialized).toContain('<ns0:quantity>5</ns0:quantity>');
 
-      const xml = `<order xmlns="urn:nested-test"><orderId>ORD-001</orderId><lineItem><productId>P-100</productId><quantity>2</quantity></lineItem><lineItem><productId>P-200</productId><quantity>5</quantity></lineItem></order>`;
-      const parsed = parseXml(xml);
-
-      expect(parsed.orderId).toBe('ORD-001');
-      expect(parsed.lineItem).toEqual([
-        { productId: 'P-100', quantity: 2 },
-        { productId: 'P-200', quantity: 5 }
-      ]);
-
-      const serialized = serializeXml(parsed);
-      expect(serialized).not.toContain('[object Object]');
-      expect(serialized).toContain('<ns0:productId>P-100</ns0:productId>');
-      expect(serialized).toContain('<ns0:quantity>5</ns0:quantity>');
-
-      const reparsed = parseXml(serialized);
-      expect(reparsed).toEqual(parsed);
-    });
+    const reparsed = parseXml(orderSchema, serialized);
+    expect(reparsed).toEqual(parsed);
   });
 
   describe('simple type facets (#24)', () => {
@@ -444,7 +431,7 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}CountryCode"] = z.string().regex(new RegExp("[A-Z]{2}")).length(2);'
+          'schemas["{urn:facets}CountryCode"] = z.string().regex(new RegExp("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });'
         );
       });
     });
@@ -453,7 +440,7 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}StatusCode"] = z.enum(["active", "inactive", "pending"]);'
+          'schemas["{urn:facets}StatusCode"] = z.enum(["active", "inactive", "pending"]).register(xmlRegistry, { qname: "{urn:facets}StatusCode" });'
         );
       });
     });
@@ -462,16 +449,25 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Quantity"] = z.number().int().min(1).max(100);'
+          'schemas["{urn:facets}Quantity"] = z.number().int().min(1).max(100).register(xmlRegistry, { qname: "{urn:facets}Quantity" });'
         );
       });
     });
 
-    it('emits multipleOf + min for Price', () => {
+    it('emits fractionDigits refine + min for Price', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Price"] = z.number().multipleOf(0.01).min(0);'
+          'schemas["{urn:facets}Price"] = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).min(0).register(xmlRegistry, { qname: "{urn:facets}Price" });'
+        );
+      });
+    });
+
+    it('imports the digit-check helpers from xsd2zod when digit facets are used', () => {
+      runFacetTest((_dir, file) => {
+        const generated = irToZod(parseXsd([file]));
+        expect(generated.schemas).toContain(
+          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits } from 'xsd2zod';"
         );
       });
     });
@@ -480,7 +476,7 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Temperature"] = z.number().gt(-273.15).lt(10000);'
+          'schemas["{urn:facets}Temperature"] = z.number().gt(-273.15).lt(10000).register(xmlRegistry, { qname: "{urn:facets}Temperature" });'
         );
       });
     });
@@ -489,16 +485,16 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}ShortCode"] = z.string().regex(new RegExp("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val));'
+          "schemas[\"{urn:facets}ShortCode\"] = z.string().regex(new RegExp(\"[A-Z0-9]{3,8}\")).refine((val) => [\"ADM\", \"USR\"].includes(val), { message: 'value is not one of the allowed values' }).register(xmlRegistry, { qname: \"{urn:facets}ShortCode\" });"
         );
       });
     });
 
-    it('emits totalDigits as min/max bounds', () => {
+    it('emits totalDigits as an xsdTotalDigits refine', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}LargeInt"] = z.number().int().min(-99999).max(99999);'
+          'schemas["{urn:facets}LargeInt"] = z.number().int().refine(xsdTotalDigits(5), { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });'
         );
       });
     });
@@ -507,16 +503,16 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}NameType"] = z.string().min(2).max(50);'
+          'schemas["{urn:facets}NameType"] = z.string().min(2).max(50).register(xmlRegistry, { qname: "{urn:facets}NameType" });'
         );
       });
     });
 
-    it('ignores whiteSpace facet (no Zod equivalent)', () => {
+    it('emits whiteSpace collapse as a z.preprocess wrapper', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}TokenType"] = z.string();'
+          'schemas["{urn:facets}TokenType"] = z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()).register(xmlRegistry, { qname: "{urn:facets}TokenType" });'
         );
       });
     });
@@ -527,12 +523,12 @@ describe('xsd2zod v1 pipeline', () => {
         fs.writeFileSync(file, NUM_ENUM_XSD);
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:numEnum}Priority"] = z.union([z.literal(1), z.literal(2), z.literal(3)]);'
+          'schemas["{urn:numEnum}Priority"] = z.union([z.literal(1), z.literal(2), z.literal(3)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });'
         );
       });
     });
 
-    it('coerces fixed/default values to the field type (#68)', () => {
+    it('coerces fixed/default values to the field type (#66, #68)', async () => {
       const TYPED_DEFAULTS_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:typedDefaults" xmlns:t="urn:typedDefaults" elementFormDefault="qualified">
   <xs:complexType name="Cfg">
@@ -545,31 +541,49 @@ describe('xsd2zod v1 pipeline', () => {
   </xs:complexType>
   <xs:element name="cfg" type="t:Cfg"/>
 </xs:schema>`;
-      withTempDir((dir) => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, 'schema.xsd');
         fs.writeFileSync(file, TYPED_DEFAULTS_XSD);
         const generated = irToZod(parseXsd([file]));
-        expect(generated.schemas).toContain('"ratio": z.number().default(1.5)');
-        expect(generated.schemas).toContain('"level": z.literal(3)');
-        expect(generated.schemas).toContain('"enabled": z.boolean().default(true)');
+        // fixed → z.literal. Element defaults are NOT zod .default(): XSD
+        // applies them to present-but-empty elements, not absent ones, so they
+        // live in the field's registry meta as defaultValue (#66).
+        expect(generated.schemas).toContain('"ratio": z.number().optional()');
+        expect(generated.schemas).toContain('"level": z.literal(3).optional()');
+        expect(generated.schemas).toContain('"enabled": z.boolean().optional()');
+        expect(generated.schemas).toContain('"note": z.string().optional()');
+        expect(generated.schemas).not.toContain('.default(');
+        expect(generated.schemas).toContain('"ratio": { kind: "element", qname: "{urn:typedDefaults}ratio", defaultValue: 1.5 }');
+        expect(generated.schemas).toContain('"enabled": { kind: "element", qname: "{urn:typedDefaults}enabled", defaultValue: true }');
         // string-typed fields keep the lexical verbatim
-        expect(generated.schemas).toContain('"note": z.string().default("1.50")');
+        expect(generated.schemas).toContain('"note": { kind: "element", qname: "{urn:typedDefaults}note", defaultValue: "1.50" }');
+
+        const mod = await importGeneratedSchemas(generated.schemas);
+        const cfgSchema = mod.cfgSchema as z.ZodType;
+
+        // Absent elements stay absent — the default is not substituted.
+        expect(parseXml(cfgSchema, '<cfg xmlns="urn:typedDefaults"/>')).toEqual({});
+
+        // Present-but-empty elements get default/fixed substituted.
+        const parsed = parseXml(cfgSchema, '<cfg xmlns="urn:typedDefaults"><ratio/><level/><enabled/><note/></cfg>') as Record<string, unknown>;
+        expect(parsed).toEqual({ ratio: 1.5, level: 3, enabled: true, note: '1.50' });
+
+        // The serializer always writes elements — even equal to default/fixed.
+        const serialized = serializeXml(cfgSchema, parsed);
+        expect(serialized).toContain('<ns0:ratio>1.5</ns0:ratio>');
+        expect(serialized).toContain('<ns0:level>3</ns0:level>');
       });
     });
 
-    it('round-trips facet-constrained data', () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'));
-        expect(rootMeta).toBeDefined();
-
-        const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta!, runtimeMetadata.types);
+    it('round-trips facet-constrained data', async () => {
+      await withTempDirAsync(async (dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, FACET_XSD);
+        const mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+        const facetsSchema = mod.facetsSchema as z.ZodType;
 
         const xml = `<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`;
-        const parsed = parseXml(xml);
+        const parsed = parseXml(facetsSchema, xml) as Record<string, unknown>;
         expect(parsed.country).toBe('DE');
         expect(parsed.status).toBe('active');
         expect(parsed.qty).toBe(42);
@@ -580,22 +594,28 @@ describe('xsd2zod v1 pipeline', () => {
         expect(parsed.name).toBe('Alice');
         expect(parsed.token).toBe('hello');
 
-        const serialized = serializeXml(parsed);
-        const reparsed = parseXml(serialized);
+        const serialized = serializeXml(facetsSchema, parsed);
+        const reparsed = parseXml(facetsSchema, serialized);
         expect(reparsed).toEqual(parsed);
+
+        // whiteSpace: collapse applies via the z.preprocess wrapper (#69).
+        const withWhitespace = parseXml(
+          facetsSchema,
+          xml.replace('<token>hello</token>', '<token>  hello   world </token>')
+        ) as Record<string, unknown>;
+        expect(withWhitespace.token).toBe('hello world');
       });
     });
 
     describe('facet rejection', () => {
-      let parseXml: (xml: string) => unknown;
+      let facetsSchema: z.ZodType;
 
-      beforeAll(() => {
-        withTempDir((dir) => {
+      beforeAll(async () => {
+        await withTempDirAsync(async (dir) => {
           const file = path.join(dir, 'schema.xsd');
           fs.writeFileSync(file, FACET_XSD);
-          const runtimeMetadata = extractRuntimeMetadata(irToZod(parseXsd([file])).metadata);
-          const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}facets'))!;
-          parseXml = createRootHelpers(rootMeta, runtimeMetadata.types).parseXml;
+          const mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+          facetsSchema = mod.facetsSchema as z.ZodType;
         });
       });
 
@@ -609,15 +629,24 @@ describe('xsd2zod v1 pipeline', () => {
         return `<facets xmlns="urn:facets">${elements}</facets>`;
       };
 
+      // Facet violations surface as ZodError from the validating parse — the
+      // hand-rolled runtime facet validator is gone.
       it.each([
-        ['pattern', 'country', '12', 'does not match pattern'],
-        ['enumeration', 'status', 'bogus', 'not one of the allowed values'],
-        ['minInclusive', 'qty', '0', 'less than minimum'],
-        ['fractionDigits', 'price', '19.999', 'more than'],
-        ['totalDigits', 'big', '123456', 'more than'],
-        ['minLength', 'name', 'A', 'shorter than minimum length'],
+        ['pattern', 'country', '12', 'must match pattern'],
+        ['enumeration', 'status', 'bogus', 'Invalid option: expected one of'],
+        ['minInclusive', 'qty', '0', 'Too small: expected number to be >=1'],
+        ['fractionDigits', 'price', '19.999', 'expected at most 2 fraction digits'],
+        ['totalDigits', 'big', '123456', 'expected at most 5 total digits'],
+        ['minLength', 'name', 'A', 'Too small: expected string to have >=2 characters'],
       ])('rejects values violating %s facet', (_facet, field, value, message) => {
-        expect(() => parseXml(facetXml(field, value))).toThrow(message);
+        let caught: unknown;
+        try {
+          parseXml(facetsSchema, facetXml(field, value));
+        } catch (e: unknown) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(z.ZodError);
+        expect((caught as Error).message).toContain(message);
       });
     });
   });
@@ -650,8 +679,8 @@ describe('xsd2zod v1 pipeline', () => {
 
       expect(schemas).toContain('schemas["{urn:cyclic}PersonType"] = z.lazy(() => z.object({');
       expect(schemas).toContain('schemas["{urn:cyclic}TeamType"] = z.lazy(() => z.object({');
-      expect(schemas).toContain('export const personSchema = schemas["{urn:cyclic}PersonType"];');
-      expect(schemas).toContain('export const teamSchema = schemas["{urn:cyclic}TeamType"];');
+      expect(schemas).toContain('export const personSchema = z.lazy(() => schemas["{urn:cyclic}PersonType"]).register(xmlRegistry, { root: "{urn:cyclic}person" });');
+      expect(schemas).toContain('export const teamSchema = z.lazy(() => schemas["{urn:cyclic}TeamType"]).register(xmlRegistry, { root: "{urn:cyclic}team" });');
 
       const mod = await importGeneratedSchemas(schemas) as {
         personSchema: { parse: (v: unknown) => unknown };
@@ -719,60 +748,36 @@ describe('xsd2zod v1 pipeline', () => {
   <xs:element name="unionContainer" type="t:UnionContainer"/>
 </xs:schema>`;
 
-    const runListUnionTest = (xsd: string, fn: (dir: string, file: string) => void): void => {
-      withTempDir((dir) => {
-        const file = path.join(dir, 'schema.xsd');
-        fs.writeFileSync(file, xsd);
-        fn(dir, file);
-      });
-    };
-
-    it('coerces inline list item simpleType to its base XSD primitive (#29)', () => {
-      runListUnionTest(LIST_INLINE_XSD, (_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}listContainer'));
-        expect(rootMeta).toBeDefined();
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta!, runtimeMetadata.types);
-
-        const parsed = parseXml(`<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 5 6</namedNumbers></listContainer>`);
-        expect(parsed.inlineNumbers).toEqual([1, 2, 3]);
-        expect(parsed.namedNumbers).toEqual([4, 5, 6]);
-      });
+    it('coerces inline list item simpleType to its base XSD primitive (#29)', async () => {
+      const mod = await importFromXsd(LIST_INLINE_XSD);
+      const parsed = parseXml(
+        mod.listContainerSchema as z.ZodType,
+        `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 5 6</namedNumbers></listContainer>`
+      ) as Record<string, unknown>;
+      expect(parsed.inlineNumbers).toEqual([1, 2, 3]);
+      expect(parsed.namedNumbers).toEqual([4, 5, 6]);
     });
 
-    it('enforces facets from named list item simpleType at runtime', () => {
-      runListUnionTest(LIST_INLINE_XSD, (_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}listContainer'))!;
-        const { parseXml } = createRootHelpers(rootMeta, runtimeMetadata.types);
-
-        expect(() => parseXml(`<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 99 6</namedNumbers></listContainer>`))
-          .toThrow('exceeds maximum');
-      });
+    it('enforces facets from named list item simpleType via the zod checks', async () => {
+      const mod = await importFromXsd(LIST_INLINE_XSD);
+      expect(() => parseXml(
+        mod.listContainerSchema as z.ZodType,
+        `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 99 6</namedNumbers></listContainer>`
+      )).toThrow('Too big: expected number to be <=10');
     });
 
-    it('coerces inline union members and falls through on member mismatch (#29)', () => {
-      runListUnionTest(UNION_INLINE_XSD, (_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}unionContainer'));
-        expect(rootMeta).toBeDefined();
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta!, runtimeMetadata.types);
+    it('coerces inline union members and falls through on member mismatch (#29)', async () => {
+      const mod = await importFromXsd(UNION_INLINE_XSD);
+      const unionContainerSchema = mod.unionContainerSchema as z.ZodType;
 
-        const numericParsed = parseXml(`<unionContainer xmlns="urn:listunion"><val>42</val></unionContainer>`);
-        expect(numericParsed.val).toBe(42);
+      const numericParsed = parseXml(unionContainerSchema, `<unionContainer xmlns="urn:listunion"><val>42</val></unionContainer>`) as Record<string, unknown>;
+      expect(numericParsed.val).toBe(42);
 
-        const stringParsed = parseXml(`<unionContainer xmlns="urn:listunion"><val>hello</val></unionContainer>`);
-        expect(stringParsed.val).toBe('hello');
-      });
+      const stringParsed = parseXml(unionContainerSchema, `<unionContainer xmlns="urn:listunion"><val>hello</val></unionContainer>`) as Record<string, unknown>;
+      expect(stringParsed.val).toBe('hello');
     });
 
-    it('handles xs:list attributes and xs:union text fields', () => {
+    it('handles xs:list attributes and xs:union text fields', async () => {
       const ATTR_UNION_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:listunion" xmlns:t="urn:listunion" elementFormDefault="qualified">
   <xs:simpleType name="IntOrString">
@@ -790,25 +795,20 @@ describe('xsd2zod v1 pipeline', () => {
   </xs:complexType>
   <xs:element name="container" type="t:Container"/>
 </xs:schema>`;
-      runListUnionTest(ATTR_UNION_XSD, (_dir, file) => {
-        const ir = parseXsd([file]);
-        const generated = irToZod(ir);
-        const runtimeMetadata = extractRuntimeMetadata(generated.metadata);
-        const rootMeta = runtimeMetadata.roots.find(r => r.rootElement.endsWith('}container'))!;
-        const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
+      const mod = await importFromXsd(ATTR_UNION_XSD);
+      const containerSchema = mod.containerSchema as z.ZodType;
 
-        const parsed = parseXml(`<container xmlns="urn:listunion" tags="a b c">42</container>`);
-        expect(parsed._text).toBe(42);
-        expect(parsed['@tags']).toEqual(['a', 'b', 'c']);
+      const parsed = parseXml(containerSchema, `<container xmlns="urn:listunion" tags="a b c">42</container>`) as Record<string, unknown>;
+      expect(parsed._text).toBe(42);
+      expect(parsed['@tags']).toEqual(['a', 'b', 'c']);
 
-        const stringParsed = parseXml(`<container xmlns="urn:listunion" tags="x y">hello</container>`);
-        expect(stringParsed._text).toBe('hello');
-        expect(stringParsed['@tags']).toEqual(['x', 'y']);
+      const stringParsed = parseXml(containerSchema, `<container xmlns="urn:listunion" tags="x y">hello</container>`) as Record<string, unknown>;
+      expect(stringParsed._text).toBe('hello');
+      expect(stringParsed['@tags']).toEqual(['x', 'y']);
 
-        const serialized = serializeXml(parsed);
-        const reparsed = parseXml(serialized);
-        expect(reparsed).toEqual(parsed);
-      });
+      const serialized = serializeXml(containerSchema, parsed);
+      const reparsed = parseXml(containerSchema, serialized);
+      expect(reparsed).toEqual(parsed);
     });
 
     it('drops orphaned synthetic item/member types when redefine swaps list → union', () => {
