@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Turn XSD schemas into type-safe Zod parsers for XML, with a metadata-driven runtime for parseXml/serializeXml round-trips.",
   "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "bin": {
     "xsd2zod": "./dist/cli.js"
   },
