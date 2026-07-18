@@ -1,29 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { describe, it } from 'vitest';
-import { runRoundTrip, type TestCase } from './helpers.js';
-
-function discoverCuratedCases(): TestCase[] {
-  const cases: TestCase[] = [];
-  const base = path.resolve('testdata/curated');
-
-  for (const cat of fs.readdirSync(base, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== 'negative')) {
-    const catPath = path.join(base, cat.name);
-    const files = fs.readdirSync(catPath);
-    const allXsdPaths = files.filter(f => f.endsWith('.xsd')).map(f => path.join(catPath, f));
-
-    for (const xmlFile of files.filter(f => f.endsWith('.xml'))) {
-      const stem = xmlFile.replace(/\.xml$/, '');
-      cases.push({
-        name: `${cat.name}/${stem}`,
-        xsdFiles: allXsdPaths,
-        xmlFile: path.join(catPath, xmlFile),
-      });
-    }
-  }
-
-  return cases;
-}
+import { discoverCuratedCases, runRoundTrip } from './helpers.js';
 
 // Golden assertions on the parsed object, so symmetric silent data loss in
 // parseXml/serializeXml cannot pass undetected (#83).
