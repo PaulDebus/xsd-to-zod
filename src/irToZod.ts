@@ -53,9 +53,12 @@ const primitiveToZod = (typeName: QName): string => {
 };
 
 const withCardinality = (schema: string, field: IrField): string => {
-  let result = schema;
+  let result = field.fixedValue !== undefined ? `z.literal(${JSON.stringify(field.fixedValue)})` : schema;
   if (field.nillable) {
     result = `${result}.nullable()`;
+  }
+  if (field.defaultValue !== undefined && field.fixedValue === undefined) {
+    result = `${result}.default(${JSON.stringify(field.defaultValue)})`;
   }
   if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
     result = `z.array(${result})`;

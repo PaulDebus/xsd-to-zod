@@ -230,7 +230,13 @@ const readValue = (
 
   if (field.kind === 'attribute') {
     const value = findAttributeValue(node, field.qname, namespaceContext);
-    return value === undefined ? undefined : parsePrimitive(value, field.typeName, field.facets);
+    if (value === undefined) {
+      if (field.fixedValue !== undefined) {
+        return parsePrimitive(field.fixedValue, field.typeName, field.facets);
+      }
+      return field.defaultValue !== undefined ? parsePrimitive(field.defaultValue, field.typeName, field.facets) : undefined;
+    }
+    return parsePrimitive(value, field.typeName, field.facets);
   }
 
   const complexType = types[field.typeName];
@@ -256,6 +262,15 @@ const readValue = (
 
   if (isArray) {
     return values;
+  }
+
+  if (values.length === 0) {
+    if (field.fixedValue !== undefined) {
+      return parsePrimitive(field.fixedValue, field.typeName, field.facets);
+    }
+    if (field.defaultValue !== undefined) {
+      return parsePrimitive(field.defaultValue, field.typeName, field.facets);
+    }
   }
 
   return values[0];
@@ -303,11 +318,26 @@ const serializeField = (
     if (value === undefined) {
       return { elements: [], usesXsi: false };
     }
+    if (field.defaultValue !== undefined && String(value) === field.defaultValue) {
+      return { elements: [], usesXsi: false };
+    }
+    if (field.fixedValue !== undefined && String(value) === field.fixedValue) {
+      return { elements: [], usesXsi: false };
+    }
     return { attr: `${localName}="${serializePrimitive(value)}"`, elements: [], usesXsi: false };
   }
 
   if (field.kind === 'text') {
     return { elements: [serializePrimitive(value)], usesXsi: false };
+  }
+
+  if (field.maxOccurs !== 'unbounded' && field.maxOccurs <= 1) {
+    if (field.defaultValue !== undefined && String(value) === field.defaultValue) {
+      return { elements: [], usesXsi: false };
+    }
+    if (field.fixedValue !== undefined && String(value) === field.fixedValue) {
+      return { elements: [], usesXsi: false };
+    }
   }
 
   const values = field.maxOccurs === 'unbounded' || field.maxOccurs > 1 ? (Array.isArray(value) ? value : value === undefined ? [] : [value]) : [value];

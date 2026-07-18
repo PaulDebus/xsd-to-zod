@@ -216,7 +216,9 @@ const collectFields = (
             qname: refQName,
             typeName: referenced.typeName,
             nillable: child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
-            choiceGroup
+            choiceGroup,
+            ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
+            ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
           });
         }
         continue;
@@ -246,7 +248,9 @@ const collectFields = (
         qname: toClark(resolveDeclaredFieldNamespace(ownerNs, 'element', child['@_form'], formDefaults), name),
         typeName,
         nillable: child['@_nillable'] === true || child['@_nillable'] === 'true',
-        choiceGroup
+        choiceGroup,
+        ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
+        ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
       });
       continue;
     }
@@ -267,7 +271,9 @@ const collectFields = (
           }),
           kind: 'attribute',
           qname: refQName,
-          typeName: toClark(XSD_NS, 'string')
+          typeName: toClark(XSD_NS, 'string'),
+          ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
+          ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
         });
         continue;
       }
@@ -279,7 +285,9 @@ const collectFields = (
         }),
         kind: 'attribute',
         qname: toClark(resolveDeclaredFieldNamespace(ownerNs, 'attribute', child['@_form'], formDefaults), name),
-        typeName: resolveTypeQName(child['@_type'] ? String(child['@_type']) : undefined, nsMap)
+        typeName: resolveTypeQName(child['@_type'] ? String(child['@_type']) : undefined, nsMap),
+        ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
+        ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
       });
       continue;
     }

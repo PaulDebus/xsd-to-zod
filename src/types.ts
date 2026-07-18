@@ -13,6 +13,8 @@ export type IrField = Cardinality & {
   typeName: QName;
   nillable?: boolean;
   choiceGroup?: string;
+  defaultValue?: string;
+  fixedValue?: string;
 };
 
 export type Facet =

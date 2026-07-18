@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:defaults" xmlns:t="urn:defaults" elementFormDefault="qualified">
+  <xs:complexType name="OrderType">
+    <xs:sequence>
+      <xs:element name="item" type="xs:string"/>
+      <xs:element name="quantity" type="xs:integer" default="1"/>
+    </xs:sequence>
+    <xs:attribute name="currency" type="xs:string" default="EUR"/>
+    <xs:attribute name="version" type="xs:string" fixed="1.0"/>
+  </xs:complexType>
+  <xs:element name="order" type="t:OrderType"/>
+</xs:schema>
