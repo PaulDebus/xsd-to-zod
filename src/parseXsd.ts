@@ -218,7 +218,8 @@ const collectFields = (
   syntheticTypeContext?: { targetNs: string; counter: { value: number } },
   groups: Record<string, AnyNode> = {},
   attributeGroups: Record<string, [string, SchemaFormDefaults, AnyNode]> = {},
-  deferredSyntheticTypes?: DeferredInlineType[]
+  deferredSyntheticTypes?: DeferredInlineType[],
+  choiceBranch?: string
 ): void => {
   if (!choiceCounter) {
     choiceCounter = { value: 0 };
@@ -244,6 +245,7 @@ const collectFields = (
             typeName: referenced.typeName,
             nillable: child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
             choiceGroup,
+            ...(choiceBranch ? { choiceBranch } : {}),
             ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
             ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
           });
@@ -276,6 +278,7 @@ const collectFields = (
         typeName,
         nillable: child['@_nillable'] === true || child['@_nillable'] === 'true',
         choiceGroup,
+        ...(choiceBranch ? { choiceBranch } : {}),
         ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
         ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
       });
@@ -334,29 +337,43 @@ const collectFields = (
         syntheticTypeContext,
         groups,
         attributeGroups,
-        deferredSyntheticTypes
+        deferredSyntheticTypes,
+        choiceBranch
       );
       continue;
     }
 
     if (localTag === 'choice') {
       const groupId = `${choiceCounter.value++}`;
-      collectFields(
-        ownerNs,
-        nsMap,
-        formDefaults,
-        child,
-        fields,
-        groupId,
-        combineCardinality(inheritedCardinality, parseCardinality(child)),
-        elements,
-        choiceCounter,
-        complexTypes,
-        syntheticTypeContext,
-        groups,
-        attributeGroups,
-        deferredSyntheticTypes
-      );
+      // Each direct child of the xs:choice is one branch. Branch identity is
+      // threaded through as choiceBranch so fields inlined from a group ref or
+      // nested compositor stay together as a single branch (#73 / ipo-style
+      // shipTo+billTo vs singleAddress choices).
+      let branchIndex = 0;
+      for (const [branchTag, branchChild] of nodeChildren(child)) {
+        const branchLocal = getNodeTagLocalName(branchTag);
+        if (branchLocal !== 'element' && branchLocal !== 'group' && branchLocal !== 'sequence' && branchLocal !== 'choice' && branchLocal !== 'all') {
+          continue;
+        }
+        const branchId = `${groupId}.${branchIndex++}`;
+        collectFields(
+          ownerNs,
+          nsMap,
+          formDefaults,
+          { [branchTag]: branchChild },
+          fields,
+          groupId,
+          combineCardinality(inheritedCardinality, parseCardinality(child)),
+          elements,
+          choiceCounter,
+          complexTypes,
+          syntheticTypeContext,
+          groups,
+          attributeGroups,
+          deferredSyntheticTypes,
+          branchId
+        );
+      }
       continue;
     }
 
@@ -369,7 +386,7 @@ const collectFields = (
         collectFields(
           ownerNs, nsMap, formDefaults, groupNode, fields,
           choiceGroup, combineCardinality(inheritedCardinality, parseCardinality(child)),
-          elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes
+          elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes, choiceBranch
         );
       }
       continue;
@@ -384,7 +401,7 @@ const collectFields = (
         collectFields(
           attrEntry[0], nsMap, attrEntry[1], attrEntry[2], fields,
           choiceGroup, inheritedCardinality,
-          elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes
+          elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes, choiceBranch
         );
       }
       continue;
@@ -423,7 +440,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(ownerNs, nsMap, formDefaults, derivation, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes);
+      collectFields(ownerNs, nsMap, formDefaults, derivation, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes, choiceBranch);
       continue;
     }
 
@@ -435,7 +452,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(ownerNs, nsMap, formDefaults, derivation, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes);
+      collectFields(ownerNs, nsMap, formDefaults, derivation, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes, choiceBranch);
     }
   }
 };

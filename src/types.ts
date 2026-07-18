@@ -13,6 +13,9 @@ export type IrField = Cardinality & {
   typeName: QName;
   nillable?: boolean;
   choiceGroup?: string;
+  // Identity of the branch within the choice group (one per direct child of
+  // the xs:choice) — a group/compositor branch keeps its fields together.
+  choiceBranch?: string;
   defaultValue?: string;
   fixedValue?: string;
 };
@@ -58,29 +61,4 @@ export type XsdIr = {
   complexTypes: Record<string, ComplexTypeDef>;
   elements: Record<string, ElementDef>;
   rootElements: QName[];
-};
-
-export type RuntimeFieldMetadata = IrField & {
-  key: string;
-  facets?: Facet[];
-};
-
-export type RuntimeTypeMetadata = {
-  typeName: QName;
-  fields: RuntimeFieldMetadata[];
-  facets?: Facet[];
-  baseType?: QName;
-  listItemType?: QName;
-  unionMemberTypes?: QName[];
-};
-
-export type RuntimeRootMetadata = {
-  rootElement: QName;
-  typeName: QName;
-  fields: RuntimeFieldMetadata[];
-};
-
-export type RuntimeMetadata = {
-  types: Record<string, RuntimeTypeMetadata>;
-  roots: RuntimeRootMetadata[];
 };
