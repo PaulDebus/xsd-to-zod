@@ -51,3 +51,7 @@ git fetch origin main && git checkout -b <issue-type>/<short-description> origin
 ```
 
 Follow the branching convention from AGENTS.md.
+
+### 7. Implementation
+Fully implement what is required to fix the issue
+Ask the user at the end if they want to close the issue
