@@ -324,6 +324,56 @@ describe('xsd2zod v1 pipeline', () => {
     });
   });
 
+  it('redefine of xs:group and xs:attributeGroup affects their consumers (#78)', () => {
+    const BASE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
+  <xs:group name="G">
+    <xs:sequence>
+      <xs:element name="old" type="xs:string"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AG">
+    <xs:attribute name="oldAttr" type="xs:string"/>
+  </xs:attributeGroup>
+</xs:schema>`;
+
+    const REDEFINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="base.xsd">
+    <xs:group name="G">
+      <xs:sequence>
+        <xs:element name="new" type="xs:string"/>
+      </xs:sequence>
+    </xs:group>
+    <xs:attributeGroup name="AG">
+      <xs:attribute name="newAttr" type="xs:int"/>
+    </xs:attributeGroup>
+  </xs:redefine>
+  <xs:complexType name="Consumer">
+    <xs:sequence>
+      <xs:group ref="t:G"/>
+    </xs:sequence>
+    <xs:attributeGroup ref="t:AG"/>
+  </xs:complexType>
+  <xs:element name="consumer" type="t:Consumer"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, 'base.xsd'), BASE_XSD);
+      fs.writeFileSync(path.join(dir, 'redefine.xsd'), REDEFINE_XSD);
+
+      const ir = parseXsd([path.join(dir, 'redefine.xsd')]);
+      const consumer = ir.complexTypes['{urn:redefine-group}Consumer'];
+      expect(consumer).toBeDefined();
+      expect(consumer.fields.map((f) => f.qname)).toEqual([
+        '{urn:redefine-group}new',
+        '{}newAttr',
+      ]);
+      const newAttr = consumer.fields.find((f) => f.qname === '{}newAttr');
+      expect(newAttr?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}int');
+    });
+  });
+
   it('redefine-by-restriction replaces the original content model', () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-test" xmlns:t="urn:redefine-test" elementFormDefault="qualified">

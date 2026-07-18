@@ -783,6 +783,18 @@ export const parseXsd = (files: string[]): XsdIr => {
     pendingFiles.push({ effectiveNs, resolveNsMap, formDefaults: fileFormDefaults, elementNodes, complexTypeNodes });
   }
 
+  // Group/attributeGroup redefines must land before any field collection:
+  // references to them are inlined into consumers at collection time (#78).
+  for (const [, overrides] of redefineOverrides) {
+    for (const override of overrides) {
+      if (override.kind === 'group') {
+        groups[override.qname] = override.node;
+      } else if (override.kind === 'attributeGroup') {
+        attributeGroups[override.qname] = [override.targetNs, override.formDefaults, override.node];
+      }
+    }
+  }
+
   // Pass 2: process top-level elements
   for (const { effectiveNs, resolveNsMap, formDefaults: fileFormDefaults, elementNodes } of pendingFiles) {
     for (const child of elementNodes) {
@@ -879,10 +891,6 @@ export const parseXsd = (files: string[]): XsdIr => {
         }
 
         simpleTypes[override.qname] = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
-      } else if (override.kind === 'group') {
-        groups[override.qname] = override.node;
-      } else if (override.kind === 'attributeGroup') {
-        attributeGroups[override.qname] = [override.targetNs, override.formDefaults, override.node];
       }
     }
   }
