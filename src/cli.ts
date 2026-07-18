@@ -6,18 +6,27 @@ import { parseXsd } from './parseXsd.js';
 import { irToZod } from './irToZod.js';
 import { runPostGenerationFormatting } from './postProcess.js';
 
-export const USAGE = `Usage: xsd2zod <files...> [options]
+export const USAGE = `xsd2zod — XSD-to-Zod code generator
 
-Generate Zod schemas and runtime metadata from XSD files.
+Turn XSD schema files into strongly-typed Zod parsers and runtime metadata
+for XML parsing/serialization round-trips.
+
+Usage:
+  xsd2zod <files...> [options]
 
 Arguments:
-  files                     One or more XSD schema files
+  files                     One or more XSD schema files to process
 
 Options:
-  --out, -o <dir>           Output directory (default: .)
-  --name, -n <name>         Output basename (default: stem of single input; required when >1 file)
-  --format, -f              Run prettier/biome formatter on generated files
-  --help, -h                Show this help message
+  -o, --out <dir>           Output directory (default: current directory)
+  -n, --name <name>         Basename for generated files (default: stem of first
+                            input file; required when >1 file is given)
+  -f, --format              Run prettier/biome formatter on generated files
+  -h, --help                Show this help message
+
+Examples:
+  xsd2zod schema.xsd -o src/generated --format
+  xsd2zod types.xsd elements.xsd -n my-api -o src/generated
 `;
 
 export type ParseArgsResult =
