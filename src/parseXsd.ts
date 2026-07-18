@@ -120,7 +120,7 @@ const getNodeTagLocalName = (tag: string): string => splitQName(tag).local;
 
 const readXmlFile = (filePath: string): string => {
   const raw = fs.readFileSync(filePath);
-  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/encoding\s*=\s*["']([^"']+)["']/);
+  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/);
   const encoding = declMatch ? declMatch[1] : 'utf-8';
   try {
     return iconv.decode(raw, encoding);
@@ -358,11 +358,14 @@ const collectFields = (
     }
 
     if (localTag === 'complexContent') {
-      const extension = nodeChildren(child).find(([key]) => getNodeTagLocalName(key) === 'extension')?.[1];
-      if (!extension) {
+      const derivation = nodeChildren(child).find(([key]) => {
+        const local = getNodeTagLocalName(key);
+        return local === 'extension' || local === 'restriction';
+      })?.[1];
+      if (!derivation) {
         continue;
       }
-      collectFields(ownerNs, nsMap, formDefaults, extension, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes);
+      collectFields(ownerNs, nsMap, formDefaults, derivation, fields, choiceGroup, inheritedCardinality, elements, choiceCounter, complexTypes, syntheticTypeContext, groups, attributeGroups, deferredSyntheticTypes);
     }
   }
 };
@@ -443,6 +446,11 @@ export const parseXsd = (files: string[]): XsdIr => {
         if (scanned.has(resolved)) continue;
 
         if (localTag === 'import' || localTag === 'include' || localTag === 'redefine') {
+          // TODO: chameleon includes (no targetNamespace) are scanned once under a single
+          // inheritedTargetNs. If a chameleon schema is included by multiple schemas with
+          // different target namespaces, only one includer's namespace is honored; the
+          // others will produce dangling type references. Properly supporting this requires
+          // scanning the chameleon file once per distinct inherited namespace.
           const existing = pending.get(resolved);
           if (existing) {
             if (localTag === 'include') {
@@ -630,19 +638,26 @@ export const parseXsd = (files: string[]): XsdIr => {
       if (override.kind === 'complexType') {
         const fields: IrField[] = [];
         collectFields(override.targetNs, override.nsMap, override.formDefaults, override.node, fields, undefined, undefined, elements, undefined, complexTypes, { targetNs: override.targetNs, counter: syntheticTypeCounter }, groups, attributeGroups, deferredSyntheticTypes);
-        const extension = nodeChildren(override.node)
+        const complexContent = nodeChildren(override.node)
           .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
-        const extensionNode = extension
-          ? nodeChildren(extension).find(([key]) => getNodeTagLocalName(key) === 'extension')?.[1]
+        const derivationEntry = complexContent
+          ? nodeChildren(complexContent).find(([key]) => {
+              const local = getNodeTagLocalName(key);
+              return local === 'extension' || local === 'restriction';
+            })
           : undefined;
-        const baseType = extensionNode?.['@_base'] ? resolveTypeQName(String(extensionNode['@_base']), override.nsMap) : undefined;
-        if (baseType === override.qname) {
+        const derivationKind = derivationEntry ? getNodeTagLocalName(derivationEntry[0]) : undefined;
+        const derivationNode = derivationEntry?.[1];
+        const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap) : undefined;
+        if (baseType === override.qname && derivationKind === 'extension') {
           const original = complexTypes[override.qname];
           if (original) {
             complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType };
           } else {
             complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined };
           }
+        } else if (baseType === override.qname && derivationKind === 'restriction') {
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined };
         } else {
           complexTypes[override.qname] = { name: override.qname, fields, baseType };
         }

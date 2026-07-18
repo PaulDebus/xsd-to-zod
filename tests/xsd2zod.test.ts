@@ -167,6 +167,85 @@ describe('xsd2zod v1 pipeline', () => {
     });
   });
 
+  it('redefine-by-restriction replaces the original content model', () => {
+    const BASE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-test" xmlns:t="urn:redefine-test" elementFormDefault="qualified">
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="street" type="xs:string"/>
+      <xs:element name="city" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+
+    const REDEFINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-test" xmlns:t="urn:redefine-test" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="base.xsd">
+    <xs:complexType name="AddressType">
+      <xs:complexContent>
+        <xs:restriction base="t:AddressType">
+          <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="city" type="xs:string"/>
+          </xs:sequence>
+        </xs:restriction>
+      </xs:complexContent>
+    </xs:complexType>
+  </xs:redefine>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, 'base.xsd'), BASE_XSD);
+      fs.writeFileSync(path.join(dir, 'redefine.xsd'), REDEFINE_XSD);
+
+      const ir = parseXsd([path.join(dir, 'redefine.xsd')]);
+      const addressType = ir.complexTypes['{urn:redefine-test}AddressType'];
+      expect(addressType).toBeDefined();
+      const fieldNames = addressType?.fields.map((f) => f.qname);
+      expect(fieldNames).toEqual(['{urn:redefine-test}name', '{urn:redefine-test}city']);
+      expect(addressType?.baseType).toBeUndefined();
+    });
+  });
+
+  it('redefine-by-extension appends to the original content model', () => {
+    const BASE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-ext" xmlns:t="urn:redefine-ext" elementFormDefault="qualified">
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="city" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+
+    const REDEFINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-ext" xmlns:t="urn:redefine-ext" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="base.xsd">
+    <xs:complexType name="AddressType">
+      <xs:complexContent>
+        <xs:extension base="t:AddressType">
+          <xs:sequence>
+            <xs:element name="country" type="xs:string"/>
+          </xs:sequence>
+        </xs:extension>
+      </xs:complexContent>
+    </xs:complexType>
+  </xs:redefine>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, 'base.xsd'), BASE_XSD);
+      fs.writeFileSync(path.join(dir, 'redefine.xsd'), REDEFINE_XSD);
+
+      const ir = parseXsd([path.join(dir, 'redefine.xsd')]);
+      const addressType = ir.complexTypes['{urn:redefine-ext}AddressType'];
+      expect(addressType).toBeDefined();
+      const fieldNames = addressType?.fields.map((f) => f.qname);
+      expect(fieldNames).toEqual(['{urn:redefine-ext}name', '{urn:redefine-ext}city', '{urn:redefine-ext}country']);
+    });
+  });
+
   it('resolves element ref attributes', () => {
     const REF_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:ref-test" xmlns:t="urn:ref-test" elementFormDefault="qualified">

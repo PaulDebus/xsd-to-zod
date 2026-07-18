@@ -13,7 +13,7 @@ export interface TestCase {
 
 export function readXmlFile(filePath: string): string {
   const raw = fs.readFileSync(filePath);
-  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/encoding\s*=\s*["']([^"']+)["']/);
+  const declMatch = raw.toString('ascii', 0, Math.min(raw.length, 200)).match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/);
   const encoding = declMatch ? declMatch[1] : 'utf-8';
   try {
     return iconv.decode(raw, encoding);
