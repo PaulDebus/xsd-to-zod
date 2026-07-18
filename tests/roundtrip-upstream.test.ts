@@ -6,9 +6,12 @@ import { runRoundTrip, type TestCase } from './helpers.js';
 const KNOWN_FAILURES = new Map<string, string>([
   ['xmlschema/collection/collection2', 'original XML violates xs:key identity constraint on author/@dn (inherent test data)'],
   ['xmlschema/collection/collection3', 'original XML violates xs:keyref identity constraint (inherent test data)'],
-  ['xmlschema/collection/collection6', '#14 — XSD-level elements like <xs:import> not recognized as document root'],
-  ['xmlschema/collection/collection-redef-xmlns', '#18 — type name collisions when globbing all sibling XSDs (passes with collection.xsd only)'],
 ]);
+
+function isXsdSchemaRoot(xml: string): boolean {
+  const match = xml.match(/<([\w-]+):(\w+)(?:\s[^>]*)?\s+xmlns:\1="http:\/\/www\.w3\.org\/2001\/XMLSchema"/);
+  return match !== null;
+}
 
 function discoverUpstreamCases(): TestCase[] {
   const cases: TestCase[] = [];
@@ -32,6 +35,9 @@ function discoverUpstreamCases(): TestCase[] {
         const full = path.join(dir, e.name);
         if (e.isDirectory()) scanXml(full);
         else if (e.name.endsWith('.xml') && !e.name.includes('error') && !e.name.includes('invalid')) {
+          const xml = fs.readFileSync(full, 'utf8');
+          if (isXsdSchemaRoot(xml)) continue;
+
           const stem = e.name.replace(/\.xml$/, '');
           const matchingXsd = path.join(dir, stem + '.xsd');
           const xsdFiles = fs.existsSync(matchingXsd) ? [matchingXsd] : allXsdFiles;
