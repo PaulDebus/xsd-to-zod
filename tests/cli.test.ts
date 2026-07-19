@@ -195,7 +195,7 @@ describe('isDirectInvocation (#80)', () => {
     withTempDir((dir) => {
       const real = path.join(dir, 'cli.js');
       fs.writeFileSync(real, '// bin\n');
-      const link = path.join(dir, 'xsd2zod');
+      const link = path.join(dir, 'xsd-to-zod');
       fs.symlinkSync(real, link);
       expect(isDirectInvocation(link, pathToFileURL(real).href)).toBe(true);
       expect(isDirectInvocation(real, pathToFileURL(real).href)).toBe(true);

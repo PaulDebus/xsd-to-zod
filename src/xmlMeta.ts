@@ -44,6 +44,6 @@ export type XmlMeta = {
  * and the CLI may hold a *different* copy of the library — without a shared
  * instance, registrations would land in a registry the runtime never reads.
  */
-const globalStore = globalThis as { __xsd2zod_xmlRegistry__?: z.core.$ZodRegistry<XmlMeta> };
+const globalStore = globalThis as { __xsd_to_zod_xmlRegistry__?: z.core.$ZodRegistry<XmlMeta> };
 
-export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> = (globalStore.__xsd2zod_xmlRegistry__ ??= z.registry<XmlMeta>());
+export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> = (globalStore.__xsd_to_zod_xmlRegistry__ ??= z.registry<XmlMeta>());

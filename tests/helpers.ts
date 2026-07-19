@@ -38,7 +38,7 @@ export function discoverCuratedCases(): TestCase[] {
 export { readXmlFile };
 
 export const withTempDir = (fn: (dir: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd-to-zod-'));
   try {
     fn(dir);
   } finally {
@@ -47,7 +47,7 @@ export const withTempDir = (fn: (dir: string) => void): void => {
 };
 
 export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>): Promise<void> => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd2zod-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd-to-zod-'));
   try {
     await fn(dir);
   } finally {
@@ -60,7 +60,7 @@ export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>
 // resolve (self-reference does not work from inside node_modules), and the
 // worktree stays clean (the dotdir is gitignored).
 export async function importGeneratedSchemas(schemasCode: string): Promise<Record<string, unknown>> {
-  const baseDir = path.resolve('.xsd2zod-tests');
+  const baseDir = path.resolve('.xsd-to-zod-tests');
   fs.mkdirSync(baseDir, { recursive: true });
   const dir = fs.mkdtempSync(path.join(baseDir, 'schema-'));
   try {

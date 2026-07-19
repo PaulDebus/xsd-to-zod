@@ -222,7 +222,7 @@ class CliError extends Error {
 // (self-reference does not work from inside node_modules).
 const importGeneratedModule = async (schemasCode: string): Promise<Record<string, unknown>> => {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-  const baseDir = join(packageRoot, '.xsd2zod-cli');
+  const baseDir = join(packageRoot, '.xsd-to-zod-cli');
   mkdirSync(baseDir, { recursive: true });
   const dir = mkdtempSync(join(baseDir, 'run-'));
   try {

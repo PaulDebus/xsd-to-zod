@@ -2,7 +2,7 @@
 
 ## Overview
 
-xsd2zod is tested against a corpus of real-world XSD schemas with corresponding XML instance files. The primary test is a **round-trip**: parse the XSD → generate Zod schemas → parse the XML → serialize back to XML → re-parse → deep-compare the two parsed objects. This ensures the generated Zod schemas and runtime metadata correctly handle real-world XML.
+xsd-to-zod is tested against a corpus of real-world XSD schemas with corresponding XML instance files. The primary test is a **round-trip**: parse the XSD → generate Zod schemas → parse the XML → serialize back to XML → re-parse → deep-compare the two parsed objects. This ensures the generated Zod schemas and runtime metadata correctly handle real-world XML.
 
 Round-trip tests additionally:
 
@@ -111,7 +111,7 @@ Features tested include:
 
 ---
 
-## Known gaps (not yet supported by xsd2zod)
+## Known gaps (not yet supported by xsd-to-zod)
 
 These features exist in the test corpus but are skipped because the tool doesn't support them yet:
 

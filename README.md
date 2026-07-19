@@ -1,7 +1,7 @@
 # xsd-to-zod
 
 [![npm version](https://img.shields.io/npm/v/xsd-to-zod.svg)](https://www.npmjs.com/package/xsd-to-zod)
-[![Tests](https://github.com/PaulDebus/xsd2zod/actions/workflows/test.yml/badge.svg)](https://github.com/PaulDebus/xsd2zod/actions/workflows/test.yml)
+[![Tests](https://github.com/PaulDebus/xsd-to-zod/actions/workflows/test.yml/badge.svg)](https://github.com/PaulDebus/xsd-to-zod/actions/workflows/test.yml)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
 > Turn XSD schemas into type-safe Zod parsers for XML.

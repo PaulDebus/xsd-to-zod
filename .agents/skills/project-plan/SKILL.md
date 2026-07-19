@@ -11,7 +11,7 @@ Trigger this skill when the user asks you to do something with "issues", "plan",
 
 ### 1. Fetch open issues
 
-Run `gh issue list --repo PaulDebus/xsd2zod --state open --limit 30 --json number,title,labels,body,createdAt,comments` to get all open issues.
+Run `gh issue list --repo PaulDebus/xsd-to-zod --state open --limit 30 --json number,title,labels,body,createdAt,comments` to get all open issues.
 
 ### 2. Identify the most impactful issue
 

@@ -71,7 +71,7 @@ const importFromXsd = async (xsd: string): Promise<Record<string, unknown>> => {
   return mod;
 };
 
-describe('xsd2zod v1 pipeline', () => {
+describe('xsd-to-zod v1 pipeline', () => {
   it('supports array cardinality, collisions, choice, and nillable handling', async () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, 'schema.xsd');
@@ -800,7 +800,7 @@ describe('xsd2zod v1 pipeline', () => {
       });
     });
 
-    it('imports the digit-check helpers from xsd2zod when digit facets are used', () => {
+    it('imports the digit-check helpers from xsd-to-zod when digit facets are used', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(

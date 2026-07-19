@@ -28,7 +28,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PaulDebus/xsd2zod.git"
+    "url": "git+https://github.com/PaulDebus/xsd-to-zod.git"
   },
   "keywords": [
     "xsd",
@@ -44,9 +44,9 @@
   "license": "GPL-3.0-only",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/PaulDebus/xsd2zod/issues"
+    "url": "https://github.com/PaulDebus/xsd-to-zod/issues"
   },
-  "homepage": "https://github.com/PaulDebus/xsd2zod#readme",
+  "homepage": "https://github.com/PaulDebus/xsd-to-zod#readme",
   "files": [
     "dist",
     "README.md",
