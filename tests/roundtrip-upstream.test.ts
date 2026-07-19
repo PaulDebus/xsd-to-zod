@@ -72,9 +72,11 @@ describe('upstream round-trip', () => {
     if (reason) {
       it.skip(`round-trips ${c.name} — SKIPPED: ${reason}`, () => {});
     } else {
+      // Generous timeout: the large UBL documents take ~5s on their own and
+      // flake at the 5s default under parallel load / coverage instrumentation.
       it(`round-trips ${c.name}`, async () => {
         await runRoundTrip(c.xsdFiles, c.xmlFile);
-      });
+      }, 30_000);
     }
   }
 });
