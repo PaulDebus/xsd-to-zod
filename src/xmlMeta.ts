@@ -40,7 +40,7 @@ export type XmlMeta = {
  * (not zod's global one) keeps consumers' `GlobalMeta` unpolluted.
  *
  * Stored as a globalThis singleton (same trick as zod's globalRegistry):
- * generated modules import it from the *installed* xsd2zod package while tests
+ * generated modules import it from the *installed* xsd-to-zod package while tests
  * and the CLI may hold a *different* copy of the library — without a shared
  * instance, registrations would land in a registry the runtime never reads.
  */

@@ -703,7 +703,7 @@ const writeObjectFields = (
 
 export type ParseXmlOptions = {
   // Skip the final schema validation. Fast path for input already checked by
-  // the libxml2 conformance tier (xsd2zod/validate).
+  // the libxml2 conformance tier (xsd-to-zod/validate).
   validate?: false;
 };
 

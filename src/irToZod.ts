@@ -377,7 +377,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   ].filter((name): name is string => name !== undefined);
   schemaLines[importLineIndex] =
     `import { z } from 'zod';\n` +
-    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(', ')}` : ''} } from 'xsd2zod';`;
+    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(', ')}` : ''} } from 'xsd-to-zod';`;
 
   return { schemas: `${schemaLines.join('\n')}\n` };
 };

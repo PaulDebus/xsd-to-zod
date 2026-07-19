@@ -1,5 +1,5 @@
 {
-  "name": "xsd2zod",
+  "name": "xsd-to-zod",
   "version": "0.1.0",
   "description": "Turn XSD schemas into type-safe Zod parsers for XML, with a metadata-driven runtime for parseXml/serializeXml round-trips.",
   "main": "./dist/index.js",
@@ -14,7 +14,7 @@
     }
   },
   "bin": {
-    "xsd2zod": "./dist/cli.js"
+    "xsd-to-zod": "./dist/cli.js"
   },
   "scripts": {
     "pretest": "npm run build",
@@ -41,7 +41,7 @@
     "validation"
   ],
   "author": "Paul Debus",
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "type": "module",
   "bugs": {
     "url": "https://github.com/PaulDebus/xsd2zod/issues"

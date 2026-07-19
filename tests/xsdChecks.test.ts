@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { countFractionDigits, countTotalDigits, xsdFractionDigits, xsdTotalDigits } from '../src/xsdChecks.js';
 
 // Direct unit tests for the digit-count checks: generated code imports these
-// from the installed 'xsd2zod' package (dist/), so only direct src imports
+// from the installed 'xsd-to-zod' package (dist/), so only direct src imports
 // exercise them for coverage.
 describe('countTotalDigits', () => {
   it.each([

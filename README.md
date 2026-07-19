@@ -1,12 +1,12 @@
-# xsd2zod
+# xsd-to-zod
 
-[![npm version](https://img.shields.io/npm/v/xsd2zod.svg)](https://www.npmjs.com/package/xsd2zod)
+[![npm version](https://img.shields.io/npm/v/xsd-to-zod.svg)](https://www.npmjs.com/package/xsd-to-zod)
 [![Tests](https://github.com/PaulDebus/xsd2zod/actions/workflows/test.yml/badge.svg)](https://github.com/PaulDebus/xsd2zod/actions/workflows/test.yml)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
 > Turn XSD schemas into type-safe Zod parsers for XML.
 
-**xsd2zod** reads your XSD files and emits strongly-typed Zod schemas that carry their XML knowledge in a typed Zod registry — **one generated artifact**. Its runtime walks those schemas to `parseXml(xml)` into plain objects and `serializeXml(data)` back out again, with validation enforced by the schemas themselves. An optional libxml2-backed conformance tier covers full XSD semantics.
+**xsd-to-zod** reads your XSD files and emits strongly-typed Zod schemas that carry their XML knowledge in a typed Zod registry — **one generated artifact**. Its runtime walks those schemas to `parseXml(xml)` into plain objects and `serializeXml(data)` back out again, with validation enforced by the schemas themselves. An optional libxml2-backed conformance tier covers full XSD semantics.
 
 ```
 XSD files ──► parseXsd() ──► IR ──► irToZod()
@@ -42,14 +42,14 @@ Given this `order.xsd`:
 Generate the code:
 
 ```sh
-npx xsd2zod order.xsd -o src/generated --format
+npx xsd-to-zod order.xsd -o src/generated --format
 ```
 
 The generated `order.zod.ts` looks like:
 
 ```ts
 import { z } from 'zod';
-import { xmlRegistry } from 'xsd2zod';
+import { xmlRegistry } from 'xsd-to-zod';
 
 const schemas: Record<string, z.ZodTypeAny> = {};
 schemas["{urn:example}OrderType"] = z.lazy(() => z.object({
@@ -71,7 +71,7 @@ export const orderSchema = z.lazy(() => schemas["{urn:example}OrderType"])
 Use it in TypeScript:
 
 ```ts
-import { parseXml, serializeXml } from 'xsd2zod';
+import { parseXml, serializeXml } from 'xsd-to-zod';
 import { orderSchema } from './generated/order.zod.js';
 
 const data = parseXml(orderSchema, `
@@ -102,10 +102,10 @@ const xml = serializeXml(orderSchema, data);
 ## Install
 
 ```sh
-npm install xsd2zod
+npm install xsd-to-zod
 ```
 
-`zod` v4 ships as a regular dependency. For the optional conformance tier (`xsd2zod/validate`), also install:
+`zod` v4 ships as a regular dependency. For the optional conformance tier (`xsd-to-zod/validate`), also install:
 
 ```sh
 npm install libxml2-wasm
@@ -116,10 +116,10 @@ npm install libxml2-wasm
 ### CLI
 
 ```sh
-npx xsd2zod schema.xsd -o src/generated --format
+npx xsd-to-zod schema.xsd -o src/generated --format
 # → src/generated/schema.zod.ts
 
-npx xsd2zod types.xsd elements.xsd -o src/generated -n my-api
+npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 # → src/generated/my-api.zod.ts
 ```
 
@@ -132,14 +132,14 @@ npx xsd2zod types.xsd elements.xsd -o src/generated -n my-api
 Validate an XML document:
 
 ```sh
-xsd2zod validate data.xml --xsd schema.xsd                    # zod tier (typed parse)
-xsd2zod validate data.xml --xsd schema.xsd -e libxml2         # conformance tier
+xsd-to-zod validate data.xml --xsd schema.xsd                    # zod tier (typed parse)
+xsd-to-zod validate data.xml --xsd schema.xsd -e libxml2         # conformance tier
 ```
 
 ### Programmatic API
 
 ```ts
-import { parseXsd, irToZod, runPostGenerationFormatting } from 'xsd2zod';
+import { parseXsd, irToZod, runPostGenerationFormatting } from 'xsd-to-zod';
 import { writeFileSync } from 'node:fs';
 
 const ir = parseXsd(['schema.xsd']);
@@ -152,7 +152,7 @@ runPostGenerationFormatting(['schema.zod.ts']);
 ### Parse and serialize XML
 
 ```ts
-import { parseXml, safeParseXml, serializeXml } from 'xsd2zod';
+import { parseXml, safeParseXml, serializeXml } from 'xsd-to-zod';
 import { orderSchema } from './generated/order.zod.js';
 
 const order = parseXml(orderSchema, xmlString);          // throws ZodError
@@ -162,10 +162,10 @@ const xml = serializeXml(orderSchema, order);
 
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
-### Conformance tier (`xsd2zod/validate`)
+### Conformance tier (`xsd-to-zod/validate`)
 
 ```ts
-import { validateXml } from 'xsd2zod/validate';
+import { validateXml } from 'xsd-to-zod/validate';
 
 const result = await validateXml(xmlString, xsdString, { url: 'schemas/order.xsd' });
 if (!result.valid) {
@@ -198,11 +198,11 @@ The `.zod.ts` + `.meta.ts` pair is now a single `.zod.ts`. Removed and changed A
 
 | Removed | Replacement |
 |---|---|
-| `createRootHelpers(rootMeta, types)` → `parseXml` / `serializeXml` | `parseXml(schema, xml)` / `serializeXml(schema, data)` from `xsd2zod` |
+| `createRootHelpers(rootMeta, types)` → `parseXml` / `serializeXml` | `parseXml(schema, xml)` / `serializeXml(schema, data)` from `xsd-to-zod` |
 | `parseXmlWithMetadata` / `serializeXmlWithMetadata` | same as above (with `safeParseXml` as the non-throwing variant) |
 | `buildRuntimeMetadata(ir)` | gone — metadata lives in `xmlRegistry` entries of the generated schemas |
 | `RuntimeMetadata` & friends | `XmlMeta` / `XmlFieldMeta` types |
-| `.meta.ts` file / `--metadata` CLI flag | gone — `xsd2zod validate` drives everything from `--xsd` |
+| `.meta.ts` file / `--metadata` CLI flag | gone — `xsd-to-zod validate` drives everything from `--xsd` |
 
 Behavioral changes to know about:
 

@@ -21,13 +21,13 @@ describe.skipIf(process.platform === 'win32')('CLI e2e through the npm bin symli
     });
   }, 180_000);
 
-  // npm installs the bin as node_modules/.bin/xsd2zod -> dist/cli.js; the
+  // npm installs the bin as node_modules/.bin/xsd-to-zod -> dist/cli.js; the
   // in-process tests only call main() directly, so spawn the real thing.
   it('runs the built CLI when invoked through the bin symlink', () => {
     withTempDir((dir) => {
       const binDir = path.join(dir, 'node_modules', '.bin');
       fs.mkdirSync(binDir, { recursive: true });
-      const link = path.join(binDir, 'xsd2zod');
+      const link = path.join(binDir, 'xsd-to-zod');
       fs.symlinkSync(distCli, link);
 
       const xsdFile = path.join(dir, 'test.xsd');
