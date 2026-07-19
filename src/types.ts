@@ -57,6 +57,8 @@ export type ElementDef = {
 
 export type XsdIr = {
   targetNamespaces: string[];
+  /** References and namespace prefixes that could not be resolved (fields are kept or skipped as before; this list makes the omissions visible). */
+  unresolvedRefs: string[];
   simpleTypes: Record<string, SimpleTypeDef>;
   complexTypes: Record<string, ComplexTypeDef>;
   elements: Record<string, ElementDef>;

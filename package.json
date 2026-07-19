@@ -17,6 +17,8 @@
     "xsd2zod": "./dist/cli.js"
   },
   "scripts": {
+    "pretest": "npm run build",
+    "pretest:coverage": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "build": "tsc -p tsconfig.build.json",

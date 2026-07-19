@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { cmdValidate, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
+import { cmdValidate, isDirectInvocation, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
 import { withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
@@ -79,6 +80,27 @@ describe('parseArgs', () => {
     const r = parseArgs(['a.xsd', '--name', '--out']);
     expect(r).toEqual({ ok: false, error: '--name/-n requires a string argument' });
   });
+
+  it('rejects unknown options instead of treating them as files (#82)', () => {
+    expect(parseArgs(['a.xsd', '--fromat'])).toEqual({ ok: false, error: 'unknown option: --fromat' });
+    expect(parseArgs(['--out=dir', 'a.xsd'])).toEqual({ ok: false, error: 'unknown option: --out=dir' });
+  });
+
+  it('rejects flag values that look like options (#82)', () => {
+    expect(parseArgs(['a.xsd', '--out', '-x'])).toEqual({ ok: false, error: '--out/-o requires a directory argument' });
+  });
+
+  it('rejects --name with path separators (#82)', () => {
+    const err = '--name/-n must be a plain file name without path separators';
+    expect(parseArgs(['a.xsd', '-n', '../../somewhere/x'])).toEqual({ ok: false, error: err });
+    expect(parseArgs(['a.xsd', '--name', 'sub/dir'])).toEqual({ ok: false, error: err });
+    expect(parseArgs(['a.xsd', '--name', '..'])).toEqual({ ok: false, error: err });
+  });
+
+  it('rejects inputs that yield an empty output stem (#82)', () => {
+    const r = parseArgs(['.xsd']);
+    expect(r).toEqual({ ok: false, error: 'cannot derive an output name from the input file; pass --name/-n' });
+  });
 });
 
 describe('CLI e2e', () => {
@@ -126,6 +148,69 @@ describe('CLI e2e', () => {
 
       expect(r.code).toBe(0);
       expect(fs.existsSync(path.join(dir, 'my-stem.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('reports missing input files in the CLI error style instead of a stack trace (#82)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const r = await runCli([path.join(dir, 'missing.xsd'), '-o', dir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^error: /);
+      expect(r.stderr).not.toContain('at ');
+    });
+  });
+
+  it('reports malformed XML in the CLI error style (#82)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'broken.xsd');
+      fs.writeFileSync(xsdFile, '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element');
+      const r = await runCli([xsdFile, '-o', dir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^error: /);
+    });
+  });
+
+  it('warns about schema references that could not be resolved (#77)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t:missing"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const r = await runCli([xsdFile, '-o', dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain('warning: unresolved element ref "{urn:test}missing"');
+    });
+  });
+});
+
+describe('isDirectInvocation (#80)', () => {
+  it('resolves symlinks before comparing', () => {
+    withTempDir((dir) => {
+      const real = path.join(dir, 'cli.js');
+      fs.writeFileSync(real, '// bin\n');
+      const link = path.join(dir, 'xsd2zod');
+      fs.symlinkSync(real, link);
+      expect(isDirectInvocation(link, pathToFileURL(real).href)).toBe(true);
+      expect(isDirectInvocation(real, pathToFileURL(real).href)).toBe(true);
+    });
+  });
+
+  it('returns false for other scripts, missing argv1 and dangling paths', () => {
+    withTempDir((dir) => {
+      const real = path.join(dir, 'cli.js');
+      const other = path.join(dir, 'other.js');
+      fs.writeFileSync(real, '// bin\n');
+      fs.writeFileSync(other, '// other\n');
+      expect(isDirectInvocation(other, pathToFileURL(real).href)).toBe(false);
+      expect(isDirectInvocation(undefined, pathToFileURL(real).href)).toBe(false);
+      expect(isDirectInvocation(path.join(dir, 'gone.js'), pathToFileURL(real).href)).toBe(false);
     });
   });
 });
