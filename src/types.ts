@@ -18,6 +18,8 @@ export type IrField = Cardinality & {
   choiceBranch?: string;
   defaultValue?: string;
   fixedValue?: string;
+  /** Text of xs:annotation/xs:documentation, emitted as .describe() (#25). */
+  description?: string;
 };
 
 export type Facet =
@@ -40,12 +42,14 @@ export type SimpleTypeDef = {
   facets?: Facet[];
   itemType?: QName;
   memberTypes?: QName[];
+  description?: string;
 };
 
 export type ComplexTypeDef = {
   name: QName;
   baseType?: QName;
   fields: IrField[];
+  description?: string;
 };
 
 export type ElementDef = {
@@ -53,6 +57,7 @@ export type ElementDef = {
   typeName: QName;
   cardinality: Cardinality;
   nillable?: boolean;
+  description?: string;
 };
 
 export type XsdIr = {

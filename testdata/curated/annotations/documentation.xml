@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<invoice xmlns="urn:curated" currency="EUR">
+  <amount>12.50</amount>
+  <note>paid</note>
+</invoice>

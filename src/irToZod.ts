@@ -95,6 +95,11 @@ const toFieldKey = (field: IrField): string => {
   return field.kind === 'attribute' ? `@${local}` : local;
 };
 
+// xs:annotation/xs:documentation surfaces as zod .describe() — IDE tooltips and
+// downstream form generators pick it up from the schema (#25).
+const withDescription = (expr: string, description: string | undefined): string =>
+  description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
+
 type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 
 const withFacets = (base: string, facets: Facet[], usage: FacetUsage): string => {
@@ -340,22 +345,25 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       const baseExpr = primitiveToZod(simpleType.baseType, definedTypes);
       expr = simpleType.facets ? withFacets(baseExpr, simpleType.facets, usage) : baseExpr;
     }
-    schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${expr}.register(xmlRegistry, { qname: ${JSON.stringify(simpleType.name)} });`);
+    schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${withDescription(expr, simpleType.description)}.register(xmlRegistry, { qname: ${JSON.stringify(simpleType.name)} });`);
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
     const multiBranch = multiBranchGroups(complexType);
     const props = complexType.fields
-      .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withCardinality(
+      .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withDescription(withCardinality(
         primitiveToZod(field.typeName, definedTypes),
         field,
         ir,
         field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup)
-      )}`)
+      ), field.description)}`)
       .join(', ');
 
     schemaLines.push(
-      `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})` +
+      withDescription(
+        `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})`,
+        complexType.description
+      ) +
       `.register(xmlRegistry, { ${fieldsMetaFor(complexType, ir)} });`
     );
   }
@@ -368,7 +376,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     // clobber its type meta (and collide when two roots share one type).
     const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
-    schemaLines.push(`export const ${exportNames.get(root)} = ${expr}.register(xmlRegistry, { root: ${JSON.stringify(root)} });`);
+    schemaLines.push(`export const ${exportNames.get(root)} = ${withDescription(expr, rootDef.description)}.register(xmlRegistry, { root: ${JSON.stringify(root)} });`);
   }
 
   const xsdImports = [

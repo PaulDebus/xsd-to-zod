@@ -41,6 +41,7 @@ Small, hand-authored XSD+XML pairs covering specific XSD constructs. Each file i
 | Entities | `entities-text`, `entities-attr`, `numeric-refs`, `cdata`, `leading-comment` | Entity decoding, CDATA, comments/PIs |
 | Namespaces | `qualified`, `unqualified`, `multi-ns` | elementFormDefault, namespace resolution |
 | Imports | `include`, `import`, `chained-imports` | xs:include, xs:import, multi-file schemas |
+| Annotations | `documentation` | xs:annotation/xs:documentation → `.describe()` |
 | Negative | 7+ invalid XML variants | Round-trip error handling |
 
 ### xmlschema examples (`testdata/upstream/xmlschema/`)

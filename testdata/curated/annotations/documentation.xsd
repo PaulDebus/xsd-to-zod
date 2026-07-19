@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:curated" xmlns:t="urn:curated" elementFormDefault="qualified">
+  <xs:simpleType name="AmountType">
+    <xs:annotation>
+      <xs:documentation>Monetary amount with two fraction digits</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:decimal">
+      <xs:fractionDigits value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="InvoiceType">
+    <xs:annotation>
+      <xs:documentation>An invoice line item</xs:documentation>
+    </xs:annotation>
+    <xs:sequence>
+      <xs:element name="amount" type="t:AmountType">
+        <xs:annotation>
+          <xs:documentation>Line total</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+      <xs:element name="note" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="currency" type="xs:string" use="required">
+      <xs:annotation>
+        <xs:documentation>ISO 4217 currency code</xs:documentation>
+      </xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+  <xs:element name="invoice" type="t:InvoiceType">
+    <xs:annotation>
+      <xs:documentation>Root invoice element</xs:documentation>
+    </xs:annotation>
+  </xs:element>
+</xs:schema>
