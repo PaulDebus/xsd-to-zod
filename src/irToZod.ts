@@ -260,6 +260,10 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
     const lines: string[] = [];
     const completeNames: string[] = [];
     const partialNames: string[] = [];
+    // Presence, not just definedness: the runtime materializes an absent
+    // repeated field as [] (readField), and [] !== undefined would count the
+    // branch as selected — an empty array is zero occurrences, i.e. absent.
+    lines.push(`const has = (v: unknown): boolean => v !== undefined && !(Array.isArray(v) && v.length === 0);`);
     branches.forEach((branch, i) => {
       const requiredKeys = branch.filter((f) => f.minOccurs > 0).map(keyOf);
       const allKeys = branch.map(keyOf);
@@ -267,15 +271,15 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       // branches of only-optional fields, when any field is present). Partial
       // presence — some but not all required fields — is always rejected.
       if (requiredKeys.length === 1 && branch.length === 1) {
-        lines.push(`const b${i} = ${allKeys[0]} !== undefined;`);
+        lines.push(`const b${i} = has(${allKeys[0]});`);
       } else if (requiredKeys.length > 0) {
-        lines.push(`const b${i} = [${requiredKeys.join(', ')}].every((v) => v !== undefined);`);
+        lines.push(`const b${i} = [${requiredKeys.join(', ')}].every(has);`);
       } else {
-        lines.push(`const b${i} = [${allKeys.join(', ')}].some((v) => v !== undefined);`);
+        lines.push(`const b${i} = [${allKeys.join(', ')}].some(has);`);
       }
       completeNames.push(`b${i}`);
       if (requiredKeys.length > 0 && branch.length > 1) {
-        lines.push(`const p${i} = !b${i} && [${allKeys.join(', ')}].some((v) => v !== undefined);`);
+        lines.push(`const p${i} = !b${i} && [${allKeys.join(', ')}].some(has);`);
         partialNames.push(`p${i}`);
       }
     });

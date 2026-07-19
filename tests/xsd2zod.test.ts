@@ -116,6 +116,40 @@ describe('xsd2zod v1 pipeline', () => {
     });
   });
 
+  it('choice refine counts an absent repeated branch as absent (#73)', async () => {
+    // The runtime materializes an absent repeated field as []; presence in the
+    // choice refine must mean >=1 occurrences, not `!== undefined`.
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="PickType">
+    <xs:choice>
+      <xs:element name="tag" type="xs:string" maxOccurs="unbounded"/>
+      <xs:element name="code" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="pick" type="t:PickType"/>
+</xs:schema>`;
+    const mod = await importFromXsd(xsd);
+    const pickSchema = mod.pickSchema as z.ZodType;
+
+    // Only the single branch present: valid (the [] of the absent repeated
+    // branch must not count as a second selected branch).
+    const codeOnly = parseXml(pickSchema, '<pick xmlns="urn:test"><code>C1</code></pick>') as Record<string, unknown>;
+    expect(codeOnly.code).toBe('C1');
+    expect(codeOnly.tag).toEqual([]);
+
+    // The repeated branch selected with values: valid.
+    expect(parseXml(pickSchema, '<pick xmlns="urn:test"><tag>a</tag><tag>b</tag></pick>')).toEqual({ tag: ['a', 'b'] });
+
+    // Both branches: rejected.
+    expect(() => parseXml(pickSchema, '<pick xmlns="urn:test"><tag>a</tag><code>C1</code></pick>'))
+      .toThrow('choice requires exactly one of: tag, code');
+
+    // Neither branch: the required choice must reject — [] is not a selection.
+    expect(() => parseXml(pickSchema, '<pick xmlns="urn:test"/>'))
+      .toThrow('choice requires exactly one of: tag, code');
+  });
+
   it('does not treat non-xsi nil as xsi:nil and matches root namespace', async () => {
     const mod = await importFromXsd(XSD);
     const orderSchema = mod.orderSchema as z.ZodType;
