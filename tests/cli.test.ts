@@ -171,6 +171,25 @@ describe('CLI e2e', () => {
       expect(r.stderr).toMatch(/^error: /);
     });
   });
+
+  it('warns about schema references that could not be resolved (#77)', () => {
+    withTempDir((dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t:missing"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const r = runCli([xsdFile, '-o', dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain('warning: unresolved element ref "{urn:test}missing"');
+    });
+  });
 });
 
 describe('isDirectInvocation (#80)', () => {

@@ -7,7 +7,19 @@ import { parseXsd } from './parseXsd.js';
 import { runPostGenerationFormatting } from './postProcess.js';
 import { readXmlFile } from './readXmlFile.js';
 import { parseXmlWithMetadata } from './runtime.js';
-import type { RuntimeMetadata } from './types.js';
+import type { RuntimeMetadata, XsdIr } from './types.js';
+
+// Thrown values are usually Errors but not guaranteed to be — never print
+// "error: undefined".
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+// References the parser could not resolve are kept lenient on the IR level;
+// the CLI is where they become visible to the user (#77).
+const warnUnresolvedRefs = (ir: XsdIr): void => {
+  for (const ref of ir.unresolvedRefs) {
+    console.error(`warning: ${ref}`);
+  }
+};
 
 export const USAGE = `xsd2zod — XSD-to-Zod code generator
 
@@ -198,7 +210,7 @@ export const loadMetadataFromMetaTs = (metaFile: string): RuntimeMetadata => {
   try {
     return JSON.parse(json) as RuntimeMetadata;
   } catch (e) {
-    throw new Error(`failed to parse metadata file ${metaFile}: ${(e as Error).message}`);
+    throw new Error(`failed to parse metadata file ${metaFile}: ${errorMessage(e)}`);
   }
 };
 
@@ -232,6 +244,7 @@ export const cmdValidate = (args: string[]): void => {
       throw new CliError(`xsd file not found: ${result.xsdFile}`);
     }
     const ir = parseXsd([result.xsdFile]);
+    warnUnresolvedRefs(ir);
     runtimeMetadata = buildRuntimeMetadata(ir);
   } else {
     if (!existsSync(result.metadataFile!)) {
@@ -240,7 +253,7 @@ export const cmdValidate = (args: string[]): void => {
     try {
       runtimeMetadata = loadMetadataFromMetaTs(result.metadataFile!);
     } catch (e) {
-      throw new CliError((e as Error).message);
+      throw new CliError(errorMessage(e));
     }
   }
 
@@ -268,7 +281,7 @@ export const cmdValidate = (args: string[]): void => {
     console.log('Validation passed');
     console.log(JSON.stringify(parsed, null, 2));
   } catch (e) {
-    throw new CliError(`Validation failed: ${(e as Error).message}`);
+    throw new CliError(`Validation failed: ${errorMessage(e)}`);
   }
 };
 
@@ -277,7 +290,7 @@ export const main = (args: string[]): number => {
     try {
       cmdValidate(args.slice(1));
     } catch (e) {
-      console.error(`error: ${(e as Error).message}`);
+      console.error(`error: ${errorMessage(e)}`);
       return 1;
     }
     return 0;
@@ -305,6 +318,7 @@ export const main = (args: string[]): number => {
     }
 
     const ir = parseXsd(files);
+    warnUnresolvedRefs(ir);
     const { schemas, metadata } = irToZod(ir);
 
     const zodFile = join(outDir, `${name}.zod.ts`);
@@ -325,7 +339,7 @@ export const main = (args: string[]): number => {
   } catch (e) {
     // One error style for everything that can go wrong after arg parsing:
     // missing input files, malformed XML, unwritable output paths (#82).
-    console.error(`error: ${(e as Error).message}`);
+    console.error(`error: ${errorMessage(e)}`);
     return 1;
   }
 };
