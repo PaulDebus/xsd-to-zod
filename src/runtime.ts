@@ -2,6 +2,7 @@ import XMLParser from '@nodable/flexible-xml-parser';
 import { CompactBuilderFactory } from '@nodable/compact-builder';
 import type { BaseOutputBuilderFactory } from '@nodable/base-output-builder';
 import type { Facet, RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
+import { XSD_INTEGER_TYPE_NAMES } from './xsdBuiltins.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
 const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
@@ -221,43 +222,36 @@ const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unkno
 
   const text = String(raw).trim();
   let value: unknown;
-  switch (local) {
-    case 'boolean':
-      if (!BOOLEAN_LEXICALS.has(text)) {
-        throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(text)}`);
-      }
-      value = text === 'true' || text === '1';
-      break;
-    case 'int':
-    case 'integer':
-      if (!INTEGER_LEXICAL.test(text)) {
+  if (XSD_INTEGER_TYPE_NAMES.has(local)) {
+    if (!INTEGER_LEXICAL.test(text)) {
+      throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
+    }
+    value = Number(text);
+  } else if (local === 'boolean') {
+    if (!BOOLEAN_LEXICALS.has(text)) {
+      throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(text)}`);
+    }
+    value = text === 'true' || text === '1';
+  } else if (local === 'decimal') {
+    if (!DECIMAL_LEXICAL.test(text)) {
+      throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(text)}`);
+    }
+    value = Number(text);
+  } else if (local === 'double' || local === 'float') {
+    if (text === 'INF' || text === '+INF') {
+      value = Infinity;
+    } else if (text === '-INF') {
+      value = -Infinity;
+    } else if (text === 'NaN') {
+      value = NaN;
+    } else {
+      if (!FLOAT_LEXICAL.test(text)) {
         throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
       }
       value = Number(text);
-      break;
-    case 'decimal':
-      if (!DECIMAL_LEXICAL.test(text)) {
-        throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(text)}`);
-      }
-      value = Number(text);
-      break;
-    case 'double':
-    case 'float':
-      if (text === 'INF' || text === '+INF') {
-        value = Infinity;
-      } else if (text === '-INF') {
-        value = -Infinity;
-      } else if (text === 'NaN') {
-        value = NaN;
-      } else {
-        if (!FLOAT_LEXICAL.test(text)) {
-          throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
-        }
-        value = Number(text);
-      }
-      break;
-    default:
-      value = String(raw);
+    }
+  } else {
+    value = String(raw);
   }
 
   if (facets) {

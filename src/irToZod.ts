@@ -1,4 +1,5 @@
 import { clarkToLocal } from './parseXsd.js';
+import { XSD_INTEGER_TYPE_NAMES } from './xsdBuiltins.js';
 import type {
   ComplexTypeDef,
   Facet,
@@ -25,17 +26,13 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
     return definedTypes.has(typeName) ? `schemas[${JSON.stringify(typeName)}]` : 'z.unknown()';
   }
 
+  if (XSD_INTEGER_TYPE_NAMES.has(local)) {
+    return 'z.number().int()';
+  }
+
   switch (local) {
-    case 'string':
-    case 'token':
-    case 'date':
-    case 'dateTime':
-      return 'z.string()';
     case 'boolean':
       return 'z.boolean()';
-    case 'int':
-    case 'integer':
-      return 'z.number().int()';
     case 'decimal':
     case 'float':
     case 'double':
