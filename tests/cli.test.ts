@@ -251,6 +251,19 @@ describe('parseValidateArgs', () => {
     expect(r).toEqual({ ok: false, error: '--root/-r requires a QName argument' });
   });
 
+  it('parses --engine and defaults to zod', () => {
+    expect(parseValidateArgs(['data.xml', '-x', 's.xsd'])).toMatchObject({ ok: true, engine: 'zod' });
+    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', 'libxml2'])).toMatchObject({ ok: true, engine: 'libxml2' });
+    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '-e', 'zod'])).toMatchObject({ ok: true, engine: 'zod' });
+  });
+
+  it('rejects unknown engines and missing engine values', () => {
+    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', 'relaxng']))
+      .toEqual({ ok: false, error: "unknown engine: relaxng (expected 'zod' or 'libxml2')" });
+    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', '--root']))
+      .toEqual({ ok: false, error: '--engine/-e requires an engine argument' });
+  });
+
   it('returns help', () => {
     expect(parseValidateArgs(['--help'])).toEqual({ ok: true, help: true });
     expect(parseValidateArgs(['-h'])).toEqual({ ok: true, help: true });
@@ -298,6 +311,43 @@ describe('CLI validate e2e', () => {
       const r = await runCli(['validate', xmlFile, '-x', xsdFile]);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('Validation failed');
+    });
+  });
+
+  it('validates with --engine libxml2 (success)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      const xmlFile = path.join(dir, 'test.xml');
+      const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`;
+      const xml = '<?xml version="1.0"?><root xmlns="urn:test">hello</root>';
+      fs.writeFileSync(xsdFile, xsd);
+      fs.writeFileSync(xmlFile, xml);
+
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile, '--engine', 'libxml2']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Validation passed');
+    });
+  });
+
+  it('validates with --engine libxml2 (failure — line-numbered error)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      const xmlFile = path.join(dir, 'test.xml');
+      const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`;
+      const xml = '<?xml version="1.0"?><wrong xmlns="urn:test">hello</wrong>';
+      fs.writeFileSync(xsdFile, xsd);
+      fs.writeFileSync(xmlFile, xml);
+
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile, '--engine', 'libxml2']);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('Validation failed');
+      expect(r.stderr).toMatch(/line \d+/);
     });
   });
 

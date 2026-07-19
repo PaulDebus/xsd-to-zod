@@ -119,7 +119,7 @@ export const parseArgs = (args: string[]): ParseArgsResult => {
   return { ok: true, help: false, files, out, name, format };
 };
 
-export const VALIDATE_USAGE = `xsd2zod validate — Validate XML against an XSD schema via the generated Zod tier
+export const VALIDATE_USAGE = `xsd2zod validate — Validate XML against an XSD schema
 
 Usage:
   xsd2zod validate <xml-file> [options]
@@ -128,30 +128,40 @@ Arguments:
   xml-file                  XML file to validate
 
 Options:
-  -x, --xsd <file>          XSD schema file (schemas are generated on the fly)
-  -r, --root <name>         Root element QName (auto-detected when unambiguous)
+  -x, --xsd <file>          XSD schema file
+  -r, --root <name>         Root element QName (zod engine; auto-detected when
+                            unambiguous)
+  -e, --engine <engine>     Validation engine: 'zod' (default — typed parse via
+                            the generated schemas) or 'libxml2' (full XSD
+                            conformance; requires the optional libxml2-wasm
+                            peer dependency)
   -h, --help                Show this help message
 
 Examples:
   xsd2zod validate data.xml --xsd schema.xsd
   xsd2zod validate data.xml --xsd schema.xsd --root '{urn:example}order'
+  xsd2zod validate data.xml --xsd schema.xsd --engine libxml2
 `;
+
+export type ValidateEngine = 'zod' | 'libxml2';
 
 export type ValidateArgsResult =
   | { ok: true; help: true }
-  | { ok: true; help: false; xmlFile: string; xsdFile: string; root?: string }
+  | { ok: true; help: false; xmlFile: string; xsdFile: string; root?: string; engine: ValidateEngine }
   | { ok: false; error: string };
 
 export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
   let xmlFile: string | undefined;
   let xsdFile: string | undefined;
   let root: string | undefined;
+  let engine: string | undefined;
   let i = 0;
 
   const isFlag = (arg: string): string | undefined => {
     if (arg === '--help' || arg === '-h') return 'help';
     if (arg === '--xsd' || arg === '-x') return 'xsd';
     if (arg === '--root' || arg === '-r') return 'root';
+    if (arg === '--engine' || arg === '-e') return 'engine';
     return undefined;
   };
 
@@ -171,6 +181,12 @@ export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
       if (!root || root.startsWith('-')) {
         return { ok: false, error: '--root/-r requires a QName argument' };
       }
+    } else if (flag === 'engine') {
+      i++;
+      engine = args[i];
+      if (!engine || engine.startsWith('-')) {
+        return { ok: false, error: '--engine/-e requires an engine argument' };
+      }
     } else if (args[i].startsWith('-')) {
       return { ok: false, error: `unknown option: ${args[i]}` };
     } else {
@@ -187,7 +203,11 @@ export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
     return { ok: false, error: '--xsd is required' };
   }
 
-  return { ok: true, help: false, xmlFile, xsdFile, root };
+  if (engine !== undefined && engine !== 'zod' && engine !== 'libxml2') {
+    return { ok: false, error: `unknown engine: ${engine} (expected 'zod' or 'libxml2')` };
+  }
+
+  return { ok: true, help: false, xmlFile, xsdFile, root, engine: engine ?? 'zod' };
 };
 
 class CliError extends Error {
@@ -232,6 +252,20 @@ export const cmdValidate = async (args: string[]): Promise<void> => {
 
   if (!existsSync(result.xsdFile)) {
     throw new CliError(`xsd file not found: ${result.xsdFile}`);
+  }
+
+  if (result.engine === 'libxml2') {
+    // Conformance tier: full XSD semantics via libxml2-wasm (optional peer
+    // dependency). --root is a zod-engine concept and is ignored here.
+    const { formatIssues, validateXml } = await import('./validate.js');
+    const validation = await validateXml(readXmlFile(result.xmlFile), readXmlFile(result.xsdFile), {
+      url: resolve(result.xsdFile),
+    });
+    if (!validation.valid) {
+      throw new CliError(`Validation failed:\n${formatIssues(validation.issues).join('\n')}`);
+    }
+    console.log('Validation passed');
+    return;
   }
 
   const ir = parseXsd([result.xsdFile]);
