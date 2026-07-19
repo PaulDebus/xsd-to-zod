@@ -147,6 +147,231 @@ describe('xsd2zod v1 pipeline', () => {
     });
   });
 
+  it('inherits base-type fields for anonymous inline complexType extensions (#76)', () => {
+    const INLINE_EXT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-ext" xmlns:t="urn:inline-ext" elementFormDefault="qualified">
+  <xs:complexType name="Base">
+    <xs:sequence>
+      <xs:element name="id" type="xs:string"/>
+    </xs:sequence>
+    <xs:attribute name="version" type="xs:string"/>
+  </xs:complexType>
+  <xs:element name="doc">
+    <xs:complexType>
+      <xs:complexContent>
+        <xs:extension base="t:Base">
+          <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+          </xs:sequence>
+        </xs:extension>
+      </xs:complexContent>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="Wrapper">
+    <xs:sequence>
+      <xs:element name="item">
+        <xs:complexType>
+          <xs:complexContent>
+            <xs:extension base="t:Base">
+              <xs:sequence>
+                <xs:element name="extra" type="xs:string"/>
+              </xs:sequence>
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, INLINE_EXT_XSD);
+
+      const ir = parseXsd([file]);
+
+      // Top-level element with inline type extending a named base
+      const docType = ir.complexTypes['{urn:inline-ext}anonymous_doc_Type'];
+      expect(docType).toBeDefined();
+      expect(docType.baseType).toBe('{urn:inline-ext}Base');
+      expect(docType.fields.map((f) => f.qname)).toEqual([
+        '{urn:inline-ext}id',
+        '{}version',
+        '{urn:inline-ext}title',
+      ]);
+
+      // Nested inline type (deferredSyntheticTypes path)
+      const wrapper = ir.complexTypes['{urn:inline-ext}Wrapper'];
+      const itemField = wrapper.fields.find((f) => f.qname === '{urn:inline-ext}item');
+      expect(itemField).toBeDefined();
+      const itemType = ir.complexTypes[itemField!.typeName];
+      expect(itemType).toBeDefined();
+      expect(itemType.baseType).toBe('{urn:inline-ext}Base');
+      expect(itemType.fields.map((f) => f.qname)).toEqual([
+        '{urn:inline-ext}id',
+        '{}version',
+        '{urn:inline-ext}extra',
+      ]);
+    });
+  });
+
+  it('resolves cross-file refs regardless of CLI argument order and types attribute refs from global declarations (#77)', () => {
+    const DECLARES_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:declares" xmlns:d="urn:declares" elementFormDefault="qualified">
+  <xs:element name="shared" type="xs:string"/>
+  <xs:attribute name="code" type="xs:int"/>
+  <xs:group name="G">
+    <xs:sequence>
+      <xs:element name="grouped" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AG">
+    <xs:attribute name="agAttr" type="xs:boolean"/>
+  </xs:attributeGroup>
+</xs:schema>`;
+
+    const USES_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:uses" xmlns:d="urn:declares" elementFormDefault="qualified">
+  <xs:complexType name="Holder">
+    <xs:sequence>
+      <xs:element ref="d:shared"/>
+      <xs:group ref="d:G"/>
+      <xs:element name="own" type="xs:int"/>
+    </xs:sequence>
+    <xs:attribute ref="d:code"/>
+    <xs:attributeGroup ref="d:AG"/>
+  </xs:complexType>
+  <xs:element name="holder" type="Holder"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const declares = path.join(dir, 'declares.xsd');
+      const uses = path.join(dir, 'uses.xsd');
+      fs.writeFileSync(declares, DECLARES_XSD);
+      fs.writeFileSync(uses, USES_XSD);
+
+      // The two files have no import/include edge, so they used to be processed
+      // in argument order — refs from the first file were silently dropped.
+      for (const order of [[uses, declares], [declares, uses]]) {
+        const ir = parseXsd(order);
+        expect(ir.unresolvedRefs).toEqual([]);
+
+        const holder = ir.complexTypes['{urn:uses}Holder'];
+        expect(holder).toBeDefined();
+
+        const shared = holder.fields.find((f) => f.qname === '{urn:declares}shared');
+        expect(shared).toBeDefined();
+        expect(shared?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}string');
+
+        const grouped = holder.fields.find((f) => f.qname.endsWith('}grouped'));
+        expect(grouped).toBeDefined();
+        expect(grouped?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}boolean');
+
+        // Attribute refs resolve their type from the referenced global
+        // declaration instead of hardcoded xs:string.
+        const code = holder.fields.find((f) => f.qname === '{urn:declares}code');
+        expect(code).toBeDefined();
+        expect(code?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}int');
+
+        const agAttr = holder.fields.find((f) => f.qname.endsWith('}agAttr'));
+        expect(agAttr).toBeDefined();
+        expect(agAttr?.kind).toBe('attribute');
+      }
+    });
+  });
+
+  it('reports unresolved references and unknown prefixes instead of silently dropping them (#77)', () => {
+    const BROKEN_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:broken" xmlns:b="urn:broken" elementFormDefault="qualified">
+  <xs:complexType name="Holder">
+    <xs:sequence>
+      <xs:element ref="b:missing"/>
+      <xs:element name="own" type="xs:int"/>
+      <xs:group ref="b:missingGroup"/>
+    </xs:sequence>
+    <xs:attribute ref="b:missingAttr"/>
+    <xs:attributeGroup ref="b:missingAG"/>
+    <xs:attribute name="weird" type="zzz:thing"/>
+  </xs:complexType>
+  <xs:element name="holder" type="b:Holder"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, BROKEN_XSD);
+
+      const ir = parseXsd([file]);
+      const holder = ir.complexTypes['{urn:broken}Holder'];
+      // Unresolvable refs are skipped; the resolvable fields remain, and the
+      // unresolved attribute ref keeps its xs:string fallback field.
+      expect(holder.fields.map((f) => f.qname)).toEqual([
+        '{urn:broken}own',
+        '{urn:broken}missingAttr',
+        '{}weird',
+      ]);
+
+      expect(ir.unresolvedRefs).toEqual(
+        expect.arrayContaining([
+          'unresolved element ref "{urn:broken}missing"',
+          'unresolved group ref "{urn:broken}missingGroup"',
+          'unresolved attribute ref "{urn:broken}missingAttr"',
+          'unresolved attributeGroup ref "{urn:broken}missingAG"',
+          'unknown namespace prefix "zzz" in QName "zzz:thing"',
+        ])
+      );
+    });
+  });
+
+  it('redefine of xs:group and xs:attributeGroup affects their consumers (#78)', () => {
+    const BASE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
+  <xs:group name="G">
+    <xs:sequence>
+      <xs:element name="old" type="xs:string"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AG">
+    <xs:attribute name="oldAttr" type="xs:string"/>
+  </xs:attributeGroup>
+</xs:schema>`;
+
+    const REDEFINE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="base.xsd">
+    <xs:group name="G">
+      <xs:sequence>
+        <xs:element name="new" type="xs:string"/>
+      </xs:sequence>
+    </xs:group>
+    <xs:attributeGroup name="AG">
+      <xs:attribute name="newAttr" type="xs:int"/>
+    </xs:attributeGroup>
+  </xs:redefine>
+  <xs:complexType name="Consumer">
+    <xs:sequence>
+      <xs:group ref="t:G"/>
+    </xs:sequence>
+    <xs:attributeGroup ref="t:AG"/>
+  </xs:complexType>
+  <xs:element name="consumer" type="t:Consumer"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, 'base.xsd'), BASE_XSD);
+      fs.writeFileSync(path.join(dir, 'redefine.xsd'), REDEFINE_XSD);
+
+      const ir = parseXsd([path.join(dir, 'redefine.xsd')]);
+      const consumer = ir.complexTypes['{urn:redefine-group}Consumer'];
+      expect(consumer).toBeDefined();
+      expect(consumer.fields.map((f) => f.qname)).toEqual([
+        '{urn:redefine-group}new',
+        '{}newAttr',
+      ]);
+      const newAttr = consumer.fields.find((f) => f.qname === '{}newAttr');
+      expect(newAttr?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}int');
+    });
+  });
+
   it('redefine-by-restriction replaces the original content model', () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-test" xmlns:t="urn:redefine-test" elementFormDefault="qualified">
@@ -250,6 +475,84 @@ describe('xsd2zod v1 pipeline', () => {
       expect(sharedField).toBeDefined();
       expect(sharedField?.typeName).toBe('{http://www.w3.org/2001/XMLSchema}string');
       expect(sharedField?.maxOccurs).toBe('unbounded');
+    });
+  });
+
+  it('parses inline xs:simpleType on elements and attributes into synthetic simple types (#75)', () => {
+    const INLINE_SIMPLE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-simple" xmlns:t="urn:inline-simple" elementFormDefault="qualified">
+  <xs:element name="age">
+    <xs:simpleType>
+      <xs:restriction base="xs:integer">
+        <xs:minInclusive value="0"/>
+        <xs:maxInclusive value="150"/>
+      </xs:restriction>
+    </xs:simpleType>
+  </xs:element>
+  <xs:complexType name="Person">
+    <xs:sequence>
+      <xs:element name="nickname">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:maxLength value="20"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="status">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="active"/>
+          <xs:enumeration value="inactive"/>
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+  <xs:element name="person" type="t:Person"/>
+</xs:schema>`;
+
+    withTempDir((dir) => {
+      const file = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(file, INLINE_SIMPLE_XSD);
+
+      const ir = parseXsd([file]);
+
+      // Top-level element: inline simpleType becomes a named simple type, not xs:string
+      const age = ir.elements['{urn:inline-simple}age'];
+      expect(age).toBeDefined();
+      expect(age.typeName).not.toBe('{http://www.w3.org/2001/XMLSchema}string');
+      const ageType = ir.simpleTypes[age.typeName];
+      expect(ageType).toBeDefined();
+      expect(ageType.baseType).toBe('{http://www.w3.org/2001/XMLSchema}integer');
+      expect(ageType.facets).toEqual([
+        { kind: 'minInclusive', value: 0 },
+        { kind: 'maxInclusive', value: 150 },
+      ]);
+
+      // Local element inside a complexType
+      const person = ir.complexTypes['{urn:inline-simple}Person'];
+      const nickname = person.fields.find((f) => f.qname === '{urn:inline-simple}nickname');
+      expect(nickname).toBeDefined();
+      const nicknameType = ir.simpleTypes[nickname!.typeName];
+      expect(nicknameType).toBeDefined();
+      expect(nicknameType.baseType).toBe('{http://www.w3.org/2001/XMLSchema}string');
+      expect(nicknameType.facets).toEqual([{ kind: 'maxLength', value: 20 }]);
+
+      // Attribute
+      const status = person.fields.find((f) => f.qname === '{}status');
+      expect(status).toBeDefined();
+      const statusType = ir.simpleTypes[status!.typeName];
+      expect(statusType).toBeDefined();
+      expect(statusType.facets).toEqual([
+        { kind: 'enumeration', value: 'active' },
+        { kind: 'enumeration', value: 'inactive' },
+      ]);
+
+      // The generated zod code uses the constraints
+      const generated = irToZod(ir);
+      expect(generated.schemas).toContain('z.number().int().min(0).max(150)');
+      expect(generated.schemas).toContain('z.string().max(20)');
+      expect(generated.schemas).toContain('z.enum(["active", "inactive"])');
     });
   });
 
@@ -846,6 +1149,112 @@ describe('xsd2zod v1 pipeline', () => {
         expect(swapType).toBeDefined();
         expect(swapType.itemType).toBeUndefined();
         expect(swapType.memberTypes).toBeDefined();
+      });
+    });
+  });
+
+  describe('misc robustness (#79)', () => {
+    it('populates targetNamespaces in the returned IR', () => {
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, XSD);
+
+        const ir = parseXsd([file]);
+        expect(ir.targetNamespaces).toEqual(['urn:test']);
+      });
+    });
+
+    it('cuts circular complexContent extensions without duplicating fields', () => {
+      const CYCLE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:cycle" xmlns:t="urn:cycle" elementFormDefault="qualified">
+  <xs:complexType name="A">
+    <xs:complexContent>
+      <xs:extension base="t:B">
+        <xs:sequence>
+          <xs:element name="aField" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="B">
+    <xs:complexContent>
+      <xs:extension base="t:A">
+        <xs:sequence>
+          <xs:element name="bField" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, CYCLE_XSD);
+
+        const ir = parseXsd([file]);
+        expect(ir.complexTypes['{urn:cycle}A'].fields.map((f) => f.qname))
+          .toEqual(['{urn:cycle}bField', '{urn:cycle}aField']);
+        expect(ir.complexTypes['{urn:cycle}B'].fields.map((f) => f.qname))
+          .toEqual(['{urn:cycle}aField', '{urn:cycle}bField']);
+      });
+    });
+
+    it('does not alias IrField objects across simpleContent derivations', () => {
+      const ALIAS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:alias" xmlns:t="urn:alias">
+  <xs:complexType name="Base">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="a" type="xs:string"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="Derived">
+    <xs:simpleContent>
+      <xs:extension base="t:Base"/>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const file = path.join(dir, 'schema.xsd');
+        fs.writeFileSync(file, ALIAS_XSD);
+
+        const ir = parseXsd([file]);
+        const baseAttr = ir.complexTypes['{urn:alias}Base'].fields.find((f) => f.qname === '{}a');
+        const derivedAttr = ir.complexTypes['{urn:alias}Derived'].fields.find((f) => f.qname === '{}a');
+        expect(derivedAttr).toBeDefined();
+        expect(derivedAttr).toEqual(baseAttr);
+        expect(derivedAttr).not.toBe(baseAttr);
+      });
+    });
+
+    it('rejects invalid minOccurs/maxOccurs values instead of producing NaN', () => {
+      const BAD_MIN_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:occurs" xmlns:t="urn:occurs">
+  <xs:complexType name="C">
+    <xs:sequence>
+      <xs:element name="a" type="xs:string" minOccurs="many"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+      const BAD_MAX_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:occurs" xmlns:t="urn:occurs">
+  <xs:complexType name="C">
+    <xs:sequence>
+      <xs:element name="a" type="xs:string" maxOccurs="lots"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+
+      withTempDir((dir) => {
+        const minFile = path.join(dir, 'min.xsd');
+        const maxFile = path.join(dir, 'max.xsd');
+        fs.writeFileSync(minFile, BAD_MIN_XSD);
+        fs.writeFileSync(maxFile, BAD_MAX_XSD);
+
+        expect(() => parseXsd([minFile])).toThrow('Invalid minOccurs value "many"');
+        expect(() => parseXsd([maxFile])).toThrow('Invalid maxOccurs value "lots"');
       });
     });
   });

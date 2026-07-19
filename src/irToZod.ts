@@ -1,4 +1,5 @@
 import { clarkToLocal } from './parseXsd.js';
+import { XSD_INTEGER_TYPE_NAMES } from './xsdBuiltins.js';
 import type {
   ComplexTypeDef,
   Facet,
@@ -10,12 +11,7 @@ import type {
 
 const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
-const NUMBER_PRIMITIVES = new Set([
-  'int', 'integer', 'long', 'short', 'byte',
-  'nonNegativeInteger', 'nonPositiveInteger', 'negativeInteger', 'positiveInteger',
-  'unsignedLong', 'unsignedInt', 'unsignedShort', 'unsignedByte',
-  'decimal', 'float', 'double'
-]);
+const NUMBER_PRIMITIVES = new Set([...XSD_INTEGER_TYPE_NAMES, 'decimal', 'float', 'double']);
 
 const splitClarkLocal = (typeName: QName): { ns: string; local: string } | undefined => {
   const match = typeName.match(/^\{(.*)}(.*)$/);
@@ -55,6 +51,10 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
     return definedTypes.has(typeName) ? `schemas[${JSON.stringify(typeName)}]` : 'z.unknown()';
   }
 
+  if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
+    return 'z.number().int()';
+  }
+
   switch (parts.local) {
     case 'string':
     case 'token':
@@ -63,20 +63,6 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
       return 'z.string()';
     case 'boolean':
       return 'z.boolean()';
-    case 'int':
-    case 'integer':
-    case 'long':
-    case 'short':
-    case 'byte':
-    case 'nonNegativeInteger':
-    case 'nonPositiveInteger':
-    case 'negativeInteger':
-    case 'positiveInteger':
-    case 'unsignedLong':
-    case 'unsignedInt':
-    case 'unsignedShort':
-    case 'unsignedByte':
-      return 'z.number().int()';
     case 'decimal':
     case 'float':
     case 'double':

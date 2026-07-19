@@ -5,6 +5,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { irToZod } from './irToZod.js';
 import { parseXsd } from './parseXsd.js';
+import type { XsdIr } from './types.js';
+
+// Thrown values are usually Errors but not guaranteed to be — never print
+// "error: undefined".
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+// References the parser could not resolve are kept lenient on the IR level;
+// the CLI is where they become visible to the user (#77).
+const warnUnresolvedRefs = (ir: XsdIr): void => {
+  for (const ref of ir.unresolvedRefs) {
+    console.error(`warning: ${ref}`);
+  }
+};
 import { runPostGenerationFormatting } from './postProcess.js';
 import { readXmlFile } from './readXmlFile.js';
 import { safeParseXml } from './runtime.js';
@@ -222,6 +235,7 @@ export const cmdValidate = async (args: string[]): Promise<void> => {
   }
 
   const ir = parseXsd([result.xsdFile]);
+  warnUnresolvedRefs(ir);
   const { schemas } = irToZod(ir, { js: true });
   const mod = await importGeneratedModule(schemas);
 
@@ -270,7 +284,7 @@ export const main = async (args: string[]): Promise<number> => {
     try {
       await cmdValidate(args.slice(1));
     } catch (e) {
-      console.error(`error: ${(e as Error).message}`);
+      console.error(`error: ${errorMessage(e)}`);
       return 1;
     }
     return 0;
@@ -298,6 +312,7 @@ export const main = async (args: string[]): Promise<number> => {
     }
 
     const ir = parseXsd(files);
+    warnUnresolvedRefs(ir);
     const { schemas } = irToZod(ir);
 
     const zodFile = join(outDir, `${name}.zod.ts`);
@@ -313,7 +328,7 @@ export const main = async (args: string[]): Promise<number> => {
   } catch (e) {
     // One error style for everything that can go wrong after arg parsing:
     // missing input files, malformed XML, unwritable output paths (#82).
-    console.error(`error: ${(e as Error).message}`);
+    console.error(`error: ${errorMessage(e)}`);
     return 1;
   }
 };
