@@ -5,32 +5,62 @@ import type {
   Facet,
   IrField,
   QName,
-  RuntimeFieldMetadata,
-  RuntimeMetadata,
-  RuntimeRootMetadata,
-  RuntimeTypeMetadata,
+  SimpleTypeDef,
   XsdIr
 } from './types.js';
 
 const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
+const NUMBER_PRIMITIVES = new Set([...XSD_INTEGER_TYPE_NAMES, 'decimal', 'float', 'double']);
+
+const splitClarkLocal = (typeName: QName): { ns: string; local: string } | undefined => {
+  const match = typeName.match(/^\{(.*)}(.*)$/);
+  return match ? { ns: match[1], local: match[2] } : undefined;
+};
+
+// Resolve a (possibly user-defined) simple type to its builtin base kind, so
+// fixed/default values are coerced to the JS type the runtime produces (#87).
+const resolvePrimitiveKind = (typeName: QName, ir: XsdIr, seen?: Set<string>): 'number' | 'boolean' | 'string' => {
+  const parts = splitClarkLocal(typeName);
+  if (!parts) {
+    return 'string';
+  }
+  if (parts.ns === XSD_NS) {
+    if (NUMBER_PRIMITIVES.has(parts.local)) {
+      return 'number';
+    }
+    return parts.local === 'boolean' ? 'boolean' : 'string';
+  }
+  const seenNames = seen ?? new Set<string>();
+  if (seenNames.has(typeName)) {
+    return 'string';
+  }
+  seenNames.add(typeName);
+  const simple = ir.simpleTypes[typeName];
+  return simple ? resolvePrimitiveKind(simple.baseType, ir, seenNames) : 'string';
+};
+
 const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
-  const builtin = typeName.match(/^\{(.*)}(.*)$/);
-  if (!builtin) {
+  const parts = splitClarkLocal(typeName);
+  if (!parts) {
     return 'z.unknown()';
   }
-  const [, ns, local] = builtin;
-  if (ns !== XSD_NS) {
+  if (parts.ns !== XSD_NS) {
     // Unresolvable references (e.g. type="string" in a schema whose default
     // namespace is the targetNamespace) must not emit a dangling schemas lookup.
     return definedTypes.has(typeName) ? `schemas[${JSON.stringify(typeName)}]` : 'z.unknown()';
   }
 
-  if (XSD_INTEGER_TYPE_NAMES.has(local)) {
+  if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
     return 'z.number().int()';
   }
 
-  switch (local) {
+  switch (parts.local) {
+    case 'string':
+    case 'token':
+    case 'date':
+    case 'dateTime':
+      return 'z.string()';
     case 'boolean':
       return 'z.boolean()';
     case 'decimal':
@@ -45,30 +75,16 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
 const isStringType = (zodExpr: string): boolean => zodExpr.startsWith('z.string()');
 const isNumberType = (zodExpr: string): boolean => zodExpr.startsWith('z.number()');
 
-// fixed/default values arrive as XSD lexicals; emit them coerced to the field's
-// JS type so the literal/default matches what the runtime parser produces (#68).
-const typedLiteral = (schema: string, raw: string): string => {
-  if (isNumberType(schema)) {
+// fixed/default values arrive as XSD lexicals; emit them coerced to the JS type
+// the runtime produces for the field's (resolved) primitive kind (#68, #87).
+const typedLiteral = (kind: 'number' | 'boolean' | 'string', raw: string): string => {
+  if (kind === 'number') {
     return String(Number(raw));
   }
-  if (schema === 'z.boolean()') {
+  if (kind === 'boolean') {
     return raw === 'true' || raw === '1' ? 'true' : 'false';
   }
   return JSON.stringify(raw);
-};
-
-const withCardinality = (schema: string, field: IrField): string => {
-  let result = field.fixedValue !== undefined ? `z.literal(${typedLiteral(schema, field.fixedValue)})` : schema;
-  if (field.nillable) {
-    result = `${result}.nullable()`;
-  }
-  if (field.defaultValue !== undefined && field.fixedValue === undefined) {
-    result = `${result}.default(${typedLiteral(schema, field.defaultValue)})`;
-  }
-  if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
-    result = `z.array(${result})`;
-  }
-  return field.minOccurs === 0 ? `${result}.optional()` : result;
 };
 
 const toFieldKey = (field: IrField): string => {
@@ -79,99 +95,24 @@ const toFieldKey = (field: IrField): string => {
   return field.kind === 'attribute' ? `@${local}` : local;
 };
 
-const metadataForType = (type: ComplexTypeDef, ir: XsdIr): RuntimeTypeMetadata => ({
-  typeName: type.name,
-  fields: type.fields.map((field) => {
-    const simpleType = ir.simpleTypes[field.typeName];
-    return {
-      ...field,
-      key: toFieldKey(field),
-      ...(simpleType?.facets ? { facets: simpleType.facets } : {})
-    };
-  })
-});
+type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 
-export const buildRuntimeMetadata = (ir: XsdIr): RuntimeMetadata => {
-  const metadataTypes: RuntimeTypeMetadata[] = Object.values(ir.complexTypes).map(t => metadataForType(t, ir));
-  for (const simpleType of Object.values(ir.simpleTypes)) {
-    if (simpleType.itemType) {
-      metadataTypes.push({
-        typeName: simpleType.name,
-        fields: [],
-        baseType: simpleType.baseType,
-        listItemType: simpleType.itemType,
-        ...(simpleType.facets ? { facets: simpleType.facets } : {})
-      });
-      continue;
+const withFacets = (base: string, facets: Facet[], usage: FacetUsage): string => {
+  if (!facets.length) return base;
+
+  const enumFacets = facets.filter(f => f.kind === 'enumeration');
+  const whiteSpace = facets.find(f => f.kind === 'whiteSpace');
+  const otherFacets = facets.filter(f => f.kind !== 'enumeration' && f.kind !== 'whiteSpace');
+
+  let result = base;
+  if (enumFacets.length > 0 && otherFacets.length === 0) {
+    const values = enumFacets.map(f => f.value);
+    if (isStringType(base)) {
+      result = `z.enum([${values.map(v => JSON.stringify(v)).join(', ')}])`;
+    } else if (isNumberType(base)) {
+      result = `z.union([${values.map(v => `z.literal(${v})`).join(', ')}])`;
     }
-    if (simpleType.memberTypes) {
-      metadataTypes.push({
-        typeName: simpleType.name,
-        fields: [],
-        baseType: simpleType.baseType,
-        unionMemberTypes: simpleType.memberTypes,
-        ...(simpleType.facets ? { facets: simpleType.facets } : {})
-      });
-      continue;
-    }
-    // Plain restriction simple types carry no content-model fields: elements of
-    // these types parse to the coerced base primitive, not a {_text} object (#71).
-    metadataTypes.push({
-      typeName: simpleType.name,
-      fields: [],
-      baseType: simpleType.baseType,
-      ...(simpleType.facets ? { facets: simpleType.facets } : {})
-    });
-  }
-  const typesByQName: Record<string, RuntimeTypeMetadata> = {};
-  for (const type of metadataTypes) {
-    typesByQName[type.typeName] = type;
-  }
-
-  const rootMetadata: RuntimeRootMetadata[] = ir.rootElements
-    .map((root) => {
-      const rootDef = ir.elements[root];
-      const typeMetadata = metadataTypes.find((type) => type.typeName === rootDef.typeName);
-      return {
-        rootElement: root,
-        typeName: rootDef.typeName,
-        fields: typeMetadata?.fields ?? []
-      };
-    });
-
-  return {
-    types: typesByQName,
-    roots: rootMetadata
-  };
-};
-
-export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
-  const schemaLines: string[] = [];
-  const { types: typesByQName, roots: rootMetadata } = buildRuntimeMetadata(ir);
-  const definedTypes = new Set<string>([...Object.keys(ir.simpleTypes), ...Object.keys(ir.complexTypes)]);
-
-  schemaLines.push('// AUTO-GENERATED — DO NOT EDIT');
-  schemaLines.push("import { z } from 'zod';");
-  schemaLines.push('const schemas: Record<string, z.ZodTypeAny> = {};');
-
-  const withFacets = (base: string, facets: Facet[]): string => {
-    if (!facets.length) return base;
-
-    const enumFacets = facets.filter(f => f.kind === 'enumeration');
-    const otherFacets = facets.filter(f => f.kind !== 'enumeration' && f.kind !== 'whiteSpace');
-
-    if (enumFacets.length > 0 && otherFacets.length === 0) {
-      const values = enumFacets.map(f => f.value);
-      if (isStringType(base)) {
-        return `z.enum([${values.map(v => JSON.stringify(v)).join(', ')}])`;
-      }
-      if (isNumberType(base)) {
-        return `z.union([${values.map(v => `z.literal(${v})`).join(', ')}])`;
-      }
-      return base;
-    }
-
-    let result = base;
+  } else {
     for (const facet of otherFacets) {
       switch (facet.kind) {
         case 'pattern':
@@ -198,110 +139,250 @@ export const irToZod = (ir: XsdIr): { schemas: string; metadata: string } => {
         case 'maxExclusive':
           result += `.lt(${facet.value})`;
           break;
-        case 'totalDigits': {
-          const limit = Math.pow(10, facet.value) - 1;
-          result += `.min(${-limit}).max(${limit})`;
+        case 'totalDigits':
+          usage.totalDigits = true;
+          result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
           break;
-        }
-        case 'fractionDigits': {
-          const step = Math.pow(10, -facet.value);
-          result += `.multipleOf(${step})`;
+        case 'fractionDigits':
+          usage.fractionDigits = true;
+          result += `.refine(xsdFractionDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} fraction digits`)} })`;
           break;
-        }
       }
     }
 
     if (enumFacets.length > 0) {
       const values = enumFacets.map(f => JSON.stringify(f.value));
-      result += `.refine((val) => [${values.join(', ')}].includes(val))`;
+      result += `.refine((val) => [${values.join(', ')}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
+  }
 
-    return result;
+  // whiteSpace applies before the other facets per XSD, so it wraps the
+  // checked schema in a preprocess (#69). 'preserve' is deliberately a no-op.
+  if (whiteSpace?.value === 'collapse') {
+    result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
+  } else if (whiteSpace?.value === 'replace') {
+    result = `z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, ${result})`;
+  }
+
+  return result;
+};
+
+// Emit simple types in dependency order — a restriction/list/union can
+// reference a user-defined type declared later in the XSD, and the generated
+// module evaluates these assignments eagerly (#72).
+const sortSimpleTypes = (ir: XsdIr): SimpleTypeDef[] => {
+  const types = Object.values(ir.simpleTypes);
+  const byName = new Map(types.map((t) => [t.name, t]));
+  const dependencies = (t: SimpleTypeDef): SimpleTypeDef[] =>
+    [t.baseType, t.itemType, ...(t.memberTypes ?? [])]
+      .map((dep) => (dep === undefined ? undefined : byName.get(dep)))
+      .filter((dep): dep is SimpleTypeDef => dep !== undefined);
+
+  const sorted: SimpleTypeDef[] = [];
+  const visited = new Set<string>();
+  const visit = (t: SimpleTypeDef): void => {
+    if (visited.has(t.name)) {
+      return;
+    }
+    visited.add(t.name);
+    for (const dep of dependencies(t)) {
+      visit(dep);
+    }
+    sorted.push(t);
   };
+  for (const t of types) {
+    visit(t);
+  }
+  return sorted;
+};
 
-  for (const simpleType of Object.values(ir.simpleTypes)) {
+const withCardinality = (schema: string, field: IrField, ir: XsdIr, forceOptional: boolean): string => {
+  const kind = resolvePrimitiveKind(field.typeName, ir);
+  let result = field.fixedValue !== undefined ? `z.literal(${typedLiteral(kind, field.fixedValue)})` : schema;
+  if (field.nillable) {
+    result += '.nullable()';
+  }
+  if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
+    result = `z.array(${result})`;
+  }
+  if (field.minOccurs === 0 || forceOptional) {
+    result += '.optional()';
+  }
+  // Attribute defaults apply on absence — zod .default() (after .optional(),
+  // which would otherwise make it dead). Element defaults are NOT emitted as
+  // .default(): XSD applies them to present-but-empty elements, not absent
+  // ones, so the runtime substitutes them via meta.defaultValue (#66).
+  if (field.kind === 'attribute' && field.defaultValue !== undefined && field.fixedValue === undefined) {
+    result += `.default(${typedLiteral(kind, field.defaultValue)})`;
+  }
+  return result;
+};
+
+// Choice groups with more than one branch: mutual exclusion is not expressible
+// as a plain zod type (and discriminated unions only scale to one group per
+// type), so branch fields become optional plus a refine per group (#73).
+// Branches come from the IR's choiceBranch: a group ref or nested compositor
+// keeps its fields together as one branch (ipo-style shipTo+billTo vs
+// singleAddress). Single-branch groups need no check — exactly-one-of-one is
+// the field cardinality itself.
+const choiceBranches = (type: ComplexTypeDef, group: string): IrField[][] => {
+  const byBranch = new Map<string, IrField[]>();
+  for (const field of type.fields) {
+    if (field.choiceGroup !== group || field.kind !== 'element') {
+      continue;
+    }
+    const key = field.choiceBranch ?? toFieldKey(field);
+    const branch = byBranch.get(key) ?? [];
+    branch.push(field);
+    byBranch.set(key, branch);
+  }
+  return [...byBranch.values()];
+};
+
+const multiBranchGroups = (type: ComplexTypeDef): Set<string> => {
+  const groups = new Set<string>();
+  for (const field of type.fields) {
+    if (field.choiceGroup && field.kind === 'element' && choiceBranches(type, field.choiceGroup).length > 1) {
+      groups.add(field.choiceGroup);
+    }
+  }
+  return groups;
+};
+
+const choiceRefines = (type: ComplexTypeDef): string[] => {
+  const keyOf = (field: IrField): string => `val[${JSON.stringify(toFieldKey(field))}]`;
+
+  const refines: string[] = [];
+  for (const group of multiBranchGroups(type)) {
+    const branches = choiceBranches(type, group);
+    const requiredChoice = branches.flat().some((f) => f.minOccurs > 0);
+
+    const lines: string[] = [];
+    const completeNames: string[] = [];
+    const partialNames: string[] = [];
+    // Presence, not just definedness: the runtime materializes an absent
+    // repeated field as [] (readField), and [] !== undefined would count the
+    // branch as selected — an empty array is zero occurrences, i.e. absent.
+    lines.push(`const has = (v: unknown): boolean => v !== undefined && !(Array.isArray(v) && v.length === 0);`);
+    branches.forEach((branch, i) => {
+      const requiredKeys = branch.filter((f) => f.minOccurs > 0).map(keyOf);
+      const allKeys = branch.map(keyOf);
+      // A branch is complete when all its required fields are present (or, for
+      // branches of only-optional fields, when any field is present). Partial
+      // presence — some but not all required fields — is always rejected.
+      if (requiredKeys.length === 1 && branch.length === 1) {
+        lines.push(`const b${i} = has(${allKeys[0]});`);
+      } else if (requiredKeys.length > 0) {
+        lines.push(`const b${i} = [${requiredKeys.join(', ')}].every(has);`);
+      } else {
+        lines.push(`const b${i} = [${allKeys.join(', ')}].some(has);`);
+      }
+      completeNames.push(`b${i}`);
+      if (requiredKeys.length > 0 && branch.length > 1) {
+        lines.push(`const p${i} = !b${i} && [${allKeys.join(', ')}].some(has);`);
+        partialNames.push(`p${i}`);
+      }
+    });
+
+    const countCheck = requiredChoice ? '=== 1' : '<= 1';
+    const partialCheck = partialNames.length > 0 ? ` && ![${partialNames.join(', ')}].some(Boolean)` : '';
+    lines.push(`return [${completeNames.join(', ')}].filter(Boolean).length ${countCheck}${partialCheck};`);
+
+    const names = branches.map((b) => b.map((f) => clarkToLocal(f.qname)).join('+')).join(', ');
+    const message = `${requiredChoice ? 'choice requires exactly one of' : 'choice allows at most one of'}: ${names}`;
+    refines.push(`.refine((val) => {\n${lines.join('\n')}\n}, { message: ${JSON.stringify(message)} })`);
+  }
+  return refines;
+};
+
+// Per-field XML knowledge lives on the containing object schema: a named type
+// can be referenced by several elements with different qnames, so field-level
+// meta on shared schemas would conflict.
+const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
+  const entries = type.fields.map((field) => {
+    const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
+    if (field.choiceGroup) {
+      parts.push(`choiceGroup: ${JSON.stringify(field.choiceGroup)}`);
+    }
+    if (field.kind === 'element' && field.defaultValue !== undefined && field.fixedValue === undefined) {
+      parts.push(`defaultValue: ${typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.defaultValue)}`);
+    }
+    return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(', ')} }`;
+  });
+  return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(', ')} }`;
+};
+
+export type IrToZodOptions = {
+  // Emit plain JavaScript (no TS type annotations) so the output can be
+  // imported directly as .mjs — used by the CLI validate subcommand.
+  js?: boolean;
+};
+
+export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } => {
+  const schemaLines: string[] = [];
+  const definedTypes = new Set<string>([...Object.keys(ir.simpleTypes), ...Object.keys(ir.complexTypes)]);
+  const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
+
+  schemaLines.push('// AUTO-GENERATED — DO NOT EDIT');
+  const importLineIndex = schemaLines.length;
+  schemaLines.push(''); // import line, filled in at the end once facet usage is known
+  schemaLines.push(opts?.js ? 'const schemas = {};' : 'const schemas: Record<string, z.ZodTypeAny> = {};');
+
+  for (const simpleType of sortSimpleTypes(ir)) {
+    let expr: string;
     if (simpleType.itemType) {
       const itemExpr = primitiveToZod(simpleType.itemType, definedTypes);
-      schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}));`);
-      continue;
-    }
-    if (simpleType.memberTypes) {
+      expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
+    } else if (simpleType.memberTypes) {
       const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes));
-      schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = z.union([${memberExprs.join(', ')}]);`);
-      continue;
+      expr = `z.union([${memberExprs.join(', ')}])`;
+    } else {
+      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes);
+      expr = simpleType.facets ? withFacets(baseExpr, simpleType.facets, usage) : baseExpr;
     }
-    const baseExpr = primitiveToZod(simpleType.baseType, definedTypes);
-    const expr = simpleType.facets ? withFacets(baseExpr, simpleType.facets) : baseExpr;
-    schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${expr};`);
+    schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${expr}.register(xmlRegistry, { qname: ${JSON.stringify(simpleType.name)} });`);
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
+    const multiBranch = multiBranchGroups(complexType);
     const props = complexType.fields
-      .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withCardinality(primitiveToZod(field.typeName, definedTypes), field)}`)
+      .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withCardinality(
+        primitiveToZod(field.typeName, definedTypes),
+        field,
+        ir,
+        field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup)
+      )}`)
       .join(', ');
 
-    const choiceGroups = [...new Set(complexType.fields.map((field) => field.choiceGroup).filter(Boolean))] as string[];
-    if (choiceGroups.length === 1) {
-      const selectedChoiceGroup = choiceGroups[0];
-      const branches = complexType.fields.filter((field) => field.choiceGroup === selectedChoiceGroup && field.kind === 'element');
-      if (branches.length > 1) {
-        const commonProps = complexType.fields
-          .filter((field) => field.choiceGroup !== selectedChoiceGroup)
-          .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withCardinality(primitiveToZod(field.typeName, definedTypes), field)}`)
-          .join(', ');
-        const branchSchemas = branches
-          .map((branch) => {
-            const key = toFieldKey(branch);
-            const branchProp = `${JSON.stringify(key)}: ${withCardinality(
-              primitiveToZod(branch.typeName, definedTypes),
-              branch
-            )}`;
-            const branchBody = [commonProps, `__choice: z.literal(${JSON.stringify(key)})`, branchProp].filter(Boolean).join(', ');
-            return `z.object({ ${branchBody} })`;
-          })
-          .join(', ');
-
-        const discriminatedUnion = `z.discriminatedUnion('__choice', [${branchSchemas}])`;
-        if (branches.every((branch) => branch.minOccurs === 0)) {
-          const withoutChoice = `z.object({ ${commonProps} })`;
-          schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.union([${discriminatedUnion}, ${withoutChoice}]));`);
-          continue;
-        }
-
-        schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => ${discriminatedUnion});`);
-        continue;
-      }
-    }
-
-    schemaLines.push(`schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}}));`);
+    schemaLines.push(
+      `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})` +
+      `.register(xmlRegistry, { ${fieldsMetaFor(complexType, ir)} });`
+    );
   }
 
   const exportNames = rootSchemaExportNames(ir.rootElements);
   for (const root of ir.rootElements) {
     const rootDef = ir.elements[root];
-    // primitiveToZod resolves builtins to literal zod expressions and named types
-    // to schemas[...] lookups — indexing schemas directly breaks for builtin-typed
-    // roots, which have no entry in the schemas record (#71).
-    const base = primitiveToZod(rootDef.typeName, definedTypes);
+    // Root exports are fresh wrapper objects: registry meta is keyed by schema
+    // object identity, so registering { root } on the shared type schema would
+    // clobber its type meta (and collide when two roots share one type).
+    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
-    schemaLines.push(`export const ${exportNames.get(root)} = ${expr};`);
+    schemaLines.push(`export const ${exportNames.get(root)} = ${expr}.register(xmlRegistry, { root: ${JSON.stringify(root)} });`);
   }
 
-  return {
-    schemas: `${schemaLines.join('\n')}\n`,
-    metadata: `// AUTO-GENERATED — DO NOT EDIT\nexport const runtimeMetadata = ${JSON.stringify(
-      {
-        types: typesByQName,
-        roots: rootMetadata
-      },
-      null,
-      2
-    )} as const;\n`
-  };
+  const xsdImports = [
+    usage.totalDigits ? 'xsdTotalDigits' : undefined,
+    usage.fractionDigits ? 'xsdFractionDigits' : undefined
+  ].filter((name): name is string => name !== undefined);
+  schemaLines[importLineIndex] =
+    `import { z } from 'zod';\n` +
+    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(', ')}` : ''} } from 'xsd2zod';`;
+
+  return { schemas: `${schemaLines.join('\n')}\n` };
 };
 
 export const fieldKeyFromIr = toFieldKey;
-export type { RuntimeFieldMetadata };
 
 // Generated export identifiers must be valid JS identifiers and unique across
 // all roots — legal XSD names (unicode letters, or the same local name in two

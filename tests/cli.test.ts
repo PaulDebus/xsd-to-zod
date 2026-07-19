@@ -2,10 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { cmdValidate, isDirectInvocation, loadMetadataFromMetaTs, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
-import { buildRuntimeMetadata } from '../src/irToZod.js';
-import { parseXsd } from '../src/parseXsd.js';
-import { withTempDir } from './helpers.js';
+import { cmdValidate, isDirectInvocation, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
+import { withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -14,13 +12,13 @@ const XSD = `<?xml version="1.0"?>
 
 // Runs the CLI in-process, capturing console output — much faster and less
 // fragile than spawning `npx tsx` per test (#83).
-const runCli = (args: string[]): { code: number; stdout: string; stderr: string } => {
+const runCli = async (args: string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
   const logs: string[] = [];
   const errors: string[] = [];
   const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')); });
   const errSpy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(' ')); });
   try {
-    return { code: main(args), stdout: logs.join('\n'), stderr: errors.join('\n') };
+    return { code: await main(args), stdout: logs.join('\n'), stderr: errors.join('\n') };
   } finally {
     logSpy.mockRestore();
     errSpy.mockRestore();
@@ -106,74 +104,74 @@ describe('parseArgs', () => {
 });
 
 describe('CLI e2e', () => {
-  it('prints USAGE on --help', () => {
-    const r = runCli(['--help']);
+  it('prints USAGE on --help', async () => {
+    const r = await runCli(['--help']);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe(USAGE.trim());
   });
 
-  it('exits with error when no files given', () => {
-    const r = runCli([]);
+  it('exits with error when no files given', async () => {
+    const r = await runCli([]);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('at least one XSD file');
   });
 
-  it('exits with error when output dir does not exist', () => {
-    withTempDir((dir) => {
+  it('exits with error when output dir does not exist', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
       const fakeDir = path.join(dir, 'does-not-exist');
-      const r = runCli([xsdFile, '-o', fakeDir]);
+      const r = await runCli([xsdFile, '-o', fakeDir]);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('output directory does not exist');
     });
   });
 
-  it('generates .zod.ts and .meta.ts files', () => {
-    withTempDir((dir) => {
+  it('generates a single .zod.ts artifact (no .meta.ts)', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      const r = runCli([xsdFile, '-o', dir, '--name', 'my']);
+      const r = await runCli([xsdFile, '-o', dir, '--name', 'my']);
 
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('Wrote');
       expect(fs.existsSync(path.join(dir, 'my.zod.ts'))).toBe(true);
-      expect(fs.existsSync(path.join(dir, 'my.meta.ts'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, 'my.meta.ts'))).toBe(false);
     });
   });
 
-  it('defaults output name to input file stem', () => {
-    withTempDir((dir) => {
+  it('defaults output name to input file stem', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'my-stem.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      const r = runCli([xsdFile, '-o', dir]);
+      const r = await runCli([xsdFile, '-o', dir]);
 
       expect(r.code).toBe(0);
       expect(fs.existsSync(path.join(dir, 'my-stem.zod.ts'))).toBe(true);
     });
   });
 
-  it('reports missing input files in the CLI error style instead of a stack trace (#82)', () => {
-    withTempDir((dir) => {
-      const r = runCli([path.join(dir, 'missing.xsd'), '-o', dir]);
+  it('reports missing input files in the CLI error style instead of a stack trace (#82)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const r = await runCli([path.join(dir, 'missing.xsd'), '-o', dir]);
       expect(r.code).toBe(1);
       expect(r.stderr).toMatch(/^error: /);
       expect(r.stderr).not.toContain('at ');
     });
   });
 
-  it('reports malformed XML in the CLI error style (#82)', () => {
-    withTempDir((dir) => {
+  it('reports malformed XML in the CLI error style (#82)', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'broken.xsd');
       fs.writeFileSync(xsdFile, '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element');
-      const r = runCli([xsdFile, '-o', dir]);
+      const r = await runCli([xsdFile, '-o', dir]);
       expect(r.code).toBe(1);
       expect(r.stderr).toMatch(/^error: /);
     });
   });
 
-  it('warns about schema references that could not be resolved (#77)', () => {
-    withTempDir((dir) => {
+  it('warns about schema references that could not be resolved (#77)', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -185,7 +183,7 @@ describe('CLI e2e', () => {
     </xs:complexType>
   </xs:element>
 </xs:schema>`);
-      const r = runCli([xsdFile, '-o', dir]);
+      const r = await runCli([xsdFile, '-o', dir]);
       expect(r.code).toBe(0);
       expect(r.stderr).toContain('warning: unresolved element ref "{urn:test}missing"');
     });
@@ -220,22 +218,17 @@ describe('isDirectInvocation (#80)', () => {
 describe('parseValidateArgs', () => {
   it('parses xsd + xml', () => {
     const r = parseValidateArgs(['data.xml', '-x', 'schema.xsd']);
-    expect(r).toMatchObject({ ok: true, help: false, xmlFile: 'data.xml', xsdFile: 'schema.xsd', metadataFile: undefined, root: undefined });
+    expect(r).toMatchObject({ ok: true, help: false, xmlFile: 'data.xml', xsdFile: 'schema.xsd', root: undefined });
   });
 
   it('parses short flags with xsd', () => {
     const r = parseValidateArgs(['data.xml', '-x', 'schema.xsd', '-r', '{urn:test}root']);
-    expect(r).toMatchObject({ ok: true, xmlFile: 'data.xml', xsdFile: 'schema.xsd', metadataFile: undefined, root: '{urn:test}root' });
+    expect(r).toMatchObject({ ok: true, xmlFile: 'data.xml', xsdFile: 'schema.xsd', root: '{urn:test}root' });
   });
 
-  it('parses long flags with metadata', () => {
-    const r = parseValidateArgs(['data.xml', '--metadata', 'meta.ts', '--root', '{urn:test}root']);
-    expect(r).toMatchObject({ ok: true, xmlFile: 'data.xml', xsdFile: undefined, metadataFile: 'meta.ts', root: '{urn:test}root' });
-  });
-
-  it('rejects --xsd and --metadata together', () => {
-    const r = parseValidateArgs(['data.xml', '--xsd', 'schema.xsd', '--metadata', 'meta.ts']);
-    expect(r).toEqual({ ok: false, error: '--xsd and --metadata are mutually exclusive' });
+  it('rejects --metadata as an unknown option', () => {
+    const r = parseValidateArgs(['data.xml', '--metadata', 'meta.ts']);
+    expect(r).toEqual({ ok: false, error: 'unknown option: --metadata' });
   });
 
   it('rejects missing xml file', () => {
@@ -243,19 +236,14 @@ describe('parseValidateArgs', () => {
     expect(r).toEqual({ ok: false, error: 'xml-file is required' });
   });
 
-  it('rejects missing source', () => {
+  it('rejects missing --xsd', () => {
     const r = parseValidateArgs(['data.xml']);
-    expect(r).toEqual({ ok: false, error: 'either --xsd or --metadata is required' });
+    expect(r).toEqual({ ok: false, error: '--xsd is required' });
   });
 
   it('rejects --xsd without value', () => {
-    const r = parseValidateArgs(['data.xml', '--xsd', '--metadata']);
+    const r = parseValidateArgs(['data.xml', '--xsd', '--root']);
     expect(r).toEqual({ ok: false, error: '--xsd/-x requires a file argument' });
-  });
-
-  it('rejects --metadata without value', () => {
-    const r = parseValidateArgs(['data.xml', '--metadata', '--xsd']);
-    expect(r).toEqual({ ok: false, error: '--metadata/-m requires a file argument' });
   });
 
   it('rejects --root without value', () => {
@@ -270,14 +258,14 @@ describe('parseValidateArgs', () => {
 });
 
 describe('CLI validate e2e', () => {
-  it('prints VALIDATE_USAGE on validate --help', () => {
-    const r = runCli(['validate', '--help']);
+  it('prints VALIDATE_USAGE on validate --help', async () => {
+    const r = await runCli(['validate', '--help']);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe(VALIDATE_USAGE.trim());
   });
 
-  it('validates XML against XSD (success)', () => {
-    withTempDir((dir) => {
+  it('validates XML against XSD (success)', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
       const xsd = `<?xml version="1.0"?>
@@ -288,15 +276,15 @@ describe('CLI validate e2e', () => {
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
 
-      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile]);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('Validation passed');
       expect(r.stdout).toContain('hello');
     });
   });
 
-  it('validates XML against XSD (failure — wrong root element)', () => {
-    withTempDir((dir) => {
+  it('validates XML against XSD (failure — wrong root element)', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
       const xsd = `<?xml version="1.0"?>
@@ -307,65 +295,30 @@ describe('CLI validate e2e', () => {
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
 
-      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile]);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('Validation failed');
     });
   });
 
-  it('validates XML against metadata file (success)', () => {
-    withTempDir((dir) => {
-      const xsdFile = path.join(dir, 'test.xsd');
-      const xmlFile = path.join(dir, 'test.xml');
-      const xsd = `<?xml version="1.0"?>
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
-  <xs:element name="greeting" type="xs:string"/>
-</xs:schema>`;
-      fs.writeFileSync(xsdFile, xsd);
-
-      const ir = parseXsd([xsdFile]);
-      const meta = buildRuntimeMetadata(ir);
-      const metaTs = `// AUTO-GENERATED — DO NOT EDIT\nexport const runtimeMetadata = ${JSON.stringify(meta, null, 2)} as const;\n`;
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(metaFile, metaTs);
-
-      const xml = '<?xml version="1.0"?><greeting xmlns="urn:test">hi</greeting>';
-      fs.writeFileSync(xmlFile, xml);
-
-      const r = runCli(['validate', xmlFile, '-m', metaFile]);
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain('Validation passed');
-    });
-  });
-
-  it('fails when xml file does not exist', () => {
-    const r = runCli(['validate', '/nonexistent.xml', '-x', '/nonexistent.xsd']);
+  it('fails when xml file does not exist', async () => {
+    const r = await runCli(['validate', '/nonexistent.xml', '-x', '/nonexistent.xsd']);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('xml file not found');
   });
 
-  it('fails when xsd file does not exist', () => {
-    withTempDir((dir) => {
+  it('fails when xsd file does not exist', async () => {
+    await withTempDirAsync(async (dir) => {
       const xmlFile = path.join(dir, 'test.xml');
       fs.writeFileSync(xmlFile, '<root/>');
-      const r = runCli(['validate', xmlFile, '-x', '/nonexistent.xsd']);
+      const r = await runCli(['validate', xmlFile, '-x', '/nonexistent.xsd']);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('xsd file not found');
     });
   });
 
-  it('fails when metadata file does not exist', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      fs.writeFileSync(xmlFile, '<root/>');
-      const r = runCli(['validate', xmlFile, '-m', '/nonexistent.meta.ts']);
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain('metadata file not found');
-    });
-  });
-
-  it('fails with multiple root elements and no --root', () => {
-    withTempDir((dir) => {
+  it('fails with multiple root elements and no --root', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
       const xsd = `<?xml version="1.0"?>
@@ -376,76 +329,87 @@ describe('CLI validate e2e', () => {
       const xml = '<?xml version="1.0"?><foo xmlns="urn:test">hi</foo>';
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
-      const r = runCli(['validate', xmlFile, '-x', xsdFile]);
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile]);
       expect(r.code).toBe(1);
       expect(r.stderr).toContain('multiple root elements found');
     });
   });
 
-  it('fails with invalid metadata file', () => {
-    withTempDir((dir) => {
-      const metaFile = path.join(dir, 'bad.meta.ts');
+  it('validates with --root selecting among multiple roots', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
-      fs.writeFileSync(metaFile, 'not valid ts');
-      fs.writeFileSync(xmlFile, '<root/>');
-      const r = runCli(['validate', xmlFile, '-m', metaFile]);
+      const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="foo" type="xs:string"/>
+  <xs:element name="bar" type="xs:string"/>
+</xs:schema>`;
+      const xml = '<?xml version="1.0"?><bar xmlns="urn:test">hi</bar>';
+      fs.writeFileSync(xsdFile, xsd);
+      fs.writeFileSync(xmlFile, xml);
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile, '--root', '{urn:test}bar']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Validation passed');
+    });
+  });
+
+  it('fails when --root does not match any schema root', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      const xmlFile = path.join(dir, 'test.xml');
+      const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="foo" type="xs:string"/>
+</xs:schema>`;
+      const xml = '<?xml version="1.0"?><foo xmlns="urn:test">hi</foo>';
+      fs.writeFileSync(xsdFile, xsd);
+      fs.writeFileSync(xmlFile, xml);
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile, '--root', '{urn:test}baz']);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain('failed to parse metadata');
-    });
-  });
-});
-
-describe('loadMetadataFromMetaTs', () => {
-  it('parses a valid .meta.ts file', () => {
-    withTempDir((dir) => {
-      const meta = {
-        types: {},
-        roots: [{ rootElement: '{urn:test}root' as const, typeName: '{urn:test}RootType' as const, fields: [] }]
-      };
-      const content = `// AUTO-GENERATED — DO NOT EDIT\nexport const runtimeMetadata = ${JSON.stringify(meta, null, 2)} as const;\n`;
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(metaFile, content);
-      const result = loadMetadataFromMetaTs(metaFile);
-      expect(result).toEqual(meta);
+      expect(r.stderr).toContain('root element {urn:test}baz not found');
     });
   });
 
-  it('throws on invalid metadata', () => {
-    withTempDir((dir) => {
-      const metaFile = path.join(dir, 'invalid.meta.ts');
-      fs.writeFileSync(metaFile, 'not json');
-      expect(() => loadMetadataFromMetaTs(metaFile)).toThrow('failed to parse metadata');
+  it('fails when the schema declares no root elements', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      const xmlFile = path.join(dir, 'test.xml');
+      const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="Orphan">
+    <xs:sequence>
+      <xs:element name="field" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`;
+      fs.writeFileSync(xsdFile, xsd);
+      fs.writeFileSync(xmlFile, '<root/>');
+      const r = await runCli(['validate', xmlFile, '-x', xsdFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('no root elements found in schema');
     });
   });
 });
 
 describe('cmdValidate unit', () => {
-  it('throws when args are invalid', () => {
-    expect(() => cmdValidate(['--xsd'])).toThrow('--xsd/-x requires a file argument');
+  it('throws when args are invalid', async () => {
+    await expect(cmdValidate(['--xsd'])).rejects.toThrow('--xsd/-x requires a file argument');
   });
 
-  it('throws when xml file not found', () => {
-    expect(() => cmdValidate(['/nonexistent.xml', '--xsd', '/nonexistent.xsd'])).toThrow('xml file not found');
+  it('throws when xml file not found', async () => {
+    await expect(cmdValidate(['/nonexistent.xml', '--xsd', '/nonexistent.xsd'])).rejects.toThrow('xml file not found');
   });
 
-  it('throws when xsd file not found', () => {
+  it('throws when xsd file not found', async () => {
     withTempDir((dir) => {
       const xmlFile = path.join(dir, 'test.xml');
       fs.writeFileSync(xmlFile, '<root/>');
-      expect(() => cmdValidate([xmlFile, '--xsd', '/nonexistent.xsd'])).toThrow('xsd file not found');
+      return expect(cmdValidate([xmlFile, '--xsd', '/nonexistent.xsd'])).rejects.toThrow('xsd file not found');
     });
   });
 
-  it('throws when metadata file not found', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      fs.writeFileSync(xmlFile, '<root/>');
-      expect(() => cmdValidate([xmlFile, '--metadata', '/nonexistent.meta.ts'])).toThrow('metadata file not found');
-    });
-  });
-
-  it('validates XML against XSD successfully', () => {
-    withTempDir((dir) => {
+  it('validates XML against XSD successfully', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
       const xsd = `<?xml version="1.0"?>
@@ -455,12 +419,12 @@ describe('cmdValidate unit', () => {
       const xml = '<?xml version="1.0"?><root xmlns="urn:test">hello</root>';
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
-      expect(() => cmdValidate([xmlFile, '--xsd', xsdFile])).not.toThrow();
+      await expect(cmdValidate([xmlFile, '--xsd', xsdFile])).resolves.toBeUndefined();
     });
   });
 
-  it('throws when XML does not match XSD', () => {
-    withTempDir((dir) => {
+  it('throws when XML does not match XSD', async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       const xmlFile = path.join(dir, 'test.xml');
       const xsd = `<?xml version="1.0"?>
@@ -470,65 +434,13 @@ describe('cmdValidate unit', () => {
       const xml = '<?xml version="1.0"?><wrong xmlns="urn:test">hello</wrong>';
       fs.writeFileSync(xsdFile, xsd);
       fs.writeFileSync(xmlFile, xml);
-      expect(() => cmdValidate([xmlFile, '--xsd', xsdFile])).toThrow('Validation failed');
+      await expect(cmdValidate([xmlFile, '--xsd', xsdFile])).rejects.toThrow('Validation failed');
     });
   });
 
-  it('throws when metadata has no roots', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(xmlFile, '<root/>');
-      const meta = { types: {}, roots: [] };
-      const content = `export const runtimeMetadata = ${JSON.stringify(meta)} as const;`;
-      fs.writeFileSync(metaFile, content);
-      expect(() => cmdValidate([xmlFile, '--metadata', metaFile])).toThrow('no root elements in metadata');
-    });
-  });
-
-  it('throws when --root element not found in metadata', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(xmlFile, '<root/>');
-      const meta = { types: {}, roots: [{ rootElement: '{urn:x}foo', typeName: '{urn:x}Foo', fields: [] }] };
-      const content = `export const runtimeMetadata = ${JSON.stringify(meta)} as const;`;
-      fs.writeFileSync(metaFile, content);
-      expect(() => cmdValidate([xmlFile, '--metadata', metaFile, '--root', '{urn:x}bar'])).toThrow('root element {urn:x}bar not found in metadata');
-    });
-  });
-
-  it('throws when metadata has multiple roots and no --root', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(xmlFile, '<root/>');
-      const meta = {
-        types: {},
-        roots: [
-          { rootElement: '{urn:x}foo', typeName: '{urn:x}Foo', fields: [] },
-          { rootElement: '{urn:x}bar', typeName: '{urn:x}Bar', fields: [] }
-        ]
-      };
-      const content = `export const runtimeMetadata = ${JSON.stringify(meta)} as const;`;
-      fs.writeFileSync(metaFile, content);
-      expect(() => cmdValidate([xmlFile, '--metadata', metaFile])).toThrow('multiple root elements found');
-    });
-  });
-
-  it('throws on invalid metadata file format', () => {
-    withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      const metaFile = path.join(dir, 'test.meta.ts');
-      fs.writeFileSync(xmlFile, '<root/>');
-      fs.writeFileSync(metaFile, 'not valid ts');
-      expect(() => cmdValidate([xmlFile, '--metadata', metaFile])).toThrow('failed to parse metadata');
-    });
-  });
-
-  it('handles --help', () => {
+  it('handles --help', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    cmdValidate(['--help']);
+    await cmdValidate(['--help']);
     expect(logSpy).toHaveBeenCalledWith(VALIDATE_USAGE);
     logSpy.mockRestore();
   });

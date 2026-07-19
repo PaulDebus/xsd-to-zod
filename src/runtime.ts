@@ -1,15 +1,14 @@
 import XMLParser from '@nodable/flexible-xml-parser';
 import { CompactBuilderFactory } from '@nodable/compact-builder';
 import type { BaseOutputBuilderFactory } from '@nodable/base-output-builder';
-import type { Facet, RuntimeFieldMetadata, RuntimeRootMetadata, RuntimeTypeMetadata } from './types.js';
-import { XSD_INTEGER_TYPE_NAMES } from './xsdBuiltins.js';
+import type { z } from 'zod';
+import { xmlRegistry, type XmlFieldMeta, type XmlMeta } from './xmlMeta.js';
 
 const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
-const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
 // Entity decoding is left to the parser; number/boolean coercion is disabled so
-// that readValue sees the raw lexicals and parsePrimitive stays the single
-// coercion point for elements and attributes (#65).
+// that readValue sees the raw lexicals and schema-driven coercion stays the
+// single coercion point for elements and attributes (#65).
 // The cast works around a declaration bug in @nodable/compact-builder@2.0.0:
 // its CompactBuilder.addElement(tag, matcher) is declared incompatible with
 // BaseOutputBuilder.addElement(tag).
@@ -119,146 +118,253 @@ export const decodeTagNameCharRefs = (xml: string): string => {
     .join('');
 };
 
-const validateFacets = (value: unknown, facets: Facet[], typeName: string): void => {
-  const enumValues = facets.filter(f => f.kind === 'enumeration').map(f => f.value);
-  if (enumValues.length > 0 && !enumValues.includes(String(value))) {
-    throw new Error(`Value ${JSON.stringify(value)} is not one of the allowed values for ${typeName}`);
-  }
+// ---------------------------------------------------------------------------
+// zod def walking — the single place that touches zod internals. All wrapper
+// unwrapping and def narrowing lives here, so a zod upgrade means one module
+// to review, not a codebase to grep.
+// ---------------------------------------------------------------------------
 
-  for (const facet of facets) {
-    switch (facet.kind) {
-      case 'pattern': {
-        if (typeof value !== 'string' || !new RegExp(facet.value).test(value)) {
-          throw new Error(`Value ${JSON.stringify(value)} does not match pattern ${facet.value} for ${typeName}`);
-        }
-        break;
-      }
-      case 'length':
-        if (typeof value === 'string' && value.length !== facet.value) {
-          throw new Error(`Value ${JSON.stringify(value)} length is not ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'minLength':
-        if (typeof value === 'string' && value.length < facet.value) {
-          throw new Error(`Value ${JSON.stringify(value)} is shorter than minimum length ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'maxLength':
-        if (typeof value === 'string' && value.length > facet.value) {
-          throw new Error(`Value ${JSON.stringify(value)} exceeds maximum length ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'minInclusive':
-        if (typeof value === 'number' && value < facet.value) {
-          throw new Error(`Value ${value} is less than minimum ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'maxInclusive':
-        if (typeof value === 'number' && value > facet.value) {
-          throw new Error(`Value ${value} exceeds maximum ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'minExclusive':
-        if (typeof value === 'number' && value <= facet.value) {
-          throw new Error(`Value ${value} is not greater than ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'maxExclusive':
-        if (typeof value === 'number' && value >= facet.value) {
-          throw new Error(`Value ${value} is not less than ${facet.value} for ${typeName}`);
-        }
-        break;
-      case 'totalDigits': {
-        if (typeof value === 'number' && Number.isFinite(value)) {
-          if (countTotalDigits(value) > facet.value) {
-            throw new Error(`Value ${value} has more than ${facet.value} total digits for ${typeName}`);
-          }
-        }
-        break;
-      }
-      case 'fractionDigits': {
-        const str = String(value);
-        const frac = str.includes('.') ? str.split('.')[1].length : 0;
-        if (frac > facet.value) {
-          throw new Error(`Value ${value} has more than ${facet.value} fraction digits for ${typeName}`);
-        }
-        break;
-      }
+type AnyDef = z.core.$ZodTypeDef;
+type AnySchema = z.core.$ZodType;
+
+const defAs = <T extends AnyDef>(def: AnyDef, type: T['type']): T | undefined =>
+  def.type === type ? (def as T) : undefined;
+
+// Peel exactly one wrapper level (lazy/optional/nullable/default/readonly);
+// returns the input unchanged when it is not a wrapper.
+const peelOnce = (schema: AnySchema): AnySchema => {
+  const def = schema._zod.def;
+  const lazy = defAs<z.core.$ZodLazyDef>(def, 'lazy');
+  if (lazy) {
+    return lazy.getter();
+  }
+  const wrapper =
+    defAs<z.core.$ZodOptionalDef>(def, 'optional') ??
+    defAs<z.core.$ZodNullableDef>(def, 'nullable') ??
+    defAs<z.core.$ZodDefaultDef>(def, 'default') ??
+    defAs<z.core.$ZodReadonlyDef>(def, 'readonly');
+  return wrapper ? wrapper.innerType : schema;
+};
+
+// Peel all modifier wrappers down to the structural schema (leaf, object,
+// array, pipe, …). Registry meta lives on specific layers (typically the lazy
+// type schema), so callers that need meta look it up *before* unwrapping.
+const unwrapModifiers = (schema: AnySchema): AnySchema => {
+  let current = schema;
+  for (;;) {
+    const next = peelOnce(current);
+    if (next === current) {
+      return current;
     }
+    current = next;
   }
 };
 
-// Number of significant digits in the XSD canonical representation of a
-// number: exponent form is expanded so neither 'e'/'-' nor leading zeros count.
-const countTotalDigits = (value: number): number => {
-  const abs = Math.abs(value);
-  if (abs === 0) {
-    return 1;
+const objectDefOf = (schema: AnySchema): z.core.$ZodObjectDef | undefined =>
+  defAs<z.core.$ZodObjectDef>(unwrapModifiers(schema)._zod.def, 'object');
+
+const hasObjectShape = (schema: AnySchema): boolean => objectDefOf(schema) !== undefined;
+
+// Walk the wrapper chain until a schema carries registry meta with a `root`
+// qname — root exports register it on their outermost wrapper.
+const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
+  let current = schema;
+  for (;;) {
+    const meta = xmlRegistry.get(current);
+    if (meta?.root) {
+      return meta;
+    }
+    const next = peelOnce(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
   }
-  const [mantissa, exponent] = abs.toExponential(15).split('e');
-  const digits = mantissa.replace('.', '').replace(/0+$/, '') || '0';
-  const exp = Number(exponent);
-  return exp >= 0 ? Math.max(digits.length, exp + 1) : digits.length;
 };
+
+// Walk the wrapper chain until a schema carries registry meta with a `fields`
+// map — type schemas register it on the lazy wrapper, which may sit below a
+// root export wrapper or array/optional cardinality wrappers.
+const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined => {
+  let current = schema;
+  for (;;) {
+    const meta = xmlRegistry.get(current);
+    if (meta?.fields) {
+      return meta.fields;
+    }
+    const next = peelOnce(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
+  }
+};
+
+type FieldAnalysis = {
+  // Schema for one occurrence / the leaf. Lazy type schemas are kept intact:
+  // their registry meta (the fields map) is keyed on the lazy object.
+  itemSchema: AnySchema;
+  isArray: boolean;
+  hasDefault: boolean;
+  defaultValue: unknown;
+  hasFixed: boolean;
+  fixedValue: unknown;
+};
+
+const analyzeField = (schema: AnySchema): FieldAnalysis => {
+  let current = schema;
+  let isArray = false;
+  let hasDefault = false;
+  let defaultValue: unknown;
+  let hasFixed = false;
+  let fixedValue: unknown;
+  for (;;) {
+    const def = current._zod.def;
+    const optional = defAs<z.core.$ZodOptionalDef>(def, 'optional');
+    if (optional) {
+      current = optional.innerType;
+      continue;
+    }
+    const nullable = defAs<z.core.$ZodNullableDef>(def, 'nullable');
+    if (nullable) {
+      current = nullable.innerType;
+      continue;
+    }
+    const readonly = defAs<z.core.$ZodReadonlyDef>(def, 'readonly');
+    if (readonly) {
+      current = readonly.innerType;
+      continue;
+    }
+    const array = defAs<z.core.$ZodArrayDef>(def, 'array');
+    if (array) {
+      isArray = true;
+      current = array.element;
+      continue;
+    }
+    const dfault = defAs<z.core.$ZodDefaultDef>(def, 'default');
+    if (dfault) {
+      hasDefault = true;
+      defaultValue = dfault.defaultValue;
+      current = dfault.innerType;
+      continue;
+    }
+    const literal = defAs<z.core.$ZodLiteralDef<z.core.util.Literal>>(def, 'literal');
+    if (literal) {
+      hasFixed = true;
+      fixedValue = literal.values[0];
+    }
+    return { itemSchema: current, isArray, hasDefault, defaultValue, hasFixed, fixedValue };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Schema-driven lexical coercion — the single coercion point. The schema's own
+// def decides the conversion; there are no metadata typeNames anymore.
+// ---------------------------------------------------------------------------
 
 const BOOLEAN_LEXICALS = new Set(['true', 'false', '0', '1']);
-
-const DECIMAL_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
 const INTEGER_LEXICAL = /^[+-]?\d+$/;
 const FLOAT_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const INT_FORMATS = new Set(['safeint', 'int32', 'uint32', 'int64', 'uint64']);
 
-const parsePrimitive = (raw: unknown, typeName: string, facets?: Facet[]): unknown => {
-  const { namespace: ns, local } = splitClark(typeName);
-  if (ns !== XSD_NS) {
-    if (facets) {
-      validateFacets(raw, facets, typeName);
-    }
-    return raw;
-  }
+const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
+  (def.checks ?? []).some((check) => {
+    const checkDef = check._zod.def as { check?: string; format?: string };
+    return checkDef.check === 'number_format' && INT_FORMATS.has(checkDef.format ?? '');
+  });
 
-  if (raw === null || raw === undefined) {
-    return raw;
+const coerceNumberValue = (trimmed: string): number => {
+  // The XSD float/double specials are valid lexicals, but zod's z.number()
+  // rejects non-finite numbers at the base-type level — accepting them in the
+  // walker would make the mandatory validation reject what the walker
+  // produced. Reject coherently instead; the libxml2 tier is the place for
+  // full float/double semantics (and zod cannot express them regardless).
+  if (!FLOAT_LEXICAL.test(trimmed)) {
+    throw new Error(`Invalid xs:double lexical: ${JSON.stringify(trimmed)}`);
   }
-
-  const text = String(raw).trim();
-  let value: unknown;
-  if (XSD_INTEGER_TYPE_NAMES.has(local)) {
-    if (!INTEGER_LEXICAL.test(text)) {
-      throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
-    }
-    value = Number(text);
-  } else if (local === 'boolean') {
-    if (!BOOLEAN_LEXICALS.has(text)) {
-      throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(text)}`);
-    }
-    value = text === 'true' || text === '1';
-  } else if (local === 'decimal') {
-    if (!DECIMAL_LEXICAL.test(text)) {
-      throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(text)}`);
-    }
-    value = Number(text);
-  } else if (local === 'double' || local === 'float') {
-    if (text === 'INF' || text === '+INF') {
-      value = Infinity;
-    } else if (text === '-INF') {
-      value = -Infinity;
-    } else if (text === 'NaN') {
-      value = NaN;
-    } else {
-      if (!FLOAT_LEXICAL.test(text)) {
-        throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(text)}`);
-      }
-      value = Number(text);
-    }
-  } else {
-    value = String(raw);
-  }
-
-  if (facets) {
-    validateFacets(value, facets, typeName);
-  }
-  return value;
+  return Number(trimmed);
 };
+
+const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
+  const trimmed = raw.trim();
+  if (isIntChecked(def)) {
+    if (!INTEGER_LEXICAL.test(trimmed)) {
+      throw new Error(`Invalid xs:int lexical: ${JSON.stringify(trimmed)}`);
+    }
+    return Number(trimmed);
+  }
+  return coerceNumberValue(trimmed);
+};
+
+const coerceBoolean = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (!BOOLEAN_LEXICALS.has(trimmed)) {
+    throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(trimmed)}`);
+  }
+  return trimmed === 'true' || trimmed === '1';
+};
+
+const coerceList = (raw: unknown, itemSchema: AnySchema): unknown[] =>
+  String(raw).trim().split(/\s+/).filter(Boolean).map((item) => coerceLexical(item, itemSchema));
+
+const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
+  if (raw === undefined || raw === null) {
+    return raw;
+  }
+  const def = unwrapModifiers(schema)._zod.def;
+  switch (def.type) {
+    case 'number':
+      return coerceNumber(String(raw), def as z.core.$ZodNumberDef);
+    case 'boolean':
+      return coerceBoolean(String(raw));
+    case 'string':
+      return String(raw);
+    case 'literal': {
+      const value = (def as z.core.$ZodLiteralDef<z.core.util.Literal>).values[0];
+      if (typeof value === 'number') {
+        return coerceNumberValue(String(raw).trim());
+      }
+      if (typeof value === 'boolean') {
+        return coerceBoolean(String(raw));
+      }
+      return String(raw);
+    }
+    case 'enum':
+      return String(raw);
+    case 'union': {
+      for (const option of (def as z.core.$ZodUnionDef).options) {
+        try {
+          const result = coerceLexical(raw, option);
+          if (typeof result === 'number' && Number.isNaN(result)) {
+            continue;
+          }
+          return result;
+        } catch {
+          continue;
+        }
+      }
+      return String(raw);
+    }
+    case 'pipe': {
+      const pipe = def as z.core.$ZodPipeDef;
+      const outDef = pipe.out._zod.def;
+      if (outDef.type === 'array') {
+        // XSD list: whitespace-separated lexicals, coerced per item.
+        return coerceList(raw, (outDef as z.core.$ZodArrayDef).element);
+      }
+      // Other pipes (e.g. a whiteSpace preprocess) coerce as their inner type.
+      return coerceLexical(raw, pipe.out);
+    }
+    case 'array':
+      return coerceList(raw, (def as z.core.$ZodArrayDef).element);
+    default:
+      return raw;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// XML node lookup
+// ---------------------------------------------------------------------------
 
 const findAttributeValue = (
   node: Record<string, unknown>,
@@ -285,173 +391,195 @@ const findElementValues = (
   namespaceContext: Record<string, string>
 ): unknown[] => {
   const expected = splitClark(qname);
+  const matches: unknown[] = [];
   for (const [key, value] of Object.entries(node)) {
     if (key.startsWith('@_') || key === '#text' || key === '#cdata') {
       continue;
     }
     const { prefix, local } = splitXmlName(key);
-    const childNode = (Array.isArray(value) ? value[0] : value) as Record<string, unknown> | undefined;
-    const childNsContext = childNode && typeof childNode === 'object'
-      ? withNamespaceContext(namespaceContext, childNode)
-      : namespaceContext;
-    const namespace = prefix ? (childNsContext[prefix] ?? '') : (childNsContext[''] ?? '');
-    if (local === expected.local && namespace === expected.namespace) {
-      return toArray(value);
-    }
-    if (local === expected.local && expected.namespace === '' && !prefix) {
-      return toArray(value);
-    }
-  }
-  return [];
-};
-
-const resolvePrimitiveType = (
-  typeName: string,
-  types: Record<string, RuntimeTypeMetadata>
-): { primitive: string; facets: Facet[] } => {
-  const collected: Facet[] = [];
-  let current: string | undefined = typeName;
-  const seen = new Set<string>();
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    const { namespace } = splitClark(current);
-    if (namespace === XSD_NS) {
-      return { primitive: current, facets: collected };
-    }
-    const meta: RuntimeTypeMetadata | undefined = types[current];
-    if (!meta) break;
-    if (meta.facets) collected.unshift(...meta.facets);
-    current = meta.baseType;
-  }
-  return { primitive: current ?? typeName, facets: collected };
-};
-
-const parseListValue = (
-  raw: unknown,
-  listItemType: string,
-  types: Record<string, RuntimeTypeMetadata>
-): unknown[] => {
-  if (raw === undefined || raw === null) return [];
-  const { primitive, facets } = resolvePrimitiveType(listItemType, types);
-  return String(raw).trim().split(/\s+/).filter(Boolean)
-    .map(item => parsePrimitive(item, primitive, facets.length > 0 ? facets : undefined));
-};
-
-const parseUnionValue = (
-  raw: unknown,
-  memberTypes: string[],
-  types: Record<string, RuntimeTypeMetadata>
-): unknown => {
-  if (raw === undefined || raw === null) return raw;
-  for (const mt of memberTypes) {
-    const { primitive, facets } = resolvePrimitiveType(mt, types);
-    try {
-      const result = parsePrimitive(raw, primitive, facets.length > 0 ? facets : undefined);
-      if (typeof result === 'number' && Number.isNaN(result)) {
-        continue;
-      }
-      return result;
-    } catch {
+    if (local !== expected.local) {
       continue;
     }
+    // Match per item, with each item's own xmlns context — repeated elements
+    // may redeclare namespaces per sibling (#67).
+    for (const item of toArray(value)) {
+      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
+      const itemContext = itemNode ? withNamespaceContext(namespaceContext, itemNode) : namespaceContext;
+      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      if (namespace === expected.namespace) {
+        matches.push(item);
+        continue;
+      }
+      // Unqualified local elements (elementFormDefault="unqualified") belong to
+      // no namespace, yet real-world documents put them in the inherited
+      // default namespace. Accommodate them: a field in no namespace also
+      // matches unprefixed elements (lenient by design; the libxml2 tier is
+      // the strict one).
+      if (expected.namespace === '' && !prefix) {
+        matches.push(item);
+      }
+    }
   }
-  return String(raw);
+  return matches;
 };
 
-const readValue = (
-  field: RuntimeFieldMetadata,
-  node: Record<string, unknown>,
-  namespaceContext: Record<string, string>,
-  types: Record<string, RuntimeTypeMetadata>
-): unknown => {
-  if (field.kind === 'text') {
-    const typeMeta = types[field.typeName];
-    if (typeMeta?.listItemType) {
-      return parseListValue(textOf(node), typeMeta.listItemType, types);
-    }
-    if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(textOf(node), typeMeta.unionMemberTypes, types);
-    }
-    const { primitive, facets } = resolvePrimitiveType(field.typeName, types);
-    return parsePrimitive(textOf(node), primitive, facets.length > 0 ? facets : field.facets);
-  }
-
-  const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
-
-  if (field.kind === 'attribute') {
-    const value = findAttributeValue(node, field.qname, namespaceContext);
-    const effective = value ?? field.fixedValue ?? field.defaultValue;
-    if (effective === undefined) return undefined;
-    const typeMeta = types[field.typeName];
-    if (typeMeta?.listItemType) {
-      return parseListValue(effective, typeMeta.listItemType, types);
-    }
-    if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(effective, typeMeta.unionMemberTypes, types);
-    }
-    const { primitive, facets } = resolvePrimitiveType(field.typeName, types);
-    return parsePrimitive(effective, primitive, facets.length > 0 ? facets : field.facets);
-  }
-
-  const typeMeta = types[field.typeName];
-  // Only types with real content-model fields are complex; plain restriction
-  // simple types carry no fields and parse to their base primitive (#71).
-  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes && typeMeta.fields.length > 0 ? typeMeta : undefined;
-  const resolved = resolvePrimitiveType(field.typeName, types);
-  const resolvedFacets = resolved.facets.length > 0 ? resolved.facets : field.facets;
-
-  const values = findElementValues(node, field.qname, namespaceContext).map((entry) => {
-    if (entry && typeof entry === 'object') {
-      const entryNode = entry as Record<string, unknown>;
-      const entryNamespaceContext = withNamespaceContext(namespaceContext, entryNode);
-      const nilValue = findAttributeValue(entryNode, `{${XSI_NS}}nil`, entryNamespaceContext);
-      if (nilValue === 'true' || nilValue === true || nilValue === '1' || nilValue === 1) {
-        return null;
-      }
-      if (complexType) {
-        return parseTypeFields(entryNode, complexType, entryNamespaceContext, types);
-      }
-      const text = textOf(entryNode);
-      if (typeMeta?.listItemType) {
-        return parseListValue(text, typeMeta.listItemType, types);
-      }
-      if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(text, typeMeta.unionMemberTypes, types);
-      }
-      return parsePrimitive(text, resolved.primitive, resolvedFacets);
-    }
-    if (complexType) {
-      return parseTypeFields({ '#text': entry }, complexType, namespaceContext, types);
-    }
-    if (typeMeta?.listItemType) {
-      return parseListValue(entry, typeMeta.listItemType, types);
-    }
-    if (typeMeta?.unionMemberTypes) {
-      return parseUnionValue(entry, typeMeta.unionMemberTypes, types);
-    }
-    return parsePrimitive(entry, resolved.primitive, resolvedFacets);
+const extractRoot = (
+  parsed: Record<string, unknown>,
+  expectedQName: string
+): { root: Record<string, unknown>; namespaceContext: Record<string, string> } => {
+  const expected = splitClark(expectedQName);
+  const entry = Object.entries(parsed).find(([key, value]) => {
+    const node = value && typeof value === 'object' ? (Array.isArray(value) ? value[0] : value) as Record<string, unknown> : {};
+    const namespaceContext = withNamespaceContext({}, node);
+    const { prefix, local } = splitXmlName(key);
+    const namespace = prefix ? (namespaceContext[prefix] ?? '') : (namespaceContext[''] ?? '');
+    return local === expected.local && namespace === expected.namespace;
   });
-
-  if (isArray) {
-    return values;
+  if (!entry) {
+    throw new Error(`Root element '${expectedQName}' not found in XML payload`);
   }
+  if (Array.isArray(entry[1])) {
+    // A repeated root tag parses to an array — treating its first item as the
+    // root would silently drop siblings (#67).
+    throw new Error(`XML payload contains ${entry[1].length} '${expectedQName}' root elements; expected exactly one`);
+  }
+  if (entry[1] && typeof entry[1] === 'object') {
+    const root = entry[1] as Record<string, unknown>;
+    return { root, namespaceContext: withNamespaceContext({}, root) };
+  }
+  return { root: { '#text': entry[1] }, namespaceContext: {} };
+};
 
-  if (values.length === 0) {
-    const fallback = field.fixedValue ?? field.defaultValue;
-    if (fallback !== undefined) {
-      const typeMeta = types[field.typeName];
-      if (typeMeta?.listItemType) {
-        return parseListValue(fallback, typeMeta.listItemType, types);
-      }
-      if (typeMeta?.unionMemberTypes) {
-        return parseUnionValue(fallback, typeMeta.unionMemberTypes, types);
-      }
-      return parsePrimitive(fallback, resolved.primitive, resolvedFacets);
+// ---------------------------------------------------------------------------
+// Reading: XML nodes → data, driven by the schema + registry
+// ---------------------------------------------------------------------------
+
+const readObject = (
+  schema: AnySchema,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>
+): Record<string, unknown> => {
+  const fields = findFieldsMeta(schema) ?? {};
+  const shape = objectDefOf(schema)?.shape ?? {};
+  const result: Record<string, unknown> = {};
+  for (const [key, fieldMeta] of Object.entries(fields)) {
+    const fieldSchema = shape[key];
+    if (!fieldSchema) {
+      continue;
+    }
+    const { present, value } = readField(fieldMeta, fieldSchema, node, namespaceContext);
+    if (present) {
+      result[key] = value;
     }
   }
-
-  return values[0];
+  return result;
 };
+
+const readOccurrence = (
+  field: FieldAnalysis,
+  fieldMeta: XmlFieldMeta,
+  entry: unknown,
+  namespaceContext: Record<string, string>
+): unknown => {
+  if (entry !== null && typeof entry === 'object') {
+    const childNode = entry as Record<string, unknown>;
+    const childContext = withNamespaceContext(namespaceContext, childNode);
+    const nilValue = findAttributeValue(childNode, `{${XSI_NS}}nil`, childContext);
+    if (nilValue === 'true' || nilValue === '1') {
+      return null;
+    }
+    if (hasObjectShape(field.itemSchema)) {
+      return readObject(field.itemSchema, childNode, childContext);
+    }
+    const text = textOf(childNode);
+    if (text === undefined || text === '') {
+      // Present-but-empty element: XSD applies default/fixed here (#66).
+      if (field.hasFixed) return field.fixedValue;
+      if (fieldMeta.defaultValue !== undefined) return fieldMeta.defaultValue;
+    }
+    return coerceLexical(text, field.itemSchema);
+  }
+
+  // Scalar entry: the parser yields text-only elements as bare strings.
+  if (entry === '') {
+    if (field.hasFixed) return field.fixedValue;
+    if (fieldMeta.defaultValue !== undefined) return fieldMeta.defaultValue;
+  }
+  if (hasObjectShape(field.itemSchema)) {
+    return readObject(field.itemSchema, { '#text': entry }, namespaceContext);
+  }
+  return coerceLexical(entry, field.itemSchema);
+};
+
+type FieldRead = { present: boolean; value: unknown };
+
+const readField = (
+  fieldMeta: XmlFieldMeta,
+  fieldSchema: AnySchema,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>
+): FieldRead => {
+  const field = analyzeField(fieldSchema);
+
+  if (fieldMeta.kind === 'attribute') {
+    const raw = findAttributeValue(node, fieldMeta.qname, namespaceContext);
+    if (raw === undefined) {
+      // Absent attribute: XSD applies default/fixed on absence. Validation
+      // normally fills these via zod (.default()/z.literal); on the
+      // validate:false fast path the walker supplies them from the def.
+      if (field.hasFixed) return { present: true, value: field.fixedValue };
+      if (field.hasDefault) return { present: true, value: field.defaultValue };
+      return { present: false, value: undefined };
+    }
+    return { present: true, value: coerceLexical(raw, field.itemSchema) };
+  }
+
+  if (fieldMeta.kind === 'text') {
+    const text = textOf(node);
+    if (text === undefined) {
+      return { present: false, value: undefined };
+    }
+    return { present: true, value: coerceLexical(text, field.itemSchema) };
+  }
+
+  const values = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
+    readOccurrence(field, fieldMeta, entry, namespaceContext)
+  );
+  if (field.isArray) {
+    return { present: true, value: values };
+  }
+  if (values.length > 0) {
+    return { present: true, value: values[0] };
+  }
+  // Absent element: no default/fixed substitution — XSD applies those to
+  // present-but-empty elements, not absent ones (#66).
+  return { present: false, value: undefined };
+};
+
+const walkRoot = (schema: AnySchema, xml: string): unknown => {
+  const meta = findRootMeta(schema);
+  if (!meta?.root) {
+    throw new Error('schema is not an XML root: no root qname registered in xmlRegistry');
+  }
+  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
+  const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
+
+  const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
+  if (nilValue === 'true' || nilValue === '1') {
+    return null;
+  }
+
+  const typeSchema = peelOnce(schema);
+  if (hasObjectShape(typeSchema)) {
+    return readObject(typeSchema, rootNode, namespaceContext);
+  }
+  // Simple-typed root element: the document value is the root's text content.
+  return coerceLexical(textOf(rootNode), typeSchema);
+};
+
+// ---------------------------------------------------------------------------
+// Writing: data → XML, driven by the schema + registry
+// ---------------------------------------------------------------------------
 
 const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
   if (prefixMap.has(uri)) {
@@ -472,7 +600,6 @@ const elementName = (qname: string, prefixMap: Map<string, string>): string => {
 
 type SerializeCtx = {
   prefixMap: Map<string, string>;
-  types: Record<string, RuntimeTypeMetadata>;
 };
 
 const serializePrimitive = (value: unknown): string => {
@@ -490,196 +617,159 @@ const serializeListValue = (value: unknown): string => {
   return arr.map(item => serializePrimitive(item)).join(' ');
 };
 
-const serializeField = (
-  field: RuntimeFieldMetadata,
-  value: unknown,
-  ctx: SerializeCtx
-): { attr?: string; elements: string[]; usesXsi: boolean } => {
-  const localName = elementName(field.qname, ctx.prefixMap);
-  const typeMeta = ctx.types[field.typeName];
-
-  if (field.kind === 'attribute') {
-    if (value === undefined) {
-      return { elements: [], usesXsi: false };
-    }
-    if (field.defaultValue !== undefined && String(value) === field.defaultValue) {
-      return { elements: [], usesXsi: false };
-    }
-    if (field.fixedValue !== undefined && String(value) === field.fixedValue) {
-      return { elements: [], usesXsi: false };
-    }
-    if (typeMeta?.listItemType && Array.isArray(value)) {
-      return { attr: `${localName}="${serializeListValue(value)}"`, elements: [], usesXsi: false };
-    }
-    return { attr: `${localName}="${serializePrimitive(value)}"`, elements: [], usesXsi: false };
-  }
-
-  if (field.kind === 'text') {
-    if (typeMeta?.listItemType && Array.isArray(value)) {
-      return { elements: [serializeListValue(value)], usesXsi: false };
-    }
-    return { elements: [serializePrimitive(value)], usesXsi: false };
-  }
-
-  if (field.maxOccurs !== 'unbounded' && field.maxOccurs <= 1) {
-    if (field.defaultValue !== undefined && String(value) === field.defaultValue) {
-      return { elements: [], usesXsi: false };
-    }
-    if (field.fixedValue !== undefined && String(value) === field.fixedValue) {
-      return { elements: [], usesXsi: false };
+const serializeLeaf = (schema: AnySchema, value: unknown): string => {
+  const def = unwrapModifiers(schema)._zod.def;
+  if (def.type === 'pipe') {
+    const outDef = (def as z.core.$ZodPipeDef).out._zod.def;
+    if (outDef.type === 'array') {
+      return serializeListValue(value);
     }
   }
-
-  const values = field.maxOccurs === 'unbounded' || field.maxOccurs > 1 ? (Array.isArray(value) ? value : value === undefined ? [] : [value]) : [value];
-  const pieces: string[] = [];
-  let usesXsi = false;
-  const complexType = typeMeta && !typeMeta.listItemType && !typeMeta.unionMemberTypes && typeMeta.fields.length > 0 ? typeMeta : undefined;
-
-  for (const current of values) {
-    if (current === undefined) {
-      continue;
-    }
-    if (current === null) {
-      usesXsi = true;
-      pieces.push(`<${localName} xsi:nil="true"/>`);
-      continue;
-    }
-    if (complexType && typeof current === 'object' && !Array.isArray(current)) {
-      const inner = serializeTypeFields(current as Record<string, unknown>, complexType, ctx);
-      usesXsi = usesXsi || inner.usesXsi;
-      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
-      pieces.push(`<${localName}${attrStr}>${inner.elements.join('')}</${localName}>`);
-      continue;
-    }
-    if (typeMeta?.listItemType && Array.isArray(current)) {
-      pieces.push(`<${localName}>${serializeListValue(current)}</${localName}>`);
-      continue;
-    }
-    pieces.push(`<${localName}>${serializePrimitive(current)}</${localName}>`);
+  if (def.type === 'array') {
+    return serializeListValue(value);
   }
-
-  return { elements: pieces, usesXsi };
+  return serializePrimitive(value);
 };
 
-const parseTypeFields = (
-  node: Record<string, unknown>,
-  metadata: RuntimeTypeMetadata,
-  namespaceContext: Record<string, string>,
-  types: Record<string, RuntimeTypeMetadata>
-): Record<string, unknown> => {
-  const result: Record<string, unknown> = {};
-  for (const field of metadata.fields) {
-    const value = readValue(field, node, namespaceContext, types);
-    const isArray = field.maxOccurs === 'unbounded' || field.maxOccurs > 1;
-    if (value === undefined) {
-      if (isArray) {
-        result[field.key] = [];
-      }
-      continue;
-    }
-    result[field.key] = value;
-    if (field.choiceGroup && value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
-      result.__choice = field.key;
-    }
-  }
-  return result;
-};
-
-const serializeTypeFields = (
+const writeObjectFields = (
+  schema: AnySchema,
   obj: Record<string, unknown>,
-  metadata: RuntimeTypeMetadata,
   ctx: SerializeCtx
 ): { attributes: string[]; elements: string[]; usesXsi: boolean } => {
+  const fields = findFieldsMeta(schema) ?? {};
+  const shape = objectDefOf(schema)?.shape ?? {};
   const attributes: string[] = [];
   const elements: string[] = [];
   let usesXsi = false;
-  for (const field of metadata.fields) {
-    const fieldResult = serializeField(field, obj[field.key], ctx);
-    if (fieldResult.attr) {
-      attributes.push(fieldResult.attr);
+
+  for (const [key, fieldMeta] of Object.entries(fields)) {
+    const fieldSchema = shape[key];
+    const value = obj[key];
+    if (!fieldSchema) {
+      continue;
     }
-    elements.push(...fieldResult.elements);
-    usesXsi = usesXsi || fieldResult.usesXsi;
+    const field = analyzeField(fieldSchema);
+
+    if (fieldMeta.kind === 'attribute') {
+      if (value === undefined) {
+        continue;
+      }
+      // XSD: an attribute equal to its default need not be written.
+      if (field.hasDefault && value === field.defaultValue) {
+        continue;
+      }
+      attributes.push(`${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeLeaf(field.itemSchema, value)}"`);
+      continue;
+    }
+
+    if (fieldMeta.kind === 'text') {
+      elements.push(serializeLeaf(field.itemSchema, value));
+      continue;
+    }
+
+    if (value === undefined) {
+      continue;
+    }
+    // Elements are always written when present in the data — even when equal
+    // to their default/fixed, which are parse-time concerns only (#66).
+    const localName = elementName(fieldMeta.qname, ctx.prefixMap);
+    const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
+    for (const item of values) {
+      if (item === undefined) {
+        continue;
+      }
+      if (item === null) {
+        usesXsi = true;
+        elements.push(`<${localName} xsi:nil="true"/>`);
+        continue;
+      }
+      if (hasObjectShape(field.itemSchema) && typeof item === 'object' && !Array.isArray(item)) {
+        const inner = writeObjectFields(field.itemSchema, item as Record<string, unknown>, ctx);
+        usesXsi = usesXsi || inner.usesXsi;
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+        elements.push(`<${localName}${attrStr}>${inner.elements.join('')}</${localName}>`);
+        continue;
+      }
+      elements.push(`<${localName}>${serializeLeaf(field.itemSchema, item)}</${localName}>`);
+    }
   }
+
   return { attributes, elements, usesXsi };
 };
 
-const extractRoot = (
-  parsed: Record<string, unknown>,
-  expectedQName: string
-): { root: Record<string, unknown>; namespaceContext: Record<string, string> } => {
-  const expected = splitClark(expectedQName);
-  const entry = Object.entries(parsed).find(([key, value]) => {
-    const node = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-    const namespaceContext = withNamespaceContext({}, node);
-    const { prefix, local } = splitXmlName(key);
-    const namespace = prefix ? (namespaceContext[prefix] ?? '') : (namespaceContext[''] ?? '');
-    return local === expected.local && namespace === expected.namespace;
-  });
-  if (!entry) {
-    throw new Error(`Root element '${expectedQName}' not found in XML payload`);
-  }
-  if (entry[1] && typeof entry[1] === 'object') {
-    const root = entry[1] as Record<string, unknown>;
-    return { root, namespaceContext: withNamespaceContext({}, root) };
-  }
-  return { root: { '#text': entry[1] }, namespaceContext: {} };
+// ---------------------------------------------------------------------------
+// Public API — mirrors zod: parseXml throws, safeParseXml returns a result.
+// ---------------------------------------------------------------------------
+
+export type ParseXmlOptions = {
+  // Skip the final schema validation. Fast path for input already checked by
+  // the libxml2 conformance tier (xsd2zod/validate).
+  validate?: false;
 };
 
-export const parseXmlWithMetadata = <T>(
+/**
+ * Parse XML against a generated root schema. Returns the walked data validated
+ * by `schema.safeParse` (validation is enforced by construction), or a failure
+ * result carrying the ZodError — or the plain Error for structural problems
+ * (root not found, invalid lexicals).
+ */
+export const safeParseXml = <S extends z.ZodType>(
+  schema: S,
   xml: string,
-  root: RuntimeRootMetadata,
-  types: Record<string, RuntimeTypeMetadata>
-): T => {
-  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
-  const { root: rootNode, namespaceContext } = extractRoot(parsed, root.rootElement);
-
-  const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
-  if (nilValue === 'true' || nilValue === '1') {
-    return null as T;
+  opts?: ParseXmlOptions
+): { success: true; data: z.output<S> } | { success: false; error: unknown } => {
+  let data: unknown;
+  try {
+    data = walkRoot(schema, xml);
+  } catch (error) {
+    return { success: false, error };
   }
-
-  if (root.fields.length === 0) {
-    // Simple-typed root element: the document value is the root's text content (#71).
-    const textField: RuntimeFieldMetadata = {
-      key: '_text',
-      kind: 'text',
-      qname: '{}_text' as RuntimeFieldMetadata['qname'],
-      typeName: root.typeName,
-      minOccurs: 1,
-      maxOccurs: 1
-    };
-    return readValue(textField, rootNode, namespaceContext, types) as T;
+  if (opts?.validate === false) {
+    return { success: true, data: data as z.output<S> };
   }
-
-  return parseTypeFields(rootNode, root, namespaceContext, types) as T;
+  const result = schema.safeParse(data);
+  return result.success
+    ? { success: true, data: result.data as z.output<S> }
+    : { success: false, error: result.error };
 };
 
-export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
-  obj: T,
-  root: RuntimeRootMetadata,
-  types: Record<string, RuntimeTypeMetadata>
-): string => {
-  const rootInfo = splitClark(root.rootElement);
+/**
+ * Parse XML against a generated root schema; throws ZodError on validation
+ * failure (and plain Errors for structural problems). Use safeParseXml for a
+ * result-object variant.
+ */
+export const parseXml = <S extends z.ZodType>(schema: S, xml: string, opts?: ParseXmlOptions): z.output<S> => {
+  const result = safeParseXml(schema, xml, opts);
+  if (!result.success) {
+    throw result.error;
+  }
+  return result.data;
+};
+
+/** Serialize data back to XML against the same generated root schema. */
+export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>): string => {
+  const meta = findRootMeta(schema);
+  if (!meta?.root) {
+    throw new Error('schema is not an XML root: no root qname registered in xmlRegistry');
+  }
+  const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
-    types,
   };
 
-  let body: string;
+  const typeSchema = peelOnce(schema);
+  let body = '';
   let attributes: string[] = [];
   let usesXsi = false;
-  if (obj === null || obj === undefined) {
+  if (data === null || data === undefined) {
     usesXsi = true;
-    body = '';
-  } else if (root.fields.length === 0) {
-    const typeMeta = types[root.typeName];
-    body = typeMeta?.listItemType ? serializeListValue(obj) : serializePrimitive(obj);
-  } else {
-    const inner = serializeTypeFields(obj, root, ctx);
+  } else if (hasObjectShape(typeSchema)) {
+    const inner = writeObjectFields(typeSchema, data as Record<string, unknown>, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join('');
+  } else {
+    body = serializeLeaf(typeSchema, data);
   }
 
   const nsDecls: string[] = [];
@@ -700,21 +790,10 @@ export const serializeXmlWithMetadata = <T extends Record<string, unknown>>(
   }
 
   const attrs = [...nsDecls, ...attributes].join(' ');
-  if (obj === null || obj === undefined) {
+  if (data === null || data === undefined) {
     const nilAttrs = [...nsDecls, 'xsi:nil="true"'].join(' ');
     return `<${rootTag} ${nilAttrs}/>`;
   }
   const opening = attrs ? `<${rootTag} ${attrs}>` : `<${rootTag}>`;
   return `${opening}${body}</${rootTag}>`;
 };
-
-export const createRootHelpers = <T>(
-  root: RuntimeRootMetadata,
-  types: Record<string, RuntimeTypeMetadata>
-): {
-  parseXml: (xml: string) => T;
-  serializeXml: (obj: T) => string;
-} => ({
-  parseXml: (xml) => parseXmlWithMetadata<T>(xml, root, types),
-  serializeXml: (obj) => serializeXmlWithMetadata(obj as Record<string, unknown>, root, types)
-});

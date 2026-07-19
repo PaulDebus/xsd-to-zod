@@ -1,35 +1,43 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect } from 'vitest';
-import { createRootHelpers } from '../src/index.js';
-import { findRootMetadata, getRuntimeMetadata, readXmlFile } from './helpers.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { irToZod, parseXsd, safeParseXml } from '../src/index.js';
+import { findRootSchema, importGeneratedSchemas, readXmlFile } from './helpers.js';
 
 const NEGATIVE_DIR = path.resolve('testdata/curated/negative');
+
+type NegativeExpectation =
+  // Parsing must succeed with exactly this result (pinned so silent data loss
+  // becomes visible, #83).
+  | { data: unknown }
+  // Parsing must fail: `error` is a stable message substring; `zod: true`
+  // pins a ZodError (validation failure), `zod: false` a plain structural
+  // Error (root not found, invalid lexical, …).
+  | { error: string; zod: boolean };
 
 interface NegativeCase {
   name: string;
   xmlFile: string;
-  // 'throw' when parsing must fail; otherwise the exact expected parse result.
-  expected: 'throw' | unknown;
+  expected: NegativeExpectation;
 }
 
-// Invalid input must not only "not crash" — the parsed result is pinned so
-// silent data loss becomes visible (#83).
-const EXPECTED: Record<string, 'throw' | unknown> = {
-  // Runtime is lenient about cardinality: extra items are kept.
-  'invalid-max-occurs': { required: 'req', repeated: [1, 2, 3, 4, 5], '@must': 'abc' },
+const EXPECTED: Record<string, NegativeExpectation> = {
+  // Cardinality bounds are not expressible as zod checks on the array: extra
+  // items are kept (the libxml2 tier is the strict one).
+  'invalid-max-occurs': { data: { required: 'req', repeated: [1, 2, 3, 4, 5], '@must': 'abc' } },
   // Fewer items than minOccurs: kept as-is.
-  'invalid-min-occurs': { required: 'req', repeated: [1], '@must': 'abc' },
-  // Missing required element is absent from the result.
-  'invalid-missing-required-element': { optional: 'present', repeated: [1, 2], '@must': 'abc' },
-  // Root in a foreign namespace is rejected.
-  'invalid-namespace': 'throw',
+  'invalid-min-occurs': { data: { required: 'req', repeated: [1], '@must': 'abc' } },
+  // A missing required element now fails the final schema validation.
+  'invalid-missing-required-element': { error: 'Invalid input: expected string', zod: true },
+  // Root in a foreign namespace is rejected structurally.
+  'invalid-namespace': { error: "Root element '{urn:negative}strict' not found in XML payload", zod: false },
   // xsi:nil="true" on the root: content of a nilled element is dropped.
-  'invalid-nil-with-content': null,
+  'invalid-nil-with-content': { data: null },
   // Unknown elements are ignored.
-  'invalid-unexpected-element': { required: 'req', repeated: [1, 2], '@must': 'abc' },
+  'invalid-unexpected-element': { data: { required: 'req', repeated: [1, 2], '@must': 'abc' } },
   // Order is not enforced: fields are matched by name.
-  'invalid-wrong-element-order': { first: 'wrong order', second: 42, third: true },
+  'invalid-wrong-element-order': { data: { first: 'wrong order', second: 42, third: true } },
 };
 
 function discoverNegativeCases(): NegativeCase[] {
@@ -55,24 +63,40 @@ describe('negative — invalid XML handling', () => {
     return;
   }
 
-  const runtimeMetadata = getRuntimeMetadata([xsdPath]);
+  let mod: Record<string, unknown>;
+  beforeAll(async () => {
+    mod = await importGeneratedSchemas(irToZod(parseXsd([xsdPath])).schemas);
+  });
 
   for (const c of negativeCases) {
-    if (c.expected === 'throw') {
+    const expected = c.expected;
+    if ('error' in expected) {
       it(`rejects ${c.name}`, () => {
         const xml = readXmlFile(c.xmlFile);
-        const rootMeta = findRootMetadata(runtimeMetadata, xml);
+        const schema = findRootSchema(mod, xml);
 
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
-        expect(() => parseXml(xml)).toThrow();
+        const result = safeParseXml(schema, xml);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          if (expected.zod) {
+            expect(result.error).toBeInstanceOf(z.ZodError);
+          } else {
+            expect(result.error).toBeInstanceOf(Error);
+            expect(result.error).not.toBeInstanceOf(z.ZodError);
+          }
+          expect((result.error as Error).message).toContain(expected.error);
+        }
       });
     } else {
-      it(`leniently parses ${c.name} (pinned result)`, () => {
+      it(`parses ${c.name} (pinned result)`, () => {
         const xml = readXmlFile(c.xmlFile);
-        const rootMeta = findRootMetadata(runtimeMetadata, xml);
+        const schema = findRootSchema(mod, xml);
 
-        const { parseXml } = createRootHelpers<Record<string, unknown>>(rootMeta, runtimeMetadata.types);
-        expect(parseXml(xml)).toEqual(c.expected);
+        const result = safeParseXml(schema, xml);
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.data).toEqual(expected.data);
+        }
       });
     }
   }

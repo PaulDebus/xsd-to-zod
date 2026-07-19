@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildRuntimeMetadata, irToZod } from './irToZod.js';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { z } from 'zod';
+import { irToZod } from './irToZod.js';
 import { parseXsd } from './parseXsd.js';
-import { runPostGenerationFormatting } from './postProcess.js';
-import { readXmlFile } from './readXmlFile.js';
-import { parseXmlWithMetadata } from './runtime.js';
-import type { RuntimeMetadata, XsdIr } from './types.js';
+import type { XsdIr } from './types.js';
 
 // Thrown values are usually Errors but not guaranteed to be — never print
 // "error: undefined".
@@ -20,11 +18,16 @@ const warnUnresolvedRefs = (ir: XsdIr): void => {
     console.error(`warning: ${ref}`);
   }
 };
+import { runPostGenerationFormatting } from './postProcess.js';
+import { readXmlFile } from './readXmlFile.js';
+import { safeParseXml } from './runtime.js';
+import { xmlRegistry } from './xmlMeta.js';
 
 export const USAGE = `xsd2zod — XSD-to-Zod code generator
 
-Turn XSD schema files into strongly-typed Zod parsers and runtime metadata
-for XML parsing/serialization round-trips.
+Turn XSD schema files into strongly-typed Zod parsers that carry their XML
+knowledge in a zod registry — one generated artifact for XML
+parsing/serialization round-trips.
 
 Usage:
   xsd2zod <files...> [options]
@@ -35,16 +38,15 @@ Arguments:
 
 Options:
   -o, --out <dir>           Output directory (default: current directory)
-  -n, --name <name>         Basename for generated files (default: stem of first
-                            input file; required when >1 file is given)
-  -f, --format              Run prettier/biome formatter on generated files
+  -n, --name <name>         Basename for the generated file (default: stem of
+                            first input file; required when >1 file is given)
+  -f, --format              Run prettier/biome formatter on the generated file
   -h, --help                Show this help message
 
 Examples:
   xsd2zod schema.xsd -o src/generated --format
   xsd2zod types.xsd elements.xsd -n my-api -o src/generated
   xsd2zod validate data.xml --xsd schema.xsd
-  xsd2zod validate data.xml --metadata my-api.meta.ts
 `;
 
 export type ParseArgsResult =
@@ -117,7 +119,7 @@ export const parseArgs = (args: string[]): ParseArgsResult => {
   return { ok: true, help: false, files, out, name, format };
 };
 
-export const VALIDATE_USAGE = `xsd2zod validate — Validate XML against XSD schema or generated metadata
+export const VALIDATE_USAGE = `xsd2zod validate — Validate XML against an XSD schema via the generated Zod tier
 
 Usage:
   xsd2zod validate <xml-file> [options]
@@ -126,32 +128,29 @@ Arguments:
   xml-file                  XML file to validate
 
 Options:
-  -x, --xsd <file>          XSD schema file (generates metadata on the fly)
-  -m, --metadata <file>     Pre-generated .meta.ts file with runtime metadata
+  -x, --xsd <file>          XSD schema file (schemas are generated on the fly)
   -r, --root <name>         Root element QName (auto-detected when unambiguous)
   -h, --help                Show this help message
 
 Examples:
   xsd2zod validate data.xml --xsd schema.xsd
-  xsd2zod validate data.xml --metadata my-api.meta.ts
+  xsd2zod validate data.xml --xsd schema.xsd --root '{urn:example}order'
 `;
 
 export type ValidateArgsResult =
   | { ok: true; help: true }
-  | { ok: true; help: false; xmlFile: string; xsdFile?: string; metadataFile?: string; root?: string }
+  | { ok: true; help: false; xmlFile: string; xsdFile: string; root?: string }
   | { ok: false; error: string };
 
 export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
   let xmlFile: string | undefined;
   let xsdFile: string | undefined;
-  let metadataFile: string | undefined;
   let root: string | undefined;
   let i = 0;
 
   const isFlag = (arg: string): string | undefined => {
     if (arg === '--help' || arg === '-h') return 'help';
     if (arg === '--xsd' || arg === '-x') return 'xsd';
-    if (arg === '--metadata' || arg === '-m') return 'metadata';
     if (arg === '--root' || arg === '-r') return 'root';
     return undefined;
   };
@@ -165,12 +164,6 @@ export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
       xsdFile = args[i];
       if (!xsdFile || xsdFile.startsWith('-')) {
         return { ok: false, error: '--xsd/-x requires a file argument' };
-      }
-    } else if (flag === 'metadata') {
-      i++;
-      metadataFile = args[i];
-      if (!metadataFile || metadataFile.startsWith('-')) {
-        return { ok: false, error: '--metadata/-m requires a file argument' };
       }
     } else if (flag === 'root') {
       i++;
@@ -190,28 +183,11 @@ export const parseValidateArgs = (args: string[]): ValidateArgsResult => {
     return { ok: false, error: 'xml-file is required' };
   }
 
-  if (xsdFile && metadataFile) {
-    return { ok: false, error: '--xsd and --metadata are mutually exclusive' };
+  if (!xsdFile) {
+    return { ok: false, error: '--xsd is required' };
   }
 
-  if (!xsdFile && !metadataFile) {
-    return { ok: false, error: 'either --xsd or --metadata is required' };
-  }
-
-  return { ok: true, help: false, xmlFile, xsdFile, metadataFile, root };
-};
-
-export const loadMetadataFromMetaTs = (metaFile: string): RuntimeMetadata => {
-  const content = readFileSync(metaFile, 'utf8');
-  let json = content.trim();
-  json = json.replace(/^\/\/.*$/m, '').trim();
-  json = json.replace(/^export\s+const\s+runtimeMetadata\s*=\s*/, '');
-  json = json.replace(/\s*as\s+const\s*;?\s*$/, '');
-  try {
-    return JSON.parse(json) as RuntimeMetadata;
-  } catch (e) {
-    throw new Error(`failed to parse metadata file ${metaFile}: ${errorMessage(e)}`);
-  }
+  return { ok: true, help: false, xmlFile, xsdFile, root };
 };
 
 class CliError extends Error {
@@ -221,7 +197,24 @@ class CliError extends Error {
   }
 }
 
-export const cmdValidate = (args: string[]): void => {
+// Import generated code as a module. Written in a dotdir at the package root
+// so the generated 'xsd2zod' self-reference and its 'zod' import resolve
+// (self-reference does not work from inside node_modules).
+const importGeneratedModule = async (schemasCode: string): Promise<Record<string, unknown>> => {
+  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const baseDir = join(packageRoot, '.xsd2zod-cli');
+  mkdirSync(baseDir, { recursive: true });
+  const dir = mkdtempSync(join(baseDir, 'run-'));
+  try {
+    const file = join(dir, 'generated.mjs');
+    writeFileSync(file, schemasCode, 'utf8');
+    return await import(pathToFileURL(file).href) as Record<string, unknown>;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+export const cmdValidate = async (args: string[]): Promise<void> => {
   const result = parseValidateArgs(args);
 
   if (!result.ok) {
@@ -237,58 +230,59 @@ export const cmdValidate = (args: string[]): void => {
     throw new CliError(`xml file not found: ${result.xmlFile}`);
   }
 
-  let runtimeMetadata: RuntimeMetadata;
+  if (!existsSync(result.xsdFile)) {
+    throw new CliError(`xsd file not found: ${result.xsdFile}`);
+  }
 
-  if (result.xsdFile) {
-    if (!existsSync(result.xsdFile)) {
-      throw new CliError(`xsd file not found: ${result.xsdFile}`);
-    }
-    const ir = parseXsd([result.xsdFile]);
-    warnUnresolvedRefs(ir);
-    runtimeMetadata = buildRuntimeMetadata(ir);
-  } else {
-    if (!existsSync(result.metadataFile!)) {
-      throw new CliError(`metadata file not found: ${result.metadataFile}`);
-    }
-    try {
-      runtimeMetadata = loadMetadataFromMetaTs(result.metadataFile!);
-    } catch (e) {
-      throw new CliError(errorMessage(e));
+  const ir = parseXsd([result.xsdFile]);
+  warnUnresolvedRefs(ir);
+  const { schemas } = irToZod(ir, { js: true });
+  const mod = await importGeneratedModule(schemas);
+
+  const roots: { schema: z.ZodType; root: string }[] = [];
+  for (const value of Object.values(mod)) {
+    if (value !== null && typeof value === 'object' && '_zod' in value) {
+      const root = xmlRegistry.get(value as z.ZodType)?.root;
+      if (root) {
+        roots.push({ schema: value as z.ZodType, root });
+      }
     }
   }
 
-  const rootQName = result.root;
-  const rootMeta = rootQName
-    ? runtimeMetadata.roots.find((r) => r.rootElement === rootQName)
-    : runtimeMetadata.roots.length === 1
-      ? runtimeMetadata.roots[0]
+  const selected = result.root
+    ? roots.find((candidate) => candidate.root === result.root)
+    : roots.length === 1
+      ? roots[0]
       : undefined;
 
-  if (!rootMeta) {
-    if (runtimeMetadata.roots.length === 0) {
-      throw new CliError('no root elements in metadata');
-    } else if (rootQName) {
-      throw new CliError(`root element ${rootQName} not found in metadata`);
+  if (!selected) {
+    if (roots.length === 0) {
+      throw new CliError('no root elements found in schema');
+    } else if (result.root) {
+      throw new CliError(`root element ${result.root} not found; available roots: ${roots.map((r) => r.root).join(', ')}`);
     } else {
-      throw new CliError(`multiple root elements found, use --root to specify one: ${runtimeMetadata.roots.map((r) => r.rootElement).join(', ')}`);
+      throw new CliError(`multiple root elements found, use --root to specify one: ${roots.map((r) => r.root).join(', ')}`);
     }
   }
 
   const xml = readXmlFile(result.xmlFile);
 
-  try {
-    const parsed = parseXmlWithMetadata(xml, rootMeta, runtimeMetadata.types);
-    console.log('Validation passed');
-    console.log(JSON.stringify(parsed, null, 2));
-  } catch (e) {
-    throw new CliError(`Validation failed: ${errorMessage(e)}`);
+  const parsed = safeParseXml(selected.schema, xml);
+  if (!parsed.success) {
+    const detail = parsed.error instanceof z.ZodError
+      ? z.prettifyError(parsed.error)
+      : (parsed.error as Error).message;
+    throw new CliError(`Validation failed: ${detail}`);
   }
+
+  console.log('Validation passed');
+  console.log(JSON.stringify(parsed.data, null, 2));
 };
 
-export const main = (args: string[]): number => {
+export const main = async (args: string[]): Promise<number> => {
   if (args[0] === 'validate') {
     try {
-      cmdValidate(args.slice(1));
+      await cmdValidate(args.slice(1));
     } catch (e) {
       console.error(`error: ${errorMessage(e)}`);
       return 1;
@@ -319,22 +313,17 @@ export const main = (args: string[]): number => {
 
     const ir = parseXsd(files);
     warnUnresolvedRefs(ir);
-    const { schemas, metadata } = irToZod(ir);
+    const { schemas } = irToZod(ir);
 
     const zodFile = join(outDir, `${name}.zod.ts`);
-    const metaFile = join(outDir, `${name}.meta.ts`);
 
     writeFileSync(zodFile, schemas, 'utf8');
-    writeFileSync(metaFile, metadata, 'utf8');
-
-    const generated = [zodFile, metaFile];
 
     if (format) {
-      runPostGenerationFormatting(generated);
+      runPostGenerationFormatting([zodFile]);
     }
 
     console.log(`Wrote ${zodFile}`);
-    console.log(`Wrote ${metaFile}`);
     return 0;
   } catch (e) {
     // One error style for everything that can go wrong after arg parsing:
@@ -360,5 +349,5 @@ export const isDirectInvocation = (argv1: string | undefined, moduleUrl: string)
 };
 
 if (isDirectInvocation(process.argv[1], import.meta.url)) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(await main(process.argv.slice(2)));
 }

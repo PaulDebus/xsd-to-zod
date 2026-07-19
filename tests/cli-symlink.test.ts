@@ -36,7 +36,8 @@ describe.skipIf(process.platform === 'win32')('CLI e2e through the npm bin symli
       const out = execFileSync('node', [link, xsdFile, '-o', dir, '--name', 'my'], { encoding: 'utf8' });
       expect(out).toContain('Wrote');
       expect(fs.existsSync(path.join(dir, 'my.zod.ts'))).toBe(true);
-      expect(fs.existsSync(path.join(dir, 'my.meta.ts'))).toBe(true);
+      // Single artifact — no .meta.ts anymore.
+      expect(fs.existsSync(path.join(dir, 'my.meta.ts'))).toBe(false);
     });
   }, 60_000);
 });

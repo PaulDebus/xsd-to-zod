@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createRootHelpers } from '../src/index.js';
-import { extractRuntimeMetadata, withTempDir } from './helpers.js';
-import { irToZod, parseXsd } from '../src/index.js';
-import type { RuntimeRootMetadata, RuntimeTypeMetadata } from '../src/types.js';
+import type { z } from 'zod';
+import { irToZod, parseXsd, parseXml as parseXmlRuntime, serializeXml as serializeXmlRuntime } from '../src/index.js';
+import { importGeneratedSchemas, withTempDir } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:rt" xmlns:t="urn:rt" elementFormDefault="qualified">
@@ -21,21 +20,45 @@ const XSD = `<?xml version="1.0"?>
   <xs:element name="doc" type="t:DocType" nillable="true"/>
 </xs:schema>`;
 
-let parseXml: (xml: string) => Record<string, unknown>;
-let serializeXml: (obj: Record<string, unknown>) => string;
+let rootSchema: z.ZodType;
+
+const parseXml = (xml: string): Record<string, unknown> =>
+  parseXmlRuntime(rootSchema, xml) as Record<string, unknown>;
+const serializeXml = (obj: Record<string, unknown>): string =>
+  serializeXmlRuntime(rootSchema, obj);
 
 const doc = (inner: string, attrs = 'version="007" active="1"'): string =>
   `<doc xmlns="urn:rt" ${attrs}>${inner}</doc>`;
 
-beforeAll(() => {
+beforeAll(async () => {
+  let schemasCode = '';
   withTempDir((dir) => {
     const file = path.join(dir, 'schema.xsd');
     fs.writeFileSync(file, XSD);
-    const metadata = extractRuntimeMetadata(irToZod(parseXsd([file])).metadata);
-    const rootMeta: RuntimeRootMetadata = metadata.roots.find(r => r.rootElement.endsWith('}doc'))!;
-    const helpers = createRootHelpers<Record<string, unknown>>(rootMeta, metadata.types as Record<string, RuntimeTypeMetadata>);
-    parseXml = helpers.parseXml;
-    serializeXml = helpers.serializeXml;
+    schemasCode = irToZod(parseXsd([file])).schemas;
+  });
+  const mod = await importGeneratedSchemas(schemasCode);
+  rootSchema = mod.docSchema as z.ZodType;
+});
+
+describe('validation modes', () => {
+  it('parseXml throws ZodError on schema-invalid data', async () => {
+    const { z } = await import('zod');
+    // flag is xs:boolean; "true" coerces fine, but removing the required
+    // <count> makes the walked data schema-invalid.
+    expect(() => parseXml(doc('<text>x</text><flag>1</flag>'))).toThrow(z.ZodError);
+  });
+
+  it('{ validate: false } skips schema validation but still walks and coerces', async () => {
+    const { safeParseXml } = await import('../src/index.js');
+    const withoutRequired = doc('<text>x</text><flag>1</flag>');
+    const skipped = safeParseXml(rootSchema, withoutRequired, { validate: false });
+    expect(skipped.success).toBe(true);
+    if (skipped.success) {
+      expect(skipped.data).toMatchObject({ text: 'x', flag: true });
+    }
+    const validated = safeParseXml(rootSchema, withoutRequired);
+    expect(validated.success).toBe(false);
   });
 });
 
@@ -98,9 +121,13 @@ describe('type coercion (#65)', () => {
     expect(() => parseXml(doc('<text>x</text><count>1</count><flag>yes</flag>'))).toThrow('Invalid xs:boolean lexical');
   });
 
-  it('accepts INF/-INF/NaN for xs:double', () => {
-    const parsed = parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'));
-    expect(parsed.measure).toBe(-Infinity);
+  it('rejects INF/-INF/NaN coherently — zod cannot express non-finite numbers', () => {
+    // The XSD float/double specials are valid lexicals, but zod's z.number()
+    // refuses non-finite values at the base-type level, so the zod tier
+    // rejects them at the coercion point already (full float semantics belong
+    // to the libxml2 conformance tier).
+    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'))).toThrow('Invalid xs:double lexical: "-INF"');
+    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>'))).toThrow('Invalid xs:double lexical: "NaN"');
   });
 
   it('returns null for an xsi:nil root', () => {

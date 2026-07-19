@@ -1,4 +1,3 @@
 {
-  "email": "john@example.com",
-  "__choice": "email"
+  "email": "john@example.com"
 }

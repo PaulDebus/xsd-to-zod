@@ -306,7 +306,8 @@ const collectFields = (
   fields: IrField[],
   ctx: FieldCollectionContext,
   choiceGroup?: string,
-  inheritedCardinality: Cardinality = { minOccurs: 1, maxOccurs: 1 }
+  inheritedCardinality: Cardinality = { minOccurs: 1, maxOccurs: 1 },
+  choiceBranch?: string
 ): void => {
   const { nsMap, formDefaults, elements, complexTypes, syntheticTypes, groups, attributeGroups, deferredSyntheticTypes, attributes, diagnostics } = ctx;
   for (const [tag, child] of nodeChildren(container)) {
@@ -330,6 +331,7 @@ const collectFields = (
             typeName: referenced.typeName,
             nillable: child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
             choiceGroup,
+            ...(choiceBranch ? { choiceBranch } : {}),
             ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
             ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
           });
@@ -365,6 +367,7 @@ const collectFields = (
         typeName,
         nillable: child['@_nillable'] === true || child['@_nillable'] === 'true',
         choiceGroup,
+        ...(choiceBranch ? { choiceBranch } : {}),
         ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
         ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
       });
@@ -430,21 +433,35 @@ const collectFields = (
         fields,
         ctx,
         choiceGroup,
-        combineCardinality(inheritedCardinality, parseCardinality(child))
+        combineCardinality(inheritedCardinality, parseCardinality(child)),
+        choiceBranch
       );
       continue;
     }
 
     if (localTag === 'choice') {
       const groupId = `${ctx.choiceCounter.value++}`;
-      collectFields(
-        ownerNs,
-        child,
-        fields,
-        ctx,
-        groupId,
-        combineCardinality(inheritedCardinality, parseCardinality(child))
-      );
+      // Each direct child of the xs:choice is one branch. Branch identity is
+      // threaded through as choiceBranch so fields inlined from a group ref or
+      // nested compositor stay together as a single branch (#73 / ipo-style
+      // shipTo+billTo vs singleAddress choices).
+      let branchIndex = 0;
+      for (const [branchTag, branchChild] of nodeChildren(child)) {
+        const branchLocal = getNodeTagLocalName(branchTag);
+        if (branchLocal !== 'element' && branchLocal !== 'group' && branchLocal !== 'sequence' && branchLocal !== 'choice' && branchLocal !== 'all') {
+          continue;
+        }
+        const branchId = `${groupId}.${branchIndex++}`;
+        collectFields(
+          ownerNs,
+          { [branchTag]: branchChild },
+          fields,
+          ctx,
+          groupId,
+          combineCardinality(inheritedCardinality, parseCardinality(child)),
+          branchId
+        );
+      }
       continue;
     }
 
@@ -456,7 +473,7 @@ const collectFields = (
       if (groupNode) {
         collectFields(
           ownerNs, groupNode, fields, ctx,
-          choiceGroup, combineCardinality(inheritedCardinality, parseCardinality(child))
+          choiceGroup, combineCardinality(inheritedCardinality, parseCardinality(child)), choiceBranch
         );
       } else {
         diagnostics.add(`unresolved group ref "${refQName}"`);
@@ -474,7 +491,7 @@ const collectFields = (
         // referencing schema's nsMap still governs QName resolution.
         collectFields(
           attrEntry[0], attrEntry[2], fields, { ...ctx, formDefaults: attrEntry[1] },
-          choiceGroup, inheritedCardinality
+          choiceGroup, inheritedCardinality, choiceBranch
         );
       } else {
         diagnostics.add(`unresolved attributeGroup ref "${refQName}"`);
@@ -516,7 +533,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality);
+      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality, choiceBranch);
       continue;
     }
 
@@ -528,7 +545,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality);
+      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality, choiceBranch);
     }
   }
 };

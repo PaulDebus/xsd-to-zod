@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect } from 'vitest';
-import { createRootHelpers, irToZod, parseXsd, readXmlFile, rootSchemaExportNames } from '../src/index.js';
+import { z } from 'zod';
+import { irToZod, parseXsd, parseXml, readXmlFile, safeParseXml, serializeXml, xmlRegistry } from '../src/index.js';
 import { decodeTagNameCharRefs } from '../src/runtime.js';
-import type { RuntimeMetadata, RuntimeRootMetadata } from '../src/types.js';
 
 export interface TestCase {
   name: string;
@@ -55,30 +55,12 @@ export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>
   }
 };
 
-export function extractRuntimeMetadata(metadataCode: string): RuntimeMetadata {
-  const match = metadataCode.match(/runtimeMetadata = ([\s\S]+) as const;/);
-  if (!match) throw new Error('runtime metadata not found in generated output');
-  return JSON.parse(match[1]) as RuntimeMetadata;
-}
-
-export interface GeneratedFromXsds {
-  schemasCode: string;
-  metadata: RuntimeMetadata;
-}
-
-export function generateFromXsds(xsdFiles: string[]): GeneratedFromXsds {
-  const generated = irToZod(parseXsd(xsdFiles));
-  return { schemasCode: generated.schemas, metadata: extractRuntimeMetadata(generated.metadata) };
-}
-
-export function getRuntimeMetadata(xsdFiles: string[]): RuntimeMetadata {
-  return generateFromXsds(xsdFiles).metadata;
-}
-
-// Dynamically import a generated .zod.ts module. Written under node_modules so
-// the bare `zod` import resolves and the worktree stays clean.
+// Dynamically import a generated .zod.ts module. Written in a dotdir at the
+// package root so the bare `zod` import and the `xsd2zod` self-reference
+// resolve (self-reference does not work from inside node_modules), and the
+// worktree stays clean (the dotdir is gitignored).
 export async function importGeneratedSchemas(schemasCode: string): Promise<Record<string, unknown>> {
-  const baseDir = path.resolve('node_modules/.xsd2zod-tests');
+  const baseDir = path.resolve('.xsd2zod-tests');
   fs.mkdirSync(baseDir, { recursive: true });
   const dir = fs.mkdtempSync(path.join(baseDir, 'schema-'));
   try {
@@ -115,19 +97,36 @@ export function extractRootInfo(xml: string): RootInfo {
   return { local, namespace: nsDecl?.[1] ?? nsDecl?.[2] ?? '' };
 }
 
-export function findRootMetadata(
-  metadata: RuntimeMetadata,
-  xml: string,
-): RuntimeRootMetadata {
-  const xmlRoot = extractRootInfo(xml);
-  const rootMeta = metadata.roots.find(r => {
-    const localName = r.rootElement.split('}').pop()!;
-    return localName === xmlRoot.local;
-  });
-  if (!rootMeta) {
-    expect.fail(`root element <${xmlRoot.local}> not found in runtime metadata`);
+const isZodSchema = (value: unknown): value is z.ZodType =>
+  value !== null && typeof value === 'object' && '_zod' in value;
+
+// All exported root schemas of a generated module, with their registered root
+// element qnames.
+export function findRootSchemas(mod: Record<string, unknown>): { schema: z.ZodType; rootQName: string }[] {
+  const roots: { schema: z.ZodType; rootQName: string }[] = [];
+  for (const value of Object.values(mod)) {
+    if (!isZodSchema(value)) {
+      continue;
+    }
+    const root = xmlRegistry.get(value)?.root;
+    if (root) {
+      roots.push({ schema: value, rootQName: root });
+    }
   }
-  return rootMeta;
+  return roots;
+}
+
+// Pick the generated root schema matching the XML document's root element.
+export function findRootSchema(mod: Record<string, unknown>, xml: string): z.ZodType {
+  const xmlRoot = extractRootInfo(xml);
+  const roots = findRootSchemas(mod);
+  const exact = roots.find(r => r.rootQName === `{${xmlRoot.namespace}}${xmlRoot.local}`);
+  const byLocal = roots.find(r => r.rootQName.split('}').pop() === xmlRoot.local);
+  const found = exact ?? byLocal;
+  if (!found) {
+    expect.fail(`no generated root schema matches <${xmlRoot.local}> (roots: ${roots.map(r => r.rootQName).join(', ') || 'none'})`);
+  }
+  return found.schema;
 }
 
 let wasmReady: Promise<void> | null = null;
@@ -211,38 +210,27 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
   }
 }
 
-interface ZodSchemaLike {
-  safeParse: (value: unknown) => { success: boolean; error?: { message: string } };
-}
-
 export async function runRoundTrip(xsdFiles: string[], xmlFile: string, expected?: unknown): Promise<void> {
-  const { schemasCode, metadata } = generateFromXsds(xsdFiles);
+  const { schemas } = irToZod(parseXsd(xsdFiles));
   const xml = readXmlFile(xmlFile);
-  const rootMeta = findRootMetadata(metadata, xml);
+  const mod = await importGeneratedSchemas(schemas);
+  const rootSchema = findRootSchema(mod, xml);
 
-  const { parseXml, serializeXml } = createRootHelpers<Record<string, unknown>>(rootMeta, metadata.types);
-
-  const objectA = parseXml(xml);
+  const objectA = parseXml(rootSchema, xml);
   if (expected !== undefined) {
     expect(objectA).toEqual(expected);
   }
 
-  // The parser's own output must satisfy the generated zod schema (#65, #71).
-  const mod = await importGeneratedSchemas(schemasCode);
-  const exportName = rootSchemaExportNames(metadata.roots.map(r => r.rootElement)).get(rootMeta.rootElement)!;
-  const rootSchema = mod[exportName] as ZodSchemaLike | undefined;
-  if (!rootSchema || typeof rootSchema.safeParse !== 'function') {
-    expect.fail(`generated schema export '${exportName}' not found`);
-  }
-  const zodResult = rootSchema.safeParse(objectA);
-  if (!zodResult.success) {
-    expect.fail(`parseXml output rejected by generated zod schema ${exportName}: ${zodResult.error?.message ?? 'unknown error'}`);
+  // parseXml validates by construction; the result-object path must agree.
+  const safeResult = safeParseXml(rootSchema, xml);
+  if (!safeResult.success) {
+    expect.fail(`safeParseXml rejected what parseXml accepted: ${safeResult.error}`);
   }
 
-  const serialized = serializeXml(objectA);
+  const serialized = serializeXml(rootSchema, objectA);
   expect(serialized).toBeTruthy();
 
-  const objectB = parseXml(serialized);
+  const objectB = parseXml(rootSchema, serialized);
   expect(objectB).toEqual(objectA);
 
   await validateXmlAgainstSchemas(serialized, xsdFiles);
