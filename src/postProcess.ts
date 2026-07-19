@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const run = (command: string, args: string[], cwd: string): void => {
-  const result = spawnSync(command, args, { cwd, stdio: 'pipe', encoding: 'utf8' });
+  // .cmd shims (Windows) can only be spawned through a shell; quote the path
+  // so spaces in it survive the command line.
+  const isCmdShim = command.endsWith('.cmd');
+  const result = spawnSync(isCmdShim ? `"${command}"` : command, args, {
+    cwd, stdio: 'pipe', encoding: 'utf8', shell: isCmdShim
+  });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
   }
@@ -11,9 +16,13 @@ const run = (command: string, args: string[], cwd: string): void => {
 
 // Resolve the tool's local bin instead of spawning `npx <tool>`: faster, and
 // portable — `npx` is a .cmd shim on Windows and fails there without shell.
+// Only spawn what the platform can execute: on Windows the extension-less
+// shim is a POSIX shell script and equally fails without a shell, so pick the
+// .cmd shim there (spawned with shell in run()).
 const binPath = (cwd: string, binName: string): string | undefined => {
   const binDir = path.join(cwd, 'node_modules', '.bin');
-  for (const candidate of [binName, `${binName}.cmd`, `${binName}.ps1`]) {
+  const candidates = process.platform === 'win32' ? [`${binName}.cmd`] : [binName];
+  for (const candidate of candidates) {
     const full = path.join(binDir, candidate);
     if (fs.existsSync(full)) {
       return full;
@@ -26,10 +35,9 @@ const hasConfig = (cwd: string, candidates: string[]): boolean =>
   candidates.some((candidate) => fs.existsSync(path.join(cwd, candidate)));
 
 const PRETTIER_CONFIGS = ['.prettierrc', '.prettierrc.json', '.prettierrc.js', 'prettier.config.js'];
-const ESLINT_CONFIGS = [
-  'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
-  '.eslintrc', '.eslintrc.json', '.eslintrc.js', '.eslintrc.cjs'
-];
+// ESLint v9 only honours flat config; legacy .eslintrc* files are ignored and
+// eslint still exits non-zero, so they must not count as "has config" (#74).
+const ESLINT_CONFIGS = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs'];
 
 export const runPostGenerationFormatting = (generatedFiles: string[], cwd = process.cwd()): void => {
   if (generatedFiles.length === 0) {

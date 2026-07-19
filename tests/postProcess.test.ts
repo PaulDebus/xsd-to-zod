@@ -68,6 +68,16 @@ describe('runPostGenerationFormatting (#74)', () => {
     }
   });
 
+  it('skips eslint when only a legacy .eslintrc exists — ESLint v9 ignores it (#74)', () => {
+    const { cwd, log, cleanup } = setupProject(['eslint'], ['.eslintrc.json']);
+    try {
+      expect(() => runPostGenerationFormatting(['out.zod.ts'], cwd)).not.toThrow();
+      expect(readLog(log)).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('runs eslint --fix when an eslint config exists', () => {
     const { cwd, log, cleanup } = setupProject(['eslint'], ['eslint.config.js']);
     try {
