@@ -274,12 +274,11 @@ const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
   });
 
 const coerceNumberValue = (trimmed: string): number => {
-  // XSD float/double specials. Plain z.number() cannot distinguish decimal
-  // from float/double, so these are accepted for all non-int numbers — the
-  // libxml2 conformance tier is the place for exact decimal semantics.
-  if (trimmed === 'INF' || trimmed === '+INF') return Infinity;
-  if (trimmed === '-INF') return -Infinity;
-  if (trimmed === 'NaN') return NaN;
+  // The XSD float/double specials are valid lexicals, but zod's z.number()
+  // rejects non-finite numbers at the base-type level — accepting them in the
+  // walker would make the mandatory validation reject what the walker
+  // produced. Reject coherently instead; the libxml2 tier is the place for
+  // full float/double semantics (and zod cannot express them regardless).
   if (!FLOAT_LEXICAL.test(trimmed)) {
     throw new Error(`Invalid xs:double lexical: ${JSON.stringify(trimmed)}`);
   }

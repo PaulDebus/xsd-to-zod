@@ -41,6 +41,27 @@ beforeAll(async () => {
   rootSchema = mod.docSchema as z.ZodType;
 });
 
+describe('validation modes', () => {
+  it('parseXml throws ZodError on schema-invalid data', async () => {
+    const { z } = await import('zod');
+    // flag is xs:boolean; "true" coerces fine, but removing the required
+    // <count> makes the walked data schema-invalid.
+    expect(() => parseXml(doc('<text>x</text><flag>1</flag>'))).toThrow(z.ZodError);
+  });
+
+  it('{ validate: false } skips schema validation but still walks and coerces', async () => {
+    const { safeParseXml } = await import('../src/index.js');
+    const withoutRequired = doc('<text>x</text><flag>1</flag>');
+    const skipped = safeParseXml(rootSchema, withoutRequired, { validate: false });
+    expect(skipped.success).toBe(true);
+    if (skipped.success) {
+      expect(skipped.data).toMatchObject({ text: 'x', flag: true });
+    }
+    const validated = safeParseXml(rootSchema, withoutRequired);
+    expect(validated.success).toBe(false);
+  });
+});
+
 describe('entities in character data (#64)', () => {
   it('decodes predefined and numeric entities in text', () => {
     const parsed = parseXml(doc('<text>a &lt; b &amp; c &gt; d &#65;&#x42;</text><count>1</count><flag>true</flag>'));
@@ -100,15 +121,13 @@ describe('type coercion (#65)', () => {
     expect(() => parseXml(doc('<text>x</text><count>1</count><flag>yes</flag>'))).toThrow('Invalid xs:boolean lexical');
   });
 
-  it('accepts INF/-INF/NaN for xs:double', () => {
-    // The coercion layer accepts the XSD float/double specials (see
-    // coerceNumberValue). NOTE: on the default validating path these are
-    // currently rejected — zod v4's z.number() refuses non-finite numbers at
-    // the base-type level. That is a rework regression (reported, not fixed
-    // here); the walker-level behavior is pinned via the validate:false path.
-    const xml = doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>');
-    const parsed = parseXmlRuntime(rootSchema, xml, { validate: false }) as Record<string, unknown>;
-    expect(parsed.measure).toBe(-Infinity);
+  it('rejects INF/-INF/NaN coherently — zod cannot express non-finite numbers', () => {
+    // The XSD float/double specials are valid lexicals, but zod's z.number()
+    // refuses non-finite values at the base-type level, so the zod tier
+    // rejects them at the coercion point already (full float semantics belong
+    // to the libxml2 conformance tier).
+    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'))).toThrow('Invalid xs:double lexical: "-INF"');
+    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>'))).toThrow('Invalid xs:double lexical: "NaN"');
   });
 
   it('returns null for an xsi:nil root', () => {
