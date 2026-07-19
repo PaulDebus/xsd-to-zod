@@ -23,15 +23,15 @@ import { readXmlFile } from './readXmlFile.js';
 import { safeParseXml } from './runtime.js';
 import { xmlRegistry } from './xmlMeta.js';
 
-export const USAGE = `xsd2zod — XSD-to-Zod code generator
+export const USAGE = `xsd-to-zod — XSD-to-Zod code generator
 
 Turn XSD schema files into strongly-typed Zod parsers that carry their XML
 knowledge in a zod registry — one generated artifact for XML
 parsing/serialization round-trips.
 
 Usage:
-  xsd2zod <files...> [options]
-  xsd2zod validate <xml-file> [options]
+  xsd-to-zod <files...> [options]
+  xsd-to-zod validate <xml-file> [options]
 
 Arguments:
   files                     One or more XSD schema files to process
@@ -44,9 +44,9 @@ Options:
   -h, --help                Show this help message
 
 Examples:
-  xsd2zod schema.xsd -o src/generated --format
-  xsd2zod types.xsd elements.xsd -n my-api -o src/generated
-  xsd2zod validate data.xml --xsd schema.xsd
+  xsd-to-zod schema.xsd -o src/generated --format
+  xsd-to-zod types.xsd elements.xsd -n my-api -o src/generated
+  xsd-to-zod validate data.xml --xsd schema.xsd
 `;
 
 export type ParseArgsResult =
@@ -119,10 +119,10 @@ export const parseArgs = (args: string[]): ParseArgsResult => {
   return { ok: true, help: false, files, out, name, format };
 };
 
-export const VALIDATE_USAGE = `xsd2zod validate — Validate XML against an XSD schema
+export const VALIDATE_USAGE = `xsd-to-zod validate — Validate XML against an XSD schema
 
 Usage:
-  xsd2zod validate <xml-file> [options]
+  xsd-to-zod validate <xml-file> [options]
 
 Arguments:
   xml-file                  XML file to validate
@@ -138,9 +138,9 @@ Options:
   -h, --help                Show this help message
 
 Examples:
-  xsd2zod validate data.xml --xsd schema.xsd
-  xsd2zod validate data.xml --xsd schema.xsd --root '{urn:example}order'
-  xsd2zod validate data.xml --xsd schema.xsd --engine libxml2
+  xsd-to-zod validate data.xml --xsd schema.xsd
+  xsd-to-zod validate data.xml --xsd schema.xsd --root '{urn:example}order'
+  xsd-to-zod validate data.xml --xsd schema.xsd --engine libxml2
 `;
 
 export type ValidateEngine = 'zod' | 'libxml2';
@@ -218,7 +218,7 @@ class CliError extends Error {
 }
 
 // Import generated code as a module. Written in a dotdir at the package root
-// so the generated 'xsd2zod' self-reference and its 'zod' import resolve
+// so the generated 'xsd-to-zod' self-reference and its 'zod' import resolve
 // (self-reference does not work from inside node_modules).
 const importGeneratedModule = async (schemasCode: string): Promise<Record<string, unknown>> => {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -367,7 +367,7 @@ export const main = async (args: string[]): Promise<number> => {
   }
 };
 
-// npm installs the bin as a symlink (node_modules/.bin/xsd2zod → dist/cli.js);
+// npm installs the bin as a symlink (node_modules/.bin/xsd-to-zod → dist/cli.js);
 // process.argv[1] keeps the symlink path while the ESM loader resolves
 // import.meta.url to the realpath — compare realpaths on both sides so the
 // CLI actually runs when invoked through the symlink (#80).

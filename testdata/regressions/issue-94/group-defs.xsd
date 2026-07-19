@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:defs" xmlns:t="urn:types" elementFormDefault="qualified">
+  <xs:import namespace="urn:types" schemaLocation="group-types.xsd"/>
+  <xs:group name="G">
+    <xs:sequence>
+      <xs:element name="amount" type="t:Money"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:attributeGroup name="AG">
+    <xs:attribute name="currency" type="t:Currency"/>
+  </xs:attributeGroup>
+</xs:schema>

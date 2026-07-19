@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:types">
+  <xs:simpleType name="Money">
+    <xs:restriction base="xs:decimal"/>
+  </xs:simpleType>
+  <xs:simpleType name="Currency">
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+</xs:schema>

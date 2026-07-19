@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Default xmlns is the XSD namespace, targetNamespace is urn:dns: unprefixed
+     type references must resolve to the declared default namespace, not to the
+     targetNamespace fallback. -->
+<schema xmlns="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:dns" xmlns:d="urn:dns">
+  <simpleType name="Money">
+    <restriction base="decimal"/>
+  </simpleType>
+  <element name="title" type="string"/>
+  <element name="root" type="d:Main"/>
+  <complexType name="Main">
+    <sequence>
+      <element name="qty" type="int"/>
+      <element name="code">
+        <simpleType>
+          <restriction base="int"/>
+        </simpleType>
+      </element>
+    </sequence>
+  </complexType>
+</schema>

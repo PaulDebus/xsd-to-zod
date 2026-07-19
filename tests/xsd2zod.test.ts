@@ -60,7 +60,7 @@ const EXTENSION_XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 // Generate code for an inline XSD and import it as a module (the generated
-// 'xsd2zod' self-reference resolves via the package dotdir).
+// 'xsd-to-zod' self-reference resolves via the package dotdir).
 const importFromXsd = async (xsd: string): Promise<Record<string, unknown>> => {
   let mod: Record<string, unknown> = {};
   await withTempDirAsync(async (dir) => {
@@ -804,7 +804,7 @@ describe('xsd2zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits } from 'xsd2zod';"
+          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits } from 'xsd-to-zod';"
         );
       });
     });

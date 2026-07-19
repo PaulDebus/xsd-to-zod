@@ -56,7 +56,7 @@ export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>
 };
 
 // Dynamically import a generated .zod.ts module. Written in a dotdir at the
-// package root so the bare `zod` import and the `xsd2zod` self-reference
+// package root so the bare `zod` import and the `xsd-to-zod` self-reference
 // resolve (self-reference does not work from inside node_modules), and the
 // worktree stays clean (the dotdir is gitignored).
 export async function importGeneratedSchemas(schemasCode: string): Promise<Record<string, unknown>> {

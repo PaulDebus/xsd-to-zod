@@ -39,7 +39,7 @@ const loadLibxml2 = (): Promise<Libxml2> => {
       libxml2 = await import('libxml2-wasm');
     } catch {
       throw new Error(
-        "xsd2zod/validate requires the optional peer dependency 'libxml2-wasm'. Install it with: npm install libxml2-wasm"
+        "xsd-to-zod/validate requires the optional peer dependency 'libxml2-wasm'. Install it with: npm install libxml2-wasm"
       );
     }
     // Filesystem input providers let relative xs:include/xs:import resolve

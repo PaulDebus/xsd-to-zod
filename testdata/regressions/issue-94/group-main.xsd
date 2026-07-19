@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Prefix "t" is bound to a different namespace here than in group-defs.xsd:
+     members of G/AG must still resolve against the defining file's nsMap. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:main" xmlns:t="urn:WRONG" xmlns:d="urn:defs">
+  <xs:import namespace="urn:defs" schemaLocation="group-defs.xsd"/>
+  <xs:complexType name="Main">
+    <xs:sequence>
+      <xs:group ref="d:G"/>
+    </xs:sequence>
+    <xs:attributeGroup ref="d:AG"/>
+  </xs:complexType>
+  <xs:element name="root" type="d:Main"/>
+</xs:schema>
