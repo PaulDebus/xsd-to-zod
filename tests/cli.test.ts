@@ -116,14 +116,14 @@ describe('CLI e2e', () => {
     expect(r.stderr).toContain('at least one XSD file');
   });
 
-  it('exits with error when output dir does not exist', async () => {
+  it('creates output directory if it does not exist', async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, 'test.xsd');
       fs.writeFileSync(xsdFile, XSD);
-      const fakeDir = path.join(dir, 'does-not-exist');
-      const r = await runCli([xsdFile, '-o', fakeDir]);
-      expect(r.code).toBe(1);
-      expect(r.stderr).toContain('output directory does not exist');
+      const outDir = path.join(dir, 'does-not-exist');
+      const r = await runCli([xsdFile, '-o', outDir]);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'test.zod.ts'))).toBe(true);
     });
   });
 

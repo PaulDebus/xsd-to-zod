@@ -341,8 +341,7 @@ export const main = async (args: string[]): Promise<number> => {
     const outDir = resolve(out);
 
     if (!existsSync(outDir)) {
-      console.error(`error: output directory does not exist: ${outDir}`);
-      return 1;
+      mkdirSync(outDir, { recursive: true });
     }
 
     const ir = parseXsd(files);
