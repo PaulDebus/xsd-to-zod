@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./validate": {
+      "types": "./dist/validate.d.ts",
+      "default": "./dist/validate.js"
     }
   },
   "bin": {
@@ -64,6 +68,14 @@
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "libxml2-wasm": "^0.7.1"
+  },
+  "peerDependenciesMeta": {
+    "libxml2-wasm": {
+      "optional": true
+    }
   },
   "types": "./dist/index.d.ts"
 }

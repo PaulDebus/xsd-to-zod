@@ -129,26 +129,12 @@ export function findRootSchema(mod: Record<string, unknown>, xml: string): z.Zod
   return found.schema;
 }
 
-let wasmReady: Promise<void> | null = null;
-
-async function ensureWasm(): Promise<void> {
-  if (!wasmReady) {
-    wasmReady = (async () => {
-      const { xmlRegisterFsInputProviders } = await import('libxml2-wasm/lib/nodejs.mjs');
-      xmlRegisterFsInputProviders();
-    })();
-  }
-  return wasmReady;
-}
-
 const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 
 export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[]): Promise<void> {
   if (xsdFiles.length === 0) return;
 
-  await ensureWasm();
-
-  const { XmlDocument, XsdValidator } = await import('libxml2-wasm');
+  const { validateXml } = await import('../src/validate.js');
 
   const { namespace: rootNamespace } = extractRootInfo(xml);
 
@@ -167,47 +153,23 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
   const matching = candidates.filter(c => c.targetNamespace === rootNamespace);
   const pool = matching.length > 0 ? matching : candidates;
 
-  const xmlDoc = XmlDocument.fromString(xml);
-
-  try {
-    for (const { file } of pool) {
-      const schemaSource = readXmlFile(file);
-
-      let schemaDoc: ReturnType<typeof XmlDocument.fromString>;
-      try {
-        schemaDoc = XmlDocument.fromString(schemaSource, { url: file });
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push(`Cannot parse schema ${path.relative(process.cwd(), file)}: ${msg}`);
-        continue;
-      }
-
-      let validator: ReturnType<typeof XsdValidator.fromDoc>;
-      try {
-        validator = XsdValidator.fromDoc(schemaDoc);
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push(`Cannot compile schema ${path.relative(process.cwd(), file)}: ${msg}`);
-        schemaDoc.dispose();
-        continue;
-      }
-
-      try {
-        validator.validate(xmlDoc);
+  for (const { file } of pool) {
+    try {
+      const result = await validateXml(xml, readXmlFile(file), { url: file });
+      if (result.valid) {
         return;
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push(`${path.relative(process.cwd(), file)}: ${msg}`);
-      } finally {
-        validator.dispose();
-        schemaDoc.dispose();
       }
+      const issues = result.issues
+        .map((issue) => `${issue.line !== undefined ? `line ${issue.line}: ` : ''}${issue.message}`)
+        .join('; ');
+      errors.push(`${path.relative(process.cwd(), file)}: ${issues}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`${path.relative(process.cwd(), file)}: ${msg}`);
     }
-
-    expect.fail(`Serialized XML is not valid against the root namespace's XSD (${rootNamespace || 'no namespace'}):\n${errors.join('\n')}`);
-  } finally {
-    xmlDoc.dispose();
   }
+
+  expect.fail(`Serialized XML is not valid against the root namespace's XSD (${rootNamespace || 'no namespace'}):\n${errors.join('\n')}`);
 }
 
 export async function runRoundTrip(xsdFiles: string[], xmlFile: string, expected?: unknown): Promise<void> {
