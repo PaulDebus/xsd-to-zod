@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { irToZod, parseXsd, safeParseXml } from '../src/index.js';
-import { findRootSchema, importGeneratedSchemas, readXmlFile } from './helpers.js';
+import { safeParseXml } from '../src/index.js';
+import { findRootSchema, generateAndImport, readXmlFile } from './helpers.js';
 
 const NEGATIVE_DIR = path.resolve('testdata/curated/negative');
 
@@ -65,7 +65,7 @@ describe('negative — invalid XML handling', () => {
 
   let mod: Record<string, unknown>;
   beforeAll(async () => {
-    mod = await importGeneratedSchemas(irToZod(parseXsd([xsdPath])).schemas);
+    mod = await generateAndImport([xsdPath]);
   });
 
   for (const c of negativeCases) {

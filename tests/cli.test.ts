@@ -188,6 +188,17 @@ describe('CLI e2e', () => {
       expect(r.stderr).toContain('warning: unresolved element ref "{urn:test}missing"');
     });
   });
+
+  it('prints file context and error code for typed errors (#84)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'not-a-schema.xsd');
+      fs.writeFileSync(xsdFile, '<?xml version="1.0"?><notschema/>');
+      const r = await runCli([xsdFile, '-o', dir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`${xsdFile}: No schema root found`);
+      expect(r.stderr).toContain('[no-schema-root]');
+    });
+  });
 });
 
 describe('isDirectInvocation (#80)', () => {

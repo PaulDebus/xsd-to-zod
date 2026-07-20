@@ -3,7 +3,7 @@ import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { irToZod, parseXsd, parseXml, serializeXml, xmlRegistry } from '../src/index.js';
-import { asRestriction, importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
+import { asRestriction, generateAndImport, importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -66,7 +66,7 @@ const importFromXsd = async (xsd: string): Promise<Record<string, unknown>> => {
   await withTempDirAsync(async (dir) => {
     const file = path.join(dir, 'schema.xsd');
     fs.writeFileSync(file, xsd);
-    mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+    mod = await generateAndImport([file]);
   });
   return mod;
 };
@@ -916,7 +916,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       await withTempDirAsync(async (dir) => {
         const file = path.join(dir, 'schema.xsd');
         fs.writeFileSync(file, FACET_XSD);
-        const mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+        const mod = await generateAndImport([file]);
         const facetsSchema = mod.facetsSchema as z.ZodType;
 
         const xml = `<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`;
@@ -951,7 +951,7 @@ describe('xsd-to-zod v1 pipeline', () => {
         await withTempDirAsync(async (dir) => {
           const file = path.join(dir, 'schema.xsd');
           fs.writeFileSync(file, FACET_XSD);
-          const mod = await importGeneratedSchemas(irToZod(parseXsd([file])).schemas);
+          const mod = await generateAndImport([file]);
           facetsSchema = mod.facetsSchema as z.ZodType;
         });
       });

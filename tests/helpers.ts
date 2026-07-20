@@ -81,6 +81,10 @@ export async function importGeneratedSchemas(schemasCode: string): Promise<Recor
   }
 }
 
+// parseXsd → irToZod → importGeneratedSchemas in one call (#84).
+export const generateAndImport = (xsdFiles: string[]): Promise<Record<string, unknown>> =>
+  importGeneratedSchemas(irToZod(parseXsd(xsdFiles)).schemas);
+
 const stripProlog = (xml: string): string =>
   xml
     .replace(/<\?[\s\S]*?\?>/g, '')

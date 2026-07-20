@@ -1,19 +1,16 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import iconv from 'iconv-lite';
 import { describe, expect, it } from 'vitest';
 import { readXmlFile } from '../src/index.js';
+import { withTempDir } from './helpers.js';
 
 const withTempFile = (name: string, content: Buffer, fn: (filePath: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'readxmlfile-'));
-  const filePath = path.join(dir, name);
-  try {
+  withTempDir((dir) => {
+    const filePath = path.join(dir, name);
     fs.writeFileSync(filePath, content);
     fn(filePath);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  });
 };
 
 describe('readXmlFile', () => {
