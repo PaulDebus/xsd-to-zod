@@ -1,3 +1,4 @@
+import { Xsd2ZodError } from './errors.js';
 import { clarkToLocal, trySplitClark } from './qname.js';
 import { XSD_INTEGER_TYPE_NAMES } from './xsdBuiltins.js';
 import type {
@@ -344,7 +345,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const claimedTypeNames = new Set<string>();
   const claimTypeName = (qname: string): void => {
     if (claimedTypeNames.has(qname)) {
-      throw new Error(`type name collision: ${qname} is declared as both a simpleType and a complexType`);
+      throw new Xsd2ZodError('type-name-collision', `type name collision: ${qname} is declared as both a simpleType and a complexType`);
     }
     claimedTypeNames.add(qname);
   };

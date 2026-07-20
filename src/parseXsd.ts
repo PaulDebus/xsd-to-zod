@@ -1,5 +1,6 @@
 import path from 'node:path';
 import XMLParser from '@nodable/flexible-xml-parser';
+import { Xsd2ZodError } from './errors.js';
 import { splitQName, syntheticChildName, toClark } from './qname.js';
 import { readXmlFile } from './readXmlFile.js';
 import { createOutputBuilder } from './runtime.js';
@@ -162,7 +163,7 @@ const OCCURS_LEXICAL = /^\d+$/;
 const parseOccursValue = (raw: unknown, attr: 'minOccurs' | 'maxOccurs'): number => {
   const text = String(raw).trim();
   if (!OCCURS_LEXICAL.test(text)) {
-    throw new Error(`Invalid ${attr} value ${JSON.stringify(text)}: expected a non-negative integer`);
+    throw new Xsd2ZodError('invalid-occurs', `Invalid ${attr} value ${JSON.stringify(text)}: expected a non-negative integer`);
   }
   return Number(text);
 };
@@ -234,7 +235,7 @@ const readSchema = (
   const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === 'schema');
   if (!schemaEntry) {
-    throw new Error(`No schema root found in ${filePath}`);
+    throw new Xsd2ZodError('no-schema-root', `No schema root found in ${filePath}`, { file: filePath });
   }
   const schemaNode = schemaEntry[1];
   const nsMap = collectNamespaceMap(schemaNode);

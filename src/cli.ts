@@ -3,13 +3,20 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { Xsd2ZodError } from './errors.js';
 import { irToZod } from './irToZod.js';
 import { parseXsd } from './parseXsd.js';
 import type { XsdIr } from './types.js';
 
 // Thrown values are usually Errors but not guaranteed to be — never print
-// "error: undefined".
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+// "error: undefined". Xsd2ZodError adds its code and file context (#84).
+const errorMessage = (e: unknown): string => {
+  if (e instanceof Xsd2ZodError) {
+    const location = e.file ? `${e.file}: ` : '';
+    return `${location}${e.message} [${e.code}]`;
+  }
+  return e instanceof Error ? e.message : String(e);
+};
 
 // References the parser could not resolve are kept lenient on the IR level;
 // the CLI is where they become visible to the user (#77).
