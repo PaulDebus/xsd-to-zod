@@ -735,8 +735,8 @@ export const parseXsd = (files: string[]): XsdIr => {
     return (ai === -1 ? 9999 : ai) - (bi === -1 ? 9999 : bi);
   });
 
-  // Collect redefine overrides keyed by the included schema file path
-  const redefineOverrides: Map<string, RedefineOverride[]> = new Map();
+  // Redefine overrides, in the order the xs:redefine elements were seen.
+  const redefineOverrides: RedefineOverride[] = [];
 
   // Declaration collection (pass 1) is separated from field collection (passes 2-3)
   // so element/group/attributeGroup/attribute references always resolve against the
@@ -841,9 +841,7 @@ export const parseXsd = (files: string[]): XsdIr => {
             const rqname = toClark(effectiveNs, rname);
             const schemaLocation = child['@_schemaLocation'] ? String(child['@_schemaLocation']) : '';
             if (schemaLocation) {
-              const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
-              if (!redefineOverrides.has(resolved)) redefineOverrides.set(resolved, []);
-              redefineOverrides.get(resolved)!.push({
+              redefineOverrides.push({
                 kind: rlocal,
                 qname: rqname,
                 node: rchild,
@@ -862,13 +860,11 @@ export const parseXsd = (files: string[]): XsdIr => {
 
   // Group/attributeGroup redefines must land before any field collection:
   // references to them are inlined into consumers at collection time (#78).
-  for (const [, overrides] of redefineOverrides) {
-    for (const override of overrides) {
-      if (override.kind === 'group') {
-        groups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
-      } else if (override.kind === 'attributeGroup') {
-        attributeGroups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
-      }
+  for (const override of redefineOverrides) {
+    if (override.kind === 'group') {
+      groups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
+    } else if (override.kind === 'attributeGroup') {
+      attributeGroups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
     }
   }
 
@@ -929,47 +925,45 @@ export const parseXsd = (files: string[]): XsdIr => {
   }
 
   // Apply redefine overrides — replace or augment types in the included schemas
-  for (const [, overrides] of redefineOverrides) {
-    for (const override of overrides) {
-      if (override.kind === 'complexType') {
-        const fields: IrField[] = [];
-        collectFields(override.targetNs, override.node, fields, fieldContext(override.nsMap, override.formDefaults, override.targetNs));
-        const complexContent = nodeChildren(override.node)
-          .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
-        const derivationEntry = complexContent
-          ? nodeChildren(complexContent).find(([key]) => {
-              const local = getNodeTagLocalName(key);
-              return local === 'extension' || local === 'restriction';
-            })
-          : undefined;
-        const derivationKind = derivationEntry ? getNodeTagLocalName(derivationEntry[0]) : undefined;
-        const derivationNode = derivationEntry?.[1];
-        const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
-        const description = extractDocumentation(override.node);
-        if (baseType === override.qname && derivationKind === 'extension') {
-          const original = complexTypes[override.qname];
-          if (original) {
-            complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description };
-          } else {
-            complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
-          }
-        } else if (baseType === override.qname && derivationKind === 'restriction') {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
+  for (const override of redefineOverrides) {
+    if (override.kind === 'complexType') {
+      const fields: IrField[] = [];
+      collectFields(override.targetNs, override.node, fields, fieldContext(override.nsMap, override.formDefaults, override.targetNs));
+      const complexContent = nodeChildren(override.node)
+        .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
+      const derivationEntry = complexContent
+        ? nodeChildren(complexContent).find(([key]) => {
+            const local = getNodeTagLocalName(key);
+            return local === 'extension' || local === 'restriction';
+          })
+        : undefined;
+      const derivationKind = derivationEntry ? getNodeTagLocalName(derivationEntry[0]) : undefined;
+      const derivationNode = derivationEntry?.[1];
+      const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
+      const description = extractDocumentation(override.node);
+      if (baseType === override.qname && derivationKind === 'extension') {
+        const original = complexTypes[override.qname];
+        if (original) {
+          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description };
         } else {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType, description };
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
         }
-      } else if (override.kind === 'simpleType') {
-        // Drop synthetic inline item/member types created for the previous definition
-        // so swapping list ↔ union (or changing item/member shape) does not leave orphans.
-        const orphanPrefix = `${override.qname}_`;
-        for (const existingName of Object.keys(simpleTypes)) {
-          if (existingName.startsWith(orphanPrefix)) {
-            delete simpleTypes[existingName];
-          }
-        }
-
-        simpleTypes[override.qname] = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
+      } else if (baseType === override.qname && derivationKind === 'restriction') {
+        complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
+      } else {
+        complexTypes[override.qname] = { name: override.qname, fields, baseType, description };
       }
+    } else if (override.kind === 'simpleType') {
+      // Drop synthetic inline item/member types created for the previous definition
+      // so swapping list ↔ union (or changing item/member shape) does not leave orphans.
+      const orphanPrefix = `${override.qname}_`;
+      for (const existingName of Object.keys(simpleTypes)) {
+        if (existingName.startsWith(orphanPrefix)) {
+          delete simpleTypes[existingName];
+        }
+      }
+
+      simpleTypes[override.qname] = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
     }
   }
 
