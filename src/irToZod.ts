@@ -328,7 +328,18 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   schemaLines.push(''); // import line, filled in at the end once facet usage is known
   schemaLines.push(opts?.js ? 'const schemas = {};' : 'const schemas: Record<string, z.ZodTypeAny> = {};');
 
+  // Simple and complex types share the `schemas[...]` namespace in the
+  // generated module — a qname collision would silently overwrite. Fail loud.
+  const claimedTypeNames = new Set<string>();
+  const claimTypeName = (qname: string): void => {
+    if (claimedTypeNames.has(qname)) {
+      throw new Error(`type name collision: ${qname} is declared as both a simpleType and a complexType`);
+    }
+    claimedTypeNames.add(qname);
+  };
+
   for (const simpleType of sortSimpleTypes(ir)) {
+    claimTypeName(simpleType.name);
     let expr: string;
     if (simpleType.itemType) {
       const itemExpr = primitiveToZod(simpleType.itemType, definedTypes);
@@ -344,6 +355,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
+    claimTypeName(complexType.name);
     const multiBranch = multiBranchGroups(complexType);
     const props = complexType.fields
       .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withDescription(withCardinality(
