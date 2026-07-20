@@ -3,7 +3,7 @@ import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { irToZod, parseXsd, parseXml, serializeXml, xmlRegistry } from '../src/index.js';
-import { importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
+import { asRestriction, importGeneratedSchemas, withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -555,7 +555,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       const age = ir.elements['{urn:inline-simple}age'];
       expect(age).toBeDefined();
       expect(age.typeName).not.toBe('{http://www.w3.org/2001/XMLSchema}string');
-      const ageType = ir.simpleTypes[age.typeName];
+      const ageType = asRestriction(ir.simpleTypes[age.typeName]);
       expect(ageType).toBeDefined();
       expect(ageType.baseType).toBe('{http://www.w3.org/2001/XMLSchema}integer');
       expect(ageType.facets).toEqual([
@@ -567,7 +567,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       const person = ir.complexTypes['{urn:inline-simple}Person'];
       const nickname = person.fields.find((f) => f.qname === '{urn:inline-simple}nickname');
       expect(nickname).toBeDefined();
-      const nicknameType = ir.simpleTypes[nickname!.typeName];
+      const nicknameType = asRestriction(ir.simpleTypes[nickname!.typeName]);
       expect(nicknameType).toBeDefined();
       expect(nicknameType.baseType).toBe('{http://www.w3.org/2001/XMLSchema}string');
       expect(nicknameType.facets).toEqual([{ kind: 'maxLength', value: 20 }]);
@@ -575,7 +575,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       // Attribute
       const status = person.fields.find((f) => f.qname === '{}status');
       expect(status).toBeDefined();
-      const statusType = ir.simpleTypes[status!.typeName];
+      const statusType = asRestriction(ir.simpleTypes[status!.typeName]);
       expect(statusType).toBeDefined();
       expect(statusType.facets).toEqual([
         { kind: 'enumeration', value: 'active' },
@@ -731,33 +731,33 @@ describe('xsd-to-zod v1 pipeline', () => {
     it('stores facets in IR', () => {
       runFacetTest((_dir, file) => {
         const ir = parseXsd([file]);
-        const countryCode = ir.simpleTypes['{urn:facets}CountryCode'];
+        const countryCode = asRestriction(ir.simpleTypes['{urn:facets}CountryCode']);
         expect(countryCode).toBeDefined();
         expect(countryCode.facets).toEqual([
           { kind: 'pattern', value: '[A-Z]{2}' },
           { kind: 'length', value: 2 },
         ]);
 
-        const statusCode = ir.simpleTypes['{urn:facets}StatusCode'];
+        const statusCode = asRestriction(ir.simpleTypes['{urn:facets}StatusCode']);
         expect(statusCode.facets).toEqual([
           { kind: 'enumeration', value: 'active' },
           { kind: 'enumeration', value: 'inactive' },
           { kind: 'enumeration', value: 'pending' },
         ]);
 
-        const qty = ir.simpleTypes['{urn:facets}Quantity'];
+        const qty = asRestriction(ir.simpleTypes['{urn:facets}Quantity']);
         expect(qty.facets).toEqual([
           { kind: 'minInclusive', value: 1 },
           { kind: 'maxInclusive', value: 100 },
         ]);
 
-        const nameType = ir.simpleTypes['{urn:facets}NameType'];
+        const nameType = asRestriction(ir.simpleTypes['{urn:facets}NameType']);
         expect(nameType.facets).toEqual([
           { kind: 'minLength', value: 2 },
           { kind: 'maxLength', value: 50 },
         ]);
 
-        const tokenType = ir.simpleTypes['{urn:facets}TokenType'];
+        const tokenType = asRestriction(ir.simpleTypes['{urn:facets}TokenType']);
         expect(tokenType.facets).toEqual([
           { kind: 'whiteSpace', value: 'collapse' },
         ]);
@@ -1181,8 +1181,7 @@ describe('xsd-to-zod v1 pipeline', () => {
 
         const swapType = ir.simpleTypes['{urn:redefine-swap}SwapType'];
         expect(swapType).toBeDefined();
-        expect(swapType.itemType).toBeUndefined();
-        expect(swapType.memberTypes).toBeDefined();
+        expect(swapType.kind).toBe('union');
       });
     });
   });

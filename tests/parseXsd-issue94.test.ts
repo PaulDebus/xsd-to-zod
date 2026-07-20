@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseXsd } from '../src/index.js';
 import type { IrField, QName } from '../src/types.js';
+import { asRestriction } from './helpers.js';
 
 // Reproductions for the three parseXsd robustness gaps tracked in #94.
 const FIXTURES = path.resolve('testdata/regressions/issue-94');
@@ -54,6 +55,7 @@ describe('issue #94: unprefixed type refs vs default xmlns', () => {
     const code = main.fields.find(f => localName(f) === 'code');
     expect(code).toBeDefined();
     const synthetic = ir.simpleTypes[code!.typeName];
-    expect(synthetic?.baseType).toBe(`{${XSD_NS}}int`);
+    expect(synthetic).toBeDefined();
+    expect(asRestriction(synthetic!).baseType).toBe(`{${XSD_NS}}int`);
   });
 });

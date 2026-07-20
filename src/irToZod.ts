@@ -32,7 +32,14 @@ const resolvePrimitiveKind = (typeName: QName, ir: XsdIr, seen?: Set<string>): '
   }
   seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
-  return simple ? resolvePrimitiveKind(simple.baseType, ir, seenNames) : 'string';
+  if (!simple) {
+    return 'string';
+  }
+  const base =
+    simple.kind === 'restriction' ? simple.baseType
+    : simple.kind === 'list' ? simple.itemType
+    : simple.memberTypes[0];
+  return base ? resolvePrimitiveKind(base, ir, seenNames) : 'string';
 };
 
 const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
@@ -178,10 +185,12 @@ const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'num
 const sortSimpleTypes = (ir: XsdIr): SimpleTypeDef[] => {
   const types = Object.values(ir.simpleTypes);
   const byName = new Map(types.map((t) => [t.name, t]));
-  const dependencies = (t: SimpleTypeDef): SimpleTypeDef[] =>
-    [t.baseType, t.itemType, ...(t.memberTypes ?? [])]
-      .map((dep) => (dep === undefined ? undefined : byName.get(dep)))
+  const dependencies = (t: SimpleTypeDef): SimpleTypeDef[] => {
+    const deps = t.kind === 'restriction' ? [t.baseType] : t.kind === 'list' ? [t.itemType] : t.memberTypes;
+    return deps
+      .map((dep) => byName.get(dep))
       .filter((dep): dep is SimpleTypeDef => dep !== undefined);
+  };
 
   const sorted: SimpleTypeDef[] = [];
   const visited = new Set<string>();
@@ -346,10 +355,10 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   for (const simpleType of sortSimpleTypes(ir)) {
     claimTypeName(simpleType.name);
     let expr: string;
-    if (simpleType.itemType) {
+    if (simpleType.kind === 'list') {
       const itemExpr = primitiveToZod(simpleType.itemType, definedTypes);
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
-    } else if (simpleType.memberTypes) {
+    } else if (simpleType.kind === 'union') {
       const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes));
       expr = `z.union([${memberExprs.join(', ')}])`;
     } else {

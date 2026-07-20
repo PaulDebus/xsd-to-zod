@@ -6,6 +6,15 @@ import { expect } from 'vitest';
 import { z } from 'zod';
 import { irToZod, parseXsd, parseXml, readXmlFile, safeParseXml, serializeXml, xmlRegistry } from '../src/index.js';
 import { decodeTagNameCharRefs } from '../src/runtime.js';
+import type { SimpleTypeDef } from '../src/types.js';
+
+// Narrow a SimpleTypeDef to its restriction variant in tests (#84).
+export const asRestriction = (type: SimpleTypeDef): Extract<SimpleTypeDef, { kind: 'restriction' }> => {
+  if (type.kind !== 'restriction') {
+    throw new Error(`expected restriction simple type, got ${type.kind}`);
+  }
+  return type;
+};
 
 export interface TestCase {
   name: string;

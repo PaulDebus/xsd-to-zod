@@ -38,12 +38,12 @@ export type Facet =
 
 export type SimpleTypeDef = {
   name: QName;
-  baseType: QName;
-  facets?: Facet[];
-  itemType?: QName;
-  memberTypes?: QName[];
   description?: string;
-};
+} & (
+  | { kind: 'restriction'; baseType: QName; facets?: Facet[] }
+  | { kind: 'list'; itemType: QName }
+  | { kind: 'union'; memberTypes: QName[] }
+);
 
 export type ComplexTypeDef = {
   name: QName;

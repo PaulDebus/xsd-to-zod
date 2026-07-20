@@ -100,7 +100,7 @@ const parseSimpleTypeDef = (
         ? resolveInlineSimpleType(inlineSimple, nsMap, simpleTypes, syntheticChildName(qname, '_itemType'), diagnostics)
         : toClark(XSD_NS, 'string');
     }
-    return { name: qname, baseType: itemType, itemType, description };
+    return { name: qname, kind: 'list', itemType, description };
   }
 
   const unionChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === 'union')?.[1];
@@ -114,14 +114,13 @@ const parseSimpleTypeDef = (
         .filter(([key]) => getNodeTagLocalName(key) === 'simpleType')
         .map(([, stNode], idx) => resolveInlineSimpleType(stNode, nsMap, simpleTypes, syntheticChildName(qname, `_member${idx}`), diagnostics));
     }
-    const baseType = memberTypes[0] ?? toClark(XSD_NS, 'string');
-    return { name: qname, baseType, memberTypes, description };
+    return { name: qname, kind: 'union', memberTypes, description };
   }
 
   const restriction = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === 'restriction')?.[1];
   const baseType = resolveTypeQName(restriction?.['@_base'] ? String(restriction['@_base']) : undefined, nsMap, diagnostics);
   const facets = restriction ? parseFacets(restriction) : [];
-  return { name: qname, baseType, facets: facets.length > 0 ? facets : undefined, description };
+  return { name: qname, kind: 'restriction', baseType, facets: facets.length > 0 ? facets : undefined, description };
 };
 
 const resolveInlineSimpleType = (
