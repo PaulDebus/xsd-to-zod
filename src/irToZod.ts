@@ -209,6 +209,14 @@ const withCardinality = (schema: string, field: IrField, ir: XsdIr, forceOptiona
   }
   if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
     result = `z.array(${result})`;
+    // Skip .min() for choice fields (forceOptional): absent choice branches
+    // materialise as [] and must not fail cardinality validation (#73).
+    if (field.minOccurs > 0 && !forceOptional) {
+      result += `.min(${field.minOccurs})`;
+    }
+    if (field.maxOccurs !== 'unbounded') {
+      result += `.max(${field.maxOccurs})`;
+    }
   }
   if (field.minOccurs === 0 || forceOptional) {
     result += '.optional()';
@@ -348,8 +356,23 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${withDescription(expr, simpleType.description)}.register(xmlRegistry, { qname: ${JSON.stringify(simpleType.name)} });`);
   }
 
+  const elementOrderRefine = (type: ComplexTypeDef): string => {
+    // Skip order refine for types with xs:choice — the compact parser groups
+    // same-tag children, so choice fields end up at the wrong IR position.
+    const hasChoice = type.fields.some((f) => f.choiceGroup !== undefined);
+    if (hasChoice) return '';
+
+    const elementFieldKeys = type.fields
+      .filter((f) => f.kind === 'element')
+      .map(toFieldKey);
+    if (elementFieldKeys.length <= 1) return '';
+    const orderArr = JSON.stringify(elementFieldKeys);
+    return `.refine((val) => { const order = ${orderArr}; const keys = Object.keys(val).filter((k) => order.includes(k)); let idx = 0; for (const k of order) { if (keys[idx] === k) idx++; } return idx === keys.length; }, { message: ${JSON.stringify(`elements out of order: expected [${elementFieldKeys.join(', ')}]`)}})`;
+  };
+
   for (const complexType of Object.values(ir.complexTypes)) {
     const multiBranch = multiBranchGroups(complexType);
+    const hasChoice = complexType.fields.some((f) => f.choiceGroup !== undefined);
     const props = complexType.fields
       .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withDescription(withCardinality(
         primitiveToZod(field.typeName, definedTypes),
@@ -361,10 +384,10 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
     schemaLines.push(
       withDescription(
-        `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})`,
+        `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}}).strict()${choiceRefines(complexType).join('')}${elementOrderRefine(complexType)})`,
         complexType.description
       ) +
-      `.register(xmlRegistry, { ${fieldsMetaFor(complexType, ir)} });`
+      `.register(xmlRegistry, { ${fieldsMetaFor(complexType, ir)}${hasChoice ? ', hasChoice: true' : ''} });`
     );
   }
 

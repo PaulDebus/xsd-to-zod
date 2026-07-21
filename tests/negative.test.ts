@@ -23,21 +23,21 @@ interface NegativeCase {
 }
 
 const EXPECTED: Record<string, NegativeExpectation> = {
-  // Cardinality bounds are not expressible as zod checks on the array: extra
-  // items are kept (the libxml2 tier is the strict one).
-  'invalid-max-occurs': { data: { required: 'req', repeated: [1, 2, 3, 4, 5], '@must': 'abc' } },
-  // Fewer items than minOccurs: kept as-is.
-  'invalid-min-occurs': { data: { required: 'req', repeated: [1], '@must': 'abc' } },
-  // A missing required element now fails the final schema validation.
+  // Bounded cardinality: maxOccurs=4 but XML has 5 items.
+  'invalid-max-occurs': { error: '<=4 items', zod: true },
+  // Bounded cardinality: minOccurs=2 but XML has 1 item.
+  'invalid-min-occurs': { error: '>=2 items', zod: true },
+  // A missing required element fails the final schema validation.
   'invalid-missing-required-element': { error: 'Invalid input: expected string', zod: true },
   // Root in a foreign namespace is rejected structurally.
   'invalid-namespace': { error: "Root element '{urn:negative}strict' not found in XML payload", zod: false },
   // xsi:nil="true" on the root: content of a nilled element is dropped.
   'invalid-nil-with-content': { data: null },
-  // Unknown elements are ignored.
+  // Unknown elements are silently tolerated (xs:any wildcards not yet supported).
   'invalid-unexpected-element': { data: { required: 'req', repeated: [1, 2], '@must': 'abc' } },
-  // Order is not enforced: fields are matched by name.
-  'invalid-wrong-element-order': { data: { first: 'wrong order', second: 42, third: true } },
+  // Element order is enforced as a subsequence of the declared field order:
+  // 'first' appears after 'second' in the XML, violating [first, second, third].
+  'invalid-wrong-element-order': { error: "Element 'first' out of order", zod: false },
 };
 
 function discoverNegativeCases(): NegativeCase[] {

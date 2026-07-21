@@ -204,6 +204,21 @@ const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
 // Walk the wrapper chain until a schema carries registry meta with a `fields`
 // map — type schemas register it on the lazy wrapper, which may sit below a
 // root export wrapper or array/optional cardinality wrappers.
+const findTypeMeta = (schema: AnySchema): XmlMeta | undefined => {
+  let current = schema;
+  for (;;) {
+    const meta = xmlRegistry.get(current);
+    if (meta?.fields) {
+      return meta;
+    }
+    const next = peelOnce(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
+  }
+};
+
 const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined => {
   let current = schema;
   for (;;) {
@@ -480,7 +495,41 @@ const readObject = (
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
-  const result: Record<string, unknown> = {};
+  // --- Element order validation (#10) ---
+  // Scan node keys in document order and validate that known elements appear
+  // as a subsequence of the IR field order (which follows xs:sequence).
+  // Types with ≤1 element field or with xs:choice are skipped: the compact
+  // parser groups same-tag children, so choice fields' IR position doesn't
+  // reflect their actual position in the XSD sequence.
+  const elementFieldKeys = Object.keys(fields).filter((k) => fields[k].kind === 'element');
+  const typeMeta = findTypeMeta(schema);
+  if (elementFieldKeys.length > 1 && !typeMeta?.hasChoice) {
+    const elementQNames = elementFieldKeys.map((k) => splitClark(fields[k].qname));
+    let fieldIdx = 0;
+    for (const nodeKey of Object.keys(node)) {
+      if (nodeKey.startsWith('@_') || nodeKey === '#text' || nodeKey === '#cdata') continue;
+      const { prefix, local } = splitXmlName(nodeKey);
+      const namespace = prefix ? (namespaceContext[prefix] ?? '') : (namespaceContext[''] ?? '');
+
+      let matched = -1;
+      for (let i = 0; i < elementFieldKeys.length; i++) {
+        if (local === elementQNames[i].local && namespace === elementQNames[i].namespace) {
+          matched = i;
+          break;
+        }
+      }
+      if (matched === -1) continue; // unknown element (xs:any) — skip
+
+      if (matched < fieldIdx) {
+        throw new Error(`Element '${local}' out of order`);
+      }
+      fieldIdx = matched + 1;
+    }
+  }
+
+  // Null prototype: an XSD element named __proto__ must become an own property,
+  // not a silent prototype mutation (#84).
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {

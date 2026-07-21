@@ -31,6 +31,8 @@ export type XmlFieldMeta = {
 export type XmlMeta = {
   qname?: QName;
   root?: QName;
+  /** Whether this type has xs:choice groups choice groups (#10). */
+  hasChoice?: boolean;
   fields?: Record<string, XmlFieldMeta>;
 };
 
