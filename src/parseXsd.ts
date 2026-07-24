@@ -321,15 +321,20 @@ type FieldCollectionContext = {
   diagnostics: Set<string>;
 };
 
+type CollectFieldsScope = {
+  ownerNs: string;
+  fields: IrField[];
+  choiceGroup?: string;
+  inheritedCardinality: Cardinality;
+  choiceBranch?: string;
+};
+
 const collectFields = (
-  ownerNs: string,
   container: AnyNode,
-  fields: IrField[],
   ctx: FieldCollectionContext,
-  choiceGroup?: string,
-  inheritedCardinality: Cardinality = { minOccurs: 1, maxOccurs: 1 },
-  choiceBranch?: string
+  scope: CollectFieldsScope
 ): void => {
+  const { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch } = scope;
   const { nsMap, formDefaults, elements, complexTypes, syntheticTypes, groups, attributeGroups, deferredSyntheticTypes, attributes, diagnostics } = ctx;
   for (const [tag, child] of nodeChildren(container)) {
     const localTag = getNodeTagLocalName(tag);
@@ -458,15 +463,11 @@ const collectFields = (
     }
 
     if (localTag === 'sequence' || localTag === 'all') {
-      collectFields(
-        ownerNs,
-        child,
-        fields,
-        ctx,
-        choiceGroup,
-        combineCardinality(inheritedCardinality, parseCardinality(child)),
+      collectFields(child, ctx, {
+        ownerNs, fields, choiceGroup,
+        inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
         choiceBranch
-      );
+      });
       continue;
     }
 
@@ -483,15 +484,12 @@ const collectFields = (
           continue;
         }
         const branchId = `${groupId}.${branchIndex++}`;
-        collectFields(
-          ownerNs,
-          { [branchTag]: branchChild },
-          fields,
-          ctx,
-          groupId,
-          combineCardinality(inheritedCardinality, parseCardinality(child)),
-          branchId
-        );
+        collectFields({ [branchTag]: branchChild }, ctx, {
+          ownerNs, fields,
+          choiceGroup: groupId,
+          inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
+          choiceBranch: branchId
+        });
       }
       continue;
     }
@@ -502,11 +500,11 @@ const collectFields = (
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
       const groupEntry = groups[refQName];
       if (groupEntry) {
-        collectFields(
-          groupEntry.ownerNs, groupEntry.node, fields,
-          { ...ctx, nsMap: groupEntry.nsMap, formDefaults: groupEntry.formDefaults },
-          choiceGroup, combineCardinality(inheritedCardinality, parseCardinality(child)), choiceBranch
-        );
+        collectFields(groupEntry.node, { ...ctx, nsMap: groupEntry.nsMap, formDefaults: groupEntry.formDefaults }, {
+          ownerNs: groupEntry.ownerNs, fields, choiceGroup,
+          inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
+          choiceBranch
+        });
       } else {
         diagnostics.add(`unresolved group ref "${refQName}"`);
       }
@@ -519,11 +517,10 @@ const collectFields = (
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
       const attrEntry = attributeGroups[refQName];
       if (attrEntry) {
-        collectFields(
-          attrEntry.ownerNs, attrEntry.node, fields,
-          { ...ctx, nsMap: attrEntry.nsMap, formDefaults: attrEntry.formDefaults },
-          choiceGroup, inheritedCardinality, choiceBranch
-        );
+        collectFields(attrEntry.node, { ...ctx, nsMap: attrEntry.nsMap, formDefaults: attrEntry.formDefaults }, {
+          ownerNs: attrEntry.ownerNs, fields, choiceGroup,
+          inheritedCardinality, choiceBranch
+        });
       } else {
         diagnostics.add(`unresolved attributeGroup ref "${refQName}"`);
       }
@@ -569,7 +566,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality, choiceBranch);
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
       continue;
     }
 
@@ -581,7 +578,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(ownerNs, derivation, fields, ctx, choiceGroup, inheritedCardinality, choiceBranch);
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
     }
   }
 };
@@ -917,7 +914,10 @@ export const parseXsd = (files: string[]): XsdIr => {
       if (!name) continue;
       const qname = toClark(effectiveNs, name);
       const fields: IrField[] = [];
-      collectFields(effectiveNs, child, fields, fieldContext(resolveNsMap, fileFormDefaults, effectiveNs));
+      collectFields(child, fieldContext(resolveNsMap, fileFormDefaults, effectiveNs), {
+        ownerNs: effectiveNs, fields,
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+      });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
 
       complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child) };
@@ -928,7 +928,10 @@ export const parseXsd = (files: string[]): XsdIr => {
   for (const override of redefineOverrides) {
     if (override.kind === 'complexType') {
       const fields: IrField[] = [];
-      collectFields(override.targetNs, override.node, fields, fieldContext(override.nsMap, override.formDefaults, override.targetNs));
+      collectFields(override.node, fieldContext(override.nsMap, override.formDefaults, override.targetNs), {
+        ownerNs: override.targetNs, fields,
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+      });
       const complexContent = nodeChildren(override.node)
         .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
       const derivationEntry = complexContent
@@ -970,7 +973,10 @@ export const parseXsd = (files: string[]): XsdIr => {
   // Process deferred inline types now that all elements are collected
   const processDeferredType = ({ typeName, container, ownerNs, nsMap, formDefaults }: DeferredInlineType) => {
     const fields: IrField[] = [];
-    collectFields(ownerNs, container, fields, fieldContext(nsMap, formDefaults, ownerNs));
+    collectFields(container, fieldContext(nsMap, formDefaults, ownerNs), {
+      ownerNs, fields,
+      inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+    });
     complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs) };
   };
 

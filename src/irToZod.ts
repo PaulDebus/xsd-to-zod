@@ -332,6 +332,29 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
   return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(', ')} }`;
 };
 
+// ---------------------------------------------------------------------------
+// Small emitter layer — systematic codegen helpers instead of raw string
+// concatenation.  Centralises schema-reference formatting, .register() calls,
+// with-description wrapping, and reserved-keyword / forward-ref wiring so that
+// the structural logic in irToZod stays readable (#84).
+// ---------------------------------------------------------------------------
+
+/** `schemas["{ns}local"]` — a reference to a named schema in the module. */
+const schemaRef = (name: QName): string => `schemas[${JSON.stringify(name)}]`;
+
+/**
+ * Wrap an expression with `.describe()` (when a description is present) and
+ * `.register(xmlRegistry, { … })` — the standard suffix for every schema
+ * definition.
+ */
+/**
+ * Build a `.register(xmlRegistry, { … })` suffix with optional `.describe()`.
+ * `metaBody` is the pre-formatted interior of the meta object literal (e.g.
+ * `qname: "...", fields: { ... }`).
+ */
+const registered = (expr: string, description: string | undefined, metaBody: string): string =>
+  `${withDescription(expr, description)}.register(xmlRegistry, { ${metaBody} })`;
+
 export type IrToZodOptions = {
   // Emit plain JavaScript (no TS type annotations) so the output can be
   // imported directly as .mjs — used by the CLI validate subcommand.
@@ -373,7 +396,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         ? withFacets(baseExpr, simpleType.facets, usage, resolvePrimitiveKind(simpleType.name, ir))
         : baseExpr;
     }
-    schemaLines.push(`schemas[${JSON.stringify(simpleType.name)}] = ${withDescription(expr, simpleType.description)}.register(xmlRegistry, { qname: ${JSON.stringify(simpleType.name)} });`);
+    schemaLines.push(`${schemaRef(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`);
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -389,11 +412,11 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       .join(', ');
 
     schemaLines.push(
-      withDescription(
-        `schemas[${JSON.stringify(complexType.name)}] = z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})`,
-        complexType.description
-      ) +
-      `.register(xmlRegistry, { ${fieldsMetaFor(complexType, ir)} });`
+      `${schemaRef(complexType.name)} = ${registered(
+        `z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})`,
+        complexType.description,
+        fieldsMetaFor(complexType, ir),
+      )};`
     );
   }
 
@@ -405,7 +428,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     // clobber its type meta (and collide when two roots share one type).
     const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
-    schemaLines.push(`export const ${exportNames.get(root)} = ${withDescription(expr, rootDef.description)}.register(xmlRegistry, { root: ${JSON.stringify(root)} });`);
+    schemaLines.push(`export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `root: ${JSON.stringify(root)}`)};`);
   }
 
   const xsdImports = [
@@ -421,12 +444,25 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
 export const fieldKeyFromIr = toFieldKey;
 
+// JS reserved words — an export/identifier matching one of these must be
+// prefixed so the generated module is valid JavaScript (#70, #84).
+const JS_RESERVED = new Set([
+  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+  'default', 'delete', 'do', 'else', 'export', 'extends', 'false',
+  'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof',
+  'let', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
+  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+  'async', 'await', 'of', 'from', 'as', 'get', 'set', 'static',
+  'implements', 'interface', 'package', 'private', 'protected', 'public',
+]);
+
 // Generated export identifiers must be valid JS identifiers and unique across
 // all roots — legal XSD names (unicode letters, or the same local name in two
 // namespaces) otherwise produce invalid TypeScript (#70).
 export const sanitizeIdentifier = (name: string): string => {
   const cleaned = name.replace(/[^\p{L}\p{N}_$]/gu, '_');
-  return /^[\p{L}_$]/u.test(cleaned) ? cleaned : `_${cleaned}`;
+  const valid = /^[\p{L}_$]/u.test(cleaned) ? cleaned : `_${cleaned}`;
+  return JS_RESERVED.has(valid) ? `_${valid}` : valid;
 };
 
 export const rootSchemaExportNames = (rootElements: QName[]): Map<string, string> => {
