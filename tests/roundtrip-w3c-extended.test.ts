@@ -32,10 +32,6 @@ const TEST_SETS = [
   'msMeta/DataTypes_w3c.xml',
 ];
 
-// Cases exercising XSD features xsd-to-zod does not support yet, or pinning
-// genuine bugs, with the reason. Keyed by `<testSetName>/<testGroup>/<instanceTest>`.
-const KNOWN_FAILURES = W3C_KNOWN_FAILURES;
-
 describe('W3C extended round-trip (sun/ms selection)', () => {
   if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
     it('skip — W3C submodule not checked out', () => {});
@@ -54,7 +50,7 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
       for (const anchor of c.specRefs.length > 0 ? c.specRefs : ['(no spec reference)']) {
         const entry = byAnchor.get(anchor) ?? { total: 0, knownFailures: 0 };
         entry.total++;
-        if (KNOWN_FAILURES.has(keyOf(c.testSet, c.name))) entry.knownFailures++;
+        if (W3C_KNOWN_FAILURES.has(keyOf(c.testSet, c.name))) entry.knownFailures++;
         byAnchor.set(anchor, entry);
       }
     }
@@ -67,7 +63,7 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
           generated: new Date().toISOString(),
           testSets: TEST_SETS,
           totalCases: cases.length,
-          knownFailures: KNOWN_FAILURES.size,
+          knownFailures: W3C_KNOWN_FAILURES.size,
           bySpecSection: Object.fromEntries([...byAnchor.entries()].sort(([a], [b]) => a.localeCompare(b))),
         },
         null,
@@ -76,11 +72,11 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
     );
   }
 
-  // Every KNOWN_FAILURES key must match a discovered case — a stale key means
+  // Every W3C_KNOWN_FAILURES key must match a discovered case — a stale key means
   // the testSet changed or the case was renamed.
-  it('has no stale KNOWN_FAILURES entries', () => {
+  it('has no stale W3C_KNOWN_FAILURES entries', () => {
     const discovered = new Set(cases.map(c => keyOf(c.testSet, c.name)));
-    const stale = [...KNOWN_FAILURES.keys()].filter(k => !discovered.has(k));
+    const stale = [...W3C_KNOWN_FAILURES.keys()].filter(k => !discovered.has(k));
     expect(stale).toEqual([]);
   });
 
@@ -88,7 +84,7 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
     const key = keyOf(c.testSet, c.name);
     const anchors = c.specRefs.length > 0 ? ` [${c.specRefs.join(', ')}]` : '';
     const title = `round-trips W3C ${key}${anchors}`;
-    const reason = KNOWN_FAILURES.get(key);
+    const reason = W3C_KNOWN_FAILURES.get(key);
     if (reason) {
       // Known failures run as it.fails: a fix that makes one pass turns the
       // suite red ("expected test to fail"), forcing the entry's removal in
