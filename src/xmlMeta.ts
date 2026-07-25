@@ -7,7 +7,7 @@ import type { QName } from './types.js';
  * different qnames, so field-level meta would conflict on shared schemas.
  */
 export type XmlFieldMeta = {
-  kind: 'element' | 'attribute' | 'text';
+  kind: 'element' | 'attribute' | 'text' | 'any' | 'anyAttribute';
   qname: QName;
   /**
    * Element default (coerced JS value, elements only). XSD applies an element
