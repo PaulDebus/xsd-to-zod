@@ -277,12 +277,18 @@ const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
     return checkDef.check === 'number_format' && INT_FORMATS.has(checkDef.format ?? '');
   });
 
+// XSD float/double special lexicals → JS values (#116).
+const FLOAT_SPECIALS: Record<string, number> = { INF: Infinity, '-INF': -Infinity, NaN: NaN };
+
 const coerceNumberValue = (trimmed: string): number => {
-  // The XSD float/double specials are valid lexicals, but zod's z.number()
-  // rejects non-finite numbers at the base-type level — accepting them in the
-  // walker would make the mandatory validation reject what the walker
-  // produced. Reject coherently instead; the libxml2 tier is the place for
-  // full float/double semantics (and zod cannot express them regardless).
+  // The specials are valid xs:float/xs:double lexicals; the generated schemas
+  // for those types accept them via an explicit union (#116). For plain
+  // numeric types the schema validation rejects the non-finite result, which
+  // keeps decimal & co. rejecting "INF" coherently.
+  const special = FLOAT_SPECIALS[trimmed];
+  if (special !== undefined) {
+    return special;
+  }
   if (!FLOAT_LEXICAL.test(trimmed)) {
     throw new Error(`Invalid xs:double lexical: ${JSON.stringify(trimmed)}`);
   }
@@ -339,7 +345,9 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
       for (const option of (def as z.core.$ZodUnionDef).options) {
         try {
           const result = coerceLexical(raw, option);
-          if (typeof result === 'number' && Number.isNaN(result)) {
+          // A NaN produced for anything but the "NaN" lexical means the
+          // numeric option was the wrong branch — try the next one (#116).
+          if (typeof result === 'number' && Number.isNaN(result) && String(raw).trim() !== 'NaN') {
             continue;
           }
           return result;
@@ -623,6 +631,12 @@ const serializePrimitive = (value: unknown): string => {
   }
   if (typeof value === 'boolean') {
     return value ? 'true' : 'false';
+  }
+  if (typeof value === 'number') {
+    // XSD lexicals for the float/double specials (#116).
+    if (Number.isNaN(value)) return 'NaN';
+    if (value === Infinity) return 'INF';
+    if (value === -Infinity) return '-INF';
   }
   return escapeXml(String(value));
 };
