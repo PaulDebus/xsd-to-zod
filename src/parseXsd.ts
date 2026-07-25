@@ -1099,7 +1099,13 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       const def = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
       if (def.kind === 'restriction' && def.baseType === override.qname) {
         if (original) {
-          const originalName = `${override.qname}_redefined` as QName;
+          // Name the preserved original outside the `${qname}_` synthetic
+          // prefix — the orphan cleanup above deletes that space on every
+          // redefine in the chain. Bump the suffix for chained redefines.
+          let originalName = `${override.qname}-redefined` as QName;
+          for (let i = 2; simpleTypes[originalName] !== undefined; i++) {
+            originalName = `${override.qname}-redefined-${i}` as QName;
+          }
           simpleTypes[originalName] = { ...original, name: originalName };
           def.baseType = originalName;
         } else {

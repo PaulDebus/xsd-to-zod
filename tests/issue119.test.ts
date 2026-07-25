@@ -82,7 +82,7 @@ describe('xs:redefine self-references', () => {
     const yn = ir.simpleTypes['{}yn'];
     expect(yn.kind).toBe('restriction');
     if (yn.kind !== 'restriction') throw new Error('expected restriction');
-    expect(yn.baseType).toBe('{}yn_redefined');
-    expect(ir.simpleTypes['{}yn_redefined']).toBeDefined();
+    expect(yn.baseType).toBe('{}yn-redefined');
+    expect(ir.simpleTypes['{}yn-redefined']).toBeDefined();
   });
 });

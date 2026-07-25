@@ -10,7 +10,8 @@ export default mergeConfig(base, defineConfig({
     exclude: [
       ...configDefaults.exclude,
       'tests/roundtrip-upstream.test.ts',
-      'tests/roundtrip-w3c-extended.test.ts'
+      'tests/roundtrip-w3c-extended.test.ts',
+      'tests/roundtrip-w3c-negative.test.ts'
     ]
   }
 }));
