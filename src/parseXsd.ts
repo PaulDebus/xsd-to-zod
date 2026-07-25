@@ -472,7 +472,8 @@ const collectFields = (
         } else if (inlineSimple) {
           typeName = synthesizeInlineSimpleType(inlineSimple, nsMap, syntheticTypes, undefined, diagnostics);
         } else {
-          typeName = resolveTypeQName(undefined, nsMap, diagnostics);
+          // An element with no type declaration is xs:anyType — open content.
+          typeName = toClark(XSD_NS, 'anyType');
         }
       }
       const effectiveCardinality = combineCardinality(inheritedCardinality, parseCardinality(child));
@@ -1008,7 +1009,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       }
 
       if (!typeName) {
-        typeName = toClark(XSD_NS, 'string');
+        // An element with no type declaration is xs:anyType — open content.
+        typeName = toClark(XSD_NS, 'anyType');
       }
 
       const qname = toClark(effectiveNs, name);
