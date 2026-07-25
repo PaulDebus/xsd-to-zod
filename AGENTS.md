@@ -14,3 +14,4 @@ Published on npm as `xsd-to-zod`.
 
 ## Coding standards
 - **Strict TypeScript**: `strict: true` in tsconfig. No `any`, no `// @ts-{ignore,expect-error}` — fix the types properly.
+- dont mention issue ids in code comments. comments must stand for themselves
