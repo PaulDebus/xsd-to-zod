@@ -720,6 +720,11 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   const deferredInlineTypes: DeferredInlineType[] = [];
   const deferredSyntheticTypes: DeferredInlineType[] = [];
   const syntheticTypeCounter = { value: 0 };
+  // Choice group ids are internal only (never emitted), but fields merged from
+  // a base type and its extension must not share an id — an extension's
+  // xs:choice is a separate group appended after the base content. A shared
+  // counter keeps every group's id unique across the parse.
+  const choiceCounter = { value: 0 };
   const groups: Record<string, GroupEntry> = {};
   const attributeGroups: Record<string, GroupEntry> = {};
   const attributes: Record<string, GlobalAttributeDecl> = {};
@@ -734,7 +739,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     nsMap,
     formDefaults,
     elements,
-    choiceCounter: { value: 0 },
+    choiceCounter,
     choiceGroupCardinality: new Map(),
     complexTypes,
     syntheticTypes: { targetNs, counter: syntheticTypeCounter, simpleTypes },
