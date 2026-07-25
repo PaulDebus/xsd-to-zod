@@ -209,27 +209,6 @@ const extended = inner.extend({ extra: z.string() });
 
 The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSchema)?.root` returns the root element QName. Registered metadata is informational; parsing/serialization never requires touching it.
 
-## Migrating from the dual-artifact API (pre-1.0)
-
-The `.zod.ts` + `.meta.ts` pair is now a single `.zod.ts`. Removed and changed APIs:
-
-| Removed | Replacement |
-|---|---|
-| `createRootHelpers(rootMeta, types)` → `parseXml` / `serializeXml` | `parseXml(schema, xml)` / `serializeXml(schema, data)` from `xsd-to-zod` |
-| `parseXmlWithMetadata` / `serializeXmlWithMetadata` | same as above (with `safeParseXml` as the non-throwing variant) |
-| `buildRuntimeMetadata(ir)` | gone — metadata lives in `xmlRegistry` entries of the generated schemas |
-| `RuntimeMetadata` & friends | `XmlMeta` / `XmlFieldMeta` types |
-| `.meta.ts` file / `--metadata` CLI flag | gone — `xsd-to-zod validate` drives everything from `--xsd` |
-
-Behavioral changes to know about:
-
-- **Validation is enforced**: `parseXml` always ends in schema validation and throws `ZodError`; the old lenient mode is gone. `safeParseXml(..., { validate: false })` is the escape hatch for pre-validated input.
-- **Choice**: the `__choice` discriminator key no longer appears in parsed data. Mutual exclusion is enforced by generated refine checks (including multi-group and group-ref choices).
-- **Defaults**: attribute-with-default now always appears in parsed output (XSD-correct) and its `z.infer` type is non-optional. Element defaults apply to *present-but-empty* elements, not absent ones.
-- **Roots of empty complex types** parse to `{}` (previously a scalar/`{_text}` object).
-- **INF/-INF/NaN** lexicals are rejected by the zod tier (Zod cannot express non-finite numbers); the conformance tier accepts them.
-- The zod tier is deliberately lenient about element order and unexpected elements — the conformance tier is the strict one.
-
 ## Why trust this?
 
 We ship a **multi-tier test suite** that exercises the full pipeline on real-world and curated fixtures. Every round-trip test validates: XSD → Zod schemas → parse XML (golden-file compare) → serialize back → re-parse → deep-compare → serialized XML validated against the original XSD using libxml2. A smoke test additionally runs `tsc --noEmit` over the generated output of every curated fixture, so invalid-TypeScript codegen bugs cannot slip through.
