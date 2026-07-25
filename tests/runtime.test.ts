@@ -121,13 +121,15 @@ describe('type coercion (#65)', () => {
     expect(() => parseXml(doc('<text>x</text><count>1</count><flag>yes</flag>'))).toThrow('Invalid xs:boolean lexical');
   });
 
-  it('rejects INF/-INF/NaN coherently — zod cannot express non-finite numbers', () => {
-    // The XSD float/double specials are valid lexicals, but zod's z.number()
-    // refuses non-finite values at the base-type level, so the zod tier
-    // rejects them at the coercion point already (full float semantics belong
-    // to the libxml2 conformance tier).
-    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'))).toThrow('Invalid xs:double lexical: "-INF"');
-    expect(() => parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>'))).toThrow('Invalid xs:double lexical: "NaN"');
+  it('parses and serializes INF/-INF/NaN for xs:double (#116)', () => {
+    // The generated xs:double schema accepts non-finite numbers via an
+    // explicit union; serialization maps them back to the XSD lexicals.
+    const negInf = parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>'));
+    expect(negInf.measure).toBe(-Infinity);
+    expect(serializeXml(negInf)).toContain('>-INF</ns0:measure>');
+    const nan = parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>'));
+    expect(nan.measure).toBeNaN();
+    expect(serializeXml(nan)).toContain('>NaN</ns0:measure>');
   });
 
   it('returns null for an xsi:nil root', () => {

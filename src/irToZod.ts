@@ -89,9 +89,12 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
     case 'boolean':
       return 'z.boolean()';
     case 'decimal':
+      return 'z.number()';
     case 'float':
     case 'double':
-      return 'z.number()';
+      // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
+      // z.number() rejects non-finite numbers at the base-type level (#116).
+      return 'z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])';
     default:
       return 'z.string()';
   }
