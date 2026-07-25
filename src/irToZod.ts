@@ -166,18 +166,27 @@ const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'num
         case 'length':
         case 'minLength':
         case 'maxLength': {
+          const op = facet.kind === 'length' ? '===' : facet.kind === 'minLength' ? '>=' : '<=';
           // XSD 1.0 vacuous rule: every QName/NOTATION value satisfies any
           // length facet — skip them (with a diagnostic) rather than reject
           // valid values (#124 review).
           if (builtinLocal === 'NOTATION' || builtinLocal === 'QName') {
             result += ` /* facet ${facet.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
+          } else if (builtinLocal === 'hexBinary') {
+            // Length unit is octets: two hex digits per octet.
+            result += `.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
+          } else if (builtinLocal === 'base64Binary') {
+            // Length unit is octets: four base64 chars per three octets, less padding.
+            result += `.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
+          } else if (builtinLocal === 'IDREFS' || builtinLocal === 'NMTOKENS' || builtinLocal === 'ENTITIES') {
+            // Length unit is list items (whitespace-separated tokens).
+            result += `.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${facet.value}, { message: 'item count constraint violated' })`;
           } else if (isStringType(result)) {
             result += facet.kind === 'length' ? `.length(${facet.value})` : facet.kind === 'minLength' ? `.min(${facet.value})` : `.max(${facet.value})`;
           } else {
             // Non-string base (type reference, enum, list): the convenience
             // methods don't exist there — refine on the .length of strings
             // (characters) and arrays (list items) instead (#114).
-            const op = facet.kind === 'length' ? '===' : facet.kind === 'minLength' ? '>=' : '<=';
             result += `.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${facet.value}, { message: 'length constraint violated' })`;
           }
           break;
