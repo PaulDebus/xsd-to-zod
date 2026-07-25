@@ -57,8 +57,12 @@ const href = (node: AnyNode): string | undefined => {
   return undefined;
 };
 
-const expectedValid = (testNode: AnyNode): boolean =>
-  childrenOf(testNode, 'expected').some(e => e['@_validity'] === 'valid');
+// A test node is expected to carry exactly one <expected validity="...">
+// child; require it to be present and unambiguously "valid".
+const expectedValid = (testNode: AnyNode): boolean => {
+  const expected = childrenOf(testNode, 'expected');
+  return expected.length > 0 && expected.every(e => e['@_validity'] === 'valid');
+};
 
 // Spec anchor from a documentationReference href, e.g.
 // http://www.w3.org/TR/2004/REC-xmlschema-1-20041028/#Complex_Type_Definitions
@@ -71,6 +75,7 @@ const specAnchor = (ref: string): string | undefined => {
 export interface W3cInstanceTest {
   name: string;
   xmlFile: string;
+  /** Raw metadata fact (`expected validity` attribute) — not a selection. */
   expectedValid: boolean;
 }
 
@@ -81,12 +86,16 @@ export interface W3cTestGroup {
   testSet: string;
   /** Absolute paths of the schema documents (empty when the group has no schemaTest). */
   xsdFiles: string[];
+  /** Raw metadata fact (every schemaTest's `expected validity`) — not a selection. */
   schemaExpectedValid: boolean;
   instances: W3cInstanceTest[];
   /** Unique spec anchors (e.g. "xmlschema-1#Complex_Type_Definitions"). */
   specRefs: string[];
 }
 
+// Faithful, unfiltered representation of a testSet file: every testGroup with
+// the raw validity facts from its metadata. All case *selection* lives in
+// discoverValidCases — do not add filtering here, or the two will drift.
 export const parseTestSet = (file: string): W3cTestGroup[] => {
   const dir = path.dirname(file);
   const parsed = parser.parse(readXmlFile(file)) as AnyNode;
