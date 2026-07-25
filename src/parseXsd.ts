@@ -262,6 +262,66 @@ const nodeChildren = (node: AnyNode): Array<[string, AnyNode]> => {
   return children;
 };
 
+const pushChild = (node: AnyNode, tag: string, child: AnyNode): void => {
+  const existing = node[tag];
+  if (existing === undefined) {
+    node[tag] = child;
+  } else if (Array.isArray(existing)) {
+    existing.push(child);
+  } else {
+    node[tag] = [existing, child];
+  }
+};
+
+// xs:redefine semantics: a ref inside a redefining group/attributeGroup that
+// names the redefined component points at the ORIGINAL definition. Expand
+// those self-refs with the original's children before the override replaces
+// the registry entry — otherwise the self-ref resolves to the override itself
+// and field collection recurses without end. A self-ref with no original is
+// genuinely circular (invalid XSD) and is dropped with a diagnostic.
+const expandRedefineSelfRefs = (
+  node: AnyNode,
+  refTag: 'group' | 'attributeGroup',
+  selfQName: QName,
+  original: AnyNode | undefined,
+  nsMap: Record<string, string>,
+  diagnostics: Set<string>
+): AnyNode => {
+  const rebuild = (current: AnyNode): AnyNode => {
+    const out: AnyNode = {};
+    for (const [key, value] of Object.entries(current)) {
+      if (key.startsWith('@_') || key === '#text') {
+        out[key] = value;
+        continue;
+      }
+      for (const child of asArray(value as AnyNode | AnyNode[])) {
+        if (!child || typeof child !== 'object') {
+          continue;
+        }
+        const childNode = child as AnyNode;
+        const ref = childNode['@_ref'];
+        if (
+          getNodeTagLocalName(key) === refTag &&
+          ref !== undefined &&
+          resolveTypeQName(String(ref), nsMap, diagnostics) === selfQName
+        ) {
+          if (original === undefined) {
+            diagnostics.add(`circular ${refTag} redefinition "${selfQName}" without an original definition`);
+            continue;
+          }
+          for (const [origTag, origChild] of nodeChildren(structuredClone(original))) {
+            pushChild(out, origTag, origChild);
+          }
+          continue;
+        }
+        pushChild(out, key, rebuild(childNode));
+      }
+    }
+    return out;
+  };
+  return rebuild(structuredClone(node));
+};
+
 // Human-readable text from xs:annotation/xs:documentation children, emitted as
 // .describe() in the generated schemas (#25). A documentation node parses to a
 // plain string when it has no attributes, or an object with #text when it has
@@ -899,11 +959,22 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
 
   // Group/attributeGroup redefines must land before any field collection:
   // references to them are inlined into consumers at collection time (#78).
+  // Self-refs inside the override are expanded against the original first.
   for (const override of redefineOverrides) {
     if (override.kind === 'group') {
-      groups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
+      groups[override.qname] = {
+        ownerNs: override.targetNs,
+        formDefaults: override.formDefaults,
+        nsMap: override.nsMap,
+        node: expandRedefineSelfRefs(override.node, 'group', override.qname, groups[override.qname]?.node, override.nsMap, unresolvedRefs)
+      };
     } else if (override.kind === 'attributeGroup') {
-      attributeGroups[override.qname] = { ownerNs: override.targetNs, formDefaults: override.formDefaults, nsMap: override.nsMap, node: override.node };
+      attributeGroups[override.qname] = {
+        ownerNs: override.targetNs,
+        formDefaults: override.formDefaults,
+        nsMap: override.nsMap,
+        node: expandRedefineSelfRefs(override.node, 'attributeGroup', override.qname, attributeGroups[override.qname]?.node, override.nsMap, unresolvedRefs)
+      };
     }
   }
 
@@ -1002,6 +1073,11 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
       }
     } else if (override.kind === 'simpleType') {
+      // Preserve the original definition before it is replaced: a self-base in
+      // the override (restriction base="own name") points at the ORIGINAL per
+      // xs:redefine semantics, not at the override itself.
+      const original = simpleTypes[override.qname];
+
       // Drop synthetic inline item/member types created for the previous definition
       // so swapping list ↔ union (or changing item/member shape) does not leave orphans.
       const orphanPrefix = `${override.qname}_`;
@@ -1011,7 +1087,17 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         }
       }
 
-      simpleTypes[override.qname] = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
+      const def = parseSimpleTypeDef(override.qname, override.node, override.nsMap, simpleTypes, unresolvedRefs);
+      if (def.kind === 'restriction' && def.baseType === override.qname) {
+        if (original) {
+          const originalName = `${override.qname}_redefined` as QName;
+          simpleTypes[originalName] = { ...original, name: originalName };
+          def.baseType = originalName;
+        } else {
+          unresolvedRefs.add(`circular simpleType redefinition "${override.qname}" without an original definition`);
+        }
+      }
+      simpleTypes[override.qname] = def;
     }
   }
 
