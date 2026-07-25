@@ -226,7 +226,7 @@ npm test
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
 | W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: substitution groups) |
-| W3C sun/ms selection | 2,296 (1,847 ✅, 448 ⚠️) | Valid-instance cases from 18 sun/ms test sets; known failures pinned as `it.fails` with categorized reasons |
+| W3C sun/ms selection | 2,296 (1,958 ✅, 337 ⚠️) | Valid-instance cases from 18 sun/ms test sets; known failures pinned as `it.fails` with categorized reasons |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |

@@ -102,7 +102,7 @@ Features tested include:
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 pinned as `it.fails` — substitution groups)
-- [x] W3C sun/ms selection (2,296 valid-instance cases from 18 test sets; 1,847 passing, 448 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C sun/ms selection (2,296 valid-instance cases from 18 test sets; 1,958 passing, 337 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
