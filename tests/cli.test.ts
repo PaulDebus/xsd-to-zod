@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { cmdValidate, isDirectInvocation, main, parseArgs, parseValidateArgs, USAGE, VALIDATE_USAGE } from '../src/cli.js';
+import { discoverDependencies, expandDirectories, isDirectInvocation, isLibrary, main, stripImports } from '../src/cli.js';
 import { withTempDir, withTempDirAsync } from './helpers.js';
 
 const XSD = `<?xml version="1.0"?>
@@ -25,95 +25,80 @@ const runCli = async (args: string[]): Promise<{ code: number; stdout: string; s
   }
 };
 
-describe('parseArgs', () => {
-  it('parses help flag', () => {
-    expect(parseArgs(['--help'])).toEqual({ ok: true, help: true });
-    expect(parseArgs(['-h'])).toEqual({ ok: true, help: true });
-  });
+// Helper: suppress expected exit errors so `main()` doesn't log them via
+// commander's own output path (which writes to stderr/stdout itself).
+const runCliQuiet = async (args: string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')); });
+  const errSpy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(' ')); });
+  try {
+    return { code: await main(args), stdout: logs.join('\n'), stderr: errors.join('\n') };
+  } finally {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  }
+};
 
-  it('parses files', () => {
-    const r = parseArgs(['schema.xsd']);
-    expect(r).toMatchObject({ ok: true, help: false, files: ['schema.xsd'] });
-  });
+describe('isLibrary', () => {
+  it('returns false for a file with root elements', () => withTempDir((dir) => {
+    const file = path.join(dir, 'roots.xsd');
+    fs.writeFileSync(file, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="hello" type="xs:string"/>
+</xs:schema>`);
+    expect(isLibrary(file)).toBe(false);
+  }));
 
-  it('parses multiple files with --name', () => {
-    const r = parseArgs(['a.xsd', 'b.xsd', '--name', 'all']);
-    expect(r).toMatchObject({ ok: true, help: false, files: ['a.xsd', 'b.xsd'], name: 'all' });
-  });
+  it('returns true for a type-definition-only schema', () => withTempDir((dir) => {
+    const file = path.join(dir, 'lib.xsd');
+    fs.writeFileSync(file, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="Foo"><xs:sequence><xs:element name="bar" type="xs:string"/></xs:sequence></xs:complexType>
+</xs:schema>`);
+    expect(isLibrary(file)).toBe(true);
+  }));
 
-  it('defaults name to first file stem', () => {
-    const r = parseArgs(['/some/path/my-schema.xsd']);
-    expect(r).toMatchObject({ ok: true, name: 'my-schema' });
-  });
+  it('returns false when file does not exist', () => withTempDir((dir) => {
+    expect(isLibrary(path.join(dir, 'missing.xsd'))).toBe(false);
+  }));
 
-  it('requires --name when more than one file', () => {
-    const r = parseArgs(['a.xsd', 'b.xsd']);
-    expect(r).toEqual({ ok: false, error: '--name/-n is required when processing multiple XSD files' });
-  });
+  it('returns false for a file without a schema tag', () => withTempDir((dir) => {
+    const file = path.join(dir, 'nope.xml');
+    fs.writeFileSync(file, '<root/>');
+    expect(isLibrary(file)).toBe(false);
+  }));
 
-  it('parses --name', () => {
-    const r = parseArgs(['a.xsd', 'b.xsd', '--name', 'foo']);
-    expect(r).toMatchObject({ ok: true, name: 'foo' });
-  });
+  it('returns false for a truncated/malformed file', () => withTempDir((dir) => {
+    const file = path.join(dir, 'broken.xsd');
+    fs.writeFileSync(file, '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element');
+    expect(isLibrary(file)).toBe(false);
+  }));
 
-  it('parses --out', () => {
-    const r = parseArgs(['a.xsd', '--out', 'some/dir']);
-    expect(r).toMatchObject({ ok: true, out: 'some/dir' });
-  });
+  it('handles namespace-prefixed schema tags', () => withTempDir((dir) => {
+    const file = path.join(dir, 'prefixed.xsd');
+    fs.writeFileSync(file, `<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <xsd:complexType name="Bar"/>
+</xsd:schema>`);
+    expect(isLibrary(file)).toBe(true);
+  }));
 
-  it('rejects --out without value', () => {
-    const r = parseArgs(['a.xsd', '--out', '--name']);
-    expect(r).toEqual({ ok: false, error: '--out/-o requires a directory argument' });
-  });
-
-  it('parses --format', () => {
-    const r = parseArgs(['a.xsd', '--format']);
-    expect(r).toMatchObject({ ok: true, format: true });
-  });
-
-  it('rejects missing files', () => {
-    const r = parseArgs([]);
-    expect(r).toEqual({ ok: false, error: 'at least one XSD file is required' });
-  });
-
-  it('rejects --name without value', () => {
-    const r = parseArgs(['a.xsd', '--name', '--out']);
-    expect(r).toEqual({ ok: false, error: '--name/-n requires a string argument' });
-  });
-
-  it('rejects unknown options instead of treating them as files (#82)', () => {
-    expect(parseArgs(['a.xsd', '--fromat'])).toEqual({ ok: false, error: 'unknown option: --fromat' });
-    expect(parseArgs(['--out=dir', 'a.xsd'])).toEqual({ ok: false, error: 'unknown option: --out=dir' });
-  });
-
-  it('rejects flag values that look like options (#82)', () => {
-    expect(parseArgs(['a.xsd', '--out', '-x'])).toEqual({ ok: false, error: '--out/-o requires a directory argument' });
-  });
-
-  it('rejects --name with path separators (#82)', () => {
-    const err = '--name/-n must be a plain file name without path separators';
-    expect(parseArgs(['a.xsd', '-n', '../../somewhere/x'])).toEqual({ ok: false, error: err });
-    expect(parseArgs(['a.xsd', '--name', 'sub/dir'])).toEqual({ ok: false, error: err });
-    expect(parseArgs(['a.xsd', '--name', '..'])).toEqual({ ok: false, error: err });
-  });
-
-  it('rejects inputs that yield an empty output stem (#82)', () => {
-    const r = parseArgs(['.xsd']);
-    expect(r).toEqual({ ok: false, error: 'cannot derive an output name from the input file; pass --name/-n' });
-  });
+  it('returns true for empty schema with no children', () => withTempDir((dir) => {
+    const file = path.join(dir, 'empty.xsd');
+    fs.writeFileSync(file, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+</xs:schema>`);
+    expect(isLibrary(file)).toBe(true);
+  }));
 });
 
 describe('CLI e2e', () => {
-  it('prints USAGE on --help', async () => {
-    const r = await runCli(['--help']);
+  it('prints help on --help', async () => {
+    const r = await runCliQuiet(['--help']);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe(USAGE.trim());
   });
 
   it('exits with error when no files given', async () => {
-    const r = await runCli([]);
+    const r = await runCliQuiet([]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain('at least one XSD file');
+    expect(r.stderr).toContain('no .xsd files found');
   });
 
   it('creates output directory if it does not exist', async () => {
@@ -199,6 +184,143 @@ describe('CLI e2e', () => {
       expect(r.stderr).toContain('[no-schema-root]');
     });
   });
+
+  it('expands a directory argument into .xsd files (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsd1 = path.join(dir, 'first.xsd');
+      const xsd2 = path.join(dir, 'second.xsd');
+      fs.writeFileSync(xsd1, XSD);
+      fs.writeFileSync(xsd2, XSD);
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([dir, '-o', outDir, '--name', 'all']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'all.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('skips non-.xsd files when expanding directories (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, 'schema.xsd'), XSD);
+      fs.writeFileSync(path.join(dir, 'readme.txt'), 'not an xsd');
+      fs.writeFileSync(path.join(dir, 'data.xml'), '<root/>');
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([dir, '-o', outDir, '--name', 'my']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'my.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('errors when directory contains no .xsd files (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, 'readme.txt'), 'no xsd here');
+      const r = await runCli([dir, '-o', dir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('no .xsd files found');
+    });
+  });
+
+  it('writes no output files when any XSD in a directory is invalid (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const validFile = path.join(dir, 'valid.xsd');
+      const brokenFile = path.join(dir, 'broken.xsd');
+      fs.writeFileSync(validFile, XSD);
+      fs.writeFileSync(brokenFile, '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element');
+      const outDir = path.join(dir, 'out');
+      fs.mkdirSync(outDir);
+      const r = await runCli([dir, '-o', outDir, '--name', 'all']);
+      expect(r.code).toBe(1);
+      expect(fs.existsSync(path.join(outDir, 'all.zod.ts'))).toBe(false);
+    });
+  });
+
+  it('skips type-definition libraries by default (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'lib.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="Orphan">
+    <xs:sequence>
+      <xs:element name="field" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`);
+      const r = await runCli([xsdFile, '-o', dir]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Skipped');
+      expect(r.stdout).toContain('type-definition library');
+      expect(fs.existsSync(path.join(dir, 'lib.zod.ts'))).toBe(false);
+    });
+  });
+
+  it('includes type-definition libraries with --include-libraries (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'lib.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="Orphan">
+    <xs:sequence>
+      <xs:element name="field" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`);
+      const r = await runCli([xsdFile, '-o', dir, '--include-libraries']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Wrote');
+      expect(fs.existsSync(path.join(dir, 'lib.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('suppresses unresolved ref warnings with --allow-missing-imports (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t:missing"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const r = await runCli([xsdFile, '-o', dir, '--allow-missing-imports']);
+      expect(r.code).toBe(0);
+      expect(r.stderr).not.toContain('warning:');
+      const output = fs.readFileSync(path.join(dir, 'test.zod.ts'), 'utf8');
+      expect(output).toContain('z.unknown()');
+    });
+  });
+
+  it('suppresses informational output with --silent (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      fs.writeFileSync(xsdFile, XSD);
+      const r = await runCli([xsdFile, '-o', dir, '--silent']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(fs.existsSync(path.join(dir, 'test.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('still shows warnings with --silent (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'test.xsd');
+      fs.writeFileSync(xsdFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t:missing"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const r = await runCli([xsdFile, '-o', dir, '--silent']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toContain('warning:');
+    });
+  });
 });
 
 describe('isDirectInvocation (#80)', () => {
@@ -226,66 +348,10 @@ describe('isDirectInvocation (#80)', () => {
   });
 });
 
-describe('parseValidateArgs', () => {
-  it('parses xsd + xml', () => {
-    const r = parseValidateArgs(['data.xml', '-x', 'schema.xsd']);
-    expect(r).toMatchObject({ ok: true, help: false, xmlFile: 'data.xml', xsdFile: 'schema.xsd', root: undefined });
-  });
-
-  it('parses short flags with xsd', () => {
-    const r = parseValidateArgs(['data.xml', '-x', 'schema.xsd', '-r', '{urn:test}root']);
-    expect(r).toMatchObject({ ok: true, xmlFile: 'data.xml', xsdFile: 'schema.xsd', root: '{urn:test}root' });
-  });
-
-  it('rejects --metadata as an unknown option', () => {
-    const r = parseValidateArgs(['data.xml', '--metadata', 'meta.ts']);
-    expect(r).toEqual({ ok: false, error: 'unknown option: --metadata' });
-  });
-
-  it('rejects missing xml file', () => {
-    const r = parseValidateArgs(['--xsd', 'schema.xsd']);
-    expect(r).toEqual({ ok: false, error: 'xml-file is required' });
-  });
-
-  it('rejects missing --xsd', () => {
-    const r = parseValidateArgs(['data.xml']);
-    expect(r).toEqual({ ok: false, error: '--xsd is required' });
-  });
-
-  it('rejects --xsd without value', () => {
-    const r = parseValidateArgs(['data.xml', '--xsd', '--root']);
-    expect(r).toEqual({ ok: false, error: '--xsd/-x requires a file argument' });
-  });
-
-  it('rejects --root without value', () => {
-    const r = parseValidateArgs(['data.xml', '--xsd', 's.xsd', '--root', '--help']);
-    expect(r).toEqual({ ok: false, error: '--root/-r requires a QName argument' });
-  });
-
-  it('parses --engine and defaults to zod', () => {
-    expect(parseValidateArgs(['data.xml', '-x', 's.xsd'])).toMatchObject({ ok: true, engine: 'zod' });
-    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', 'libxml2'])).toMatchObject({ ok: true, engine: 'libxml2' });
-    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '-e', 'zod'])).toMatchObject({ ok: true, engine: 'zod' });
-  });
-
-  it('rejects unknown engines and missing engine values', () => {
-    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', 'relaxng']))
-      .toEqual({ ok: false, error: "unknown engine: relaxng (expected 'zod' or 'libxml2')" });
-    expect(parseValidateArgs(['data.xml', '-x', 's.xsd', '--engine', '--root']))
-      .toEqual({ ok: false, error: '--engine/-e requires an engine argument' });
-  });
-
-  it('returns help', () => {
-    expect(parseValidateArgs(['--help'])).toEqual({ ok: true, help: true });
-    expect(parseValidateArgs(['-h'])).toEqual({ ok: true, help: true });
-  });
-});
-
 describe('CLI validate e2e', () => {
-  it('prints VALIDATE_USAGE on validate --help', async () => {
-    const r = await runCli(['validate', '--help']);
+  it('prints help on validate --help', async () => {
+    const r = await runCliQuiet(['validate', '--help']);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe(VALIDATE_USAGE.trim());
   });
 
   it('validates XML against XSD (success)', async () => {
@@ -452,57 +518,174 @@ describe('CLI validate e2e', () => {
   });
 });
 
-describe('cmdValidate unit', () => {
-  it('throws when args are invalid', async () => {
-    await expect(cmdValidate(['--xsd'])).rejects.toThrow('--xsd/-x requires a file argument');
+describe('CLI bundle e2e', () => {
+  it('prints help on bundle --help', async () => {
+    const r = await runCliQuiet(['bundle', '--help']);
+    expect(r.code).toBe(0);
   });
 
-  it('throws when xml file not found', async () => {
-    await expect(cmdValidate(['/nonexistent.xml', '--xsd', '/nonexistent.xsd'])).rejects.toThrow('xml file not found');
+  it('bundles a single XSD with no imports', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, 'schema.xsd');
+      fs.writeFileSync(xsdFile, XSD);
+      const outFile = path.join(dir, 'out', 'bundled.xsd');
+      const r = await runCli(['bundle', xsdFile, '-o', outFile]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Bundled');
+      expect(fs.existsSync(outFile)).toBe(true);
+      const content = fs.readFileSync(outFile, 'utf8');
+      expect(content).toContain('xs:schema');
+      expect(content).toContain('xs:element');
+    });
   });
 
-  it('throws when xsd file not found', async () => {
+  it('bundles XSD with xs:include', async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, 'types.xsd');
+      const mainFile = path.join(dir, 'main.xsd');
+      fs.writeFileSync(typesFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="ItemType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`);
+      fs.writeFileSync(mainFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:include schemaLocation="types.xsd"/>
+  <xs:element name="order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" type="t:ItemType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const outFile = path.join(dir, 'bundled.xsd');
+      const r = await runCli(['bundle', mainFile, '-o', outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, 'utf8');
+      expect(content).toContain('ItemType');
+      expect(content).toContain('xs:element');
+      // Should not contain include elements.
+      expect(content).not.toMatch(/xs:include/);
+    });
+  });
+
+  it('bundles XSD with xs:import', async () => {
+    await withTempDirAsync(async (dir) => {
+      const libFile = path.join(dir, 'lib.xsd');
+      const mainFile = path.join(dir, 'main.xsd');
+      fs.writeFileSync(libFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:lib" xmlns:lib="urn:lib" elementFormDefault="qualified">
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="street" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`);
+      fs.writeFileSync(mainFile, `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" xmlns:lib="urn:lib" elementFormDefault="qualified">
+  <xs:import namespace="urn:lib" schemaLocation="lib.xsd"/>
+  <xs:element name="person">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name" type="xs:string"/>
+        <xs:element name="addr" type="lib:AddressType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+      const outFile = path.join(dir, 'bundled.xsd');
+      const r = await runCli(['bundle', mainFile, '-o', outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, 'utf8');
+      expect(content).toContain('AddressType');
+      expect(content).not.toMatch(/xs:import/);
+    });
+  });
+
+  it('fails for nonexistent entry file', async () => {
+    const r = await runCli(['bundle', '/nonexistent/schema.xsd']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('entry file not found');
+  });
+});
+
+describe('recursive directory expansion', () => {
+  it('recursively finds .xsd files in subdirectories', async () => {
+    await withTempDirAsync(async (dir) => {
+      const subDir = path.join(dir, 'sub');
+      fs.mkdirSync(subDir);
+      fs.writeFileSync(path.join(dir, 'top.xsd'), XSD);
+      fs.writeFileSync(path.join(subDir, 'nested.xsd'), XSD);
+      fs.writeFileSync(path.join(subDir, 'readme.txt'), 'not xsd');
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([dir, '-o', outDir, '--name', 'all']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'all.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('handles a mix of files and directories', async () => {
+    await withTempDirAsync(async (dir) => {
+      const subDir = path.join(dir, 'schemas');
+      fs.mkdirSync(subDir);
+      fs.writeFileSync(path.join(dir, 'standalone.xsd'), XSD);
+      fs.writeFileSync(path.join(subDir, 'nested.xsd'), XSD);
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([path.join(dir, 'standalone.xsd'), subDir, '-o', outDir, '--name', 'all']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'all.zod.ts'))).toBe(true);
+    });
+  });
+});
+
+describe('expandDirectories (unit)', () => {
+  it('expands a directory recursively', () => {
     withTempDir((dir) => {
-      const xmlFile = path.join(dir, 'test.xml');
-      fs.writeFileSync(xmlFile, '<root/>');
-      return expect(cmdValidate([xmlFile, '--xsd', '/nonexistent.xsd'])).rejects.toThrow('xsd file not found');
+      const sub = path.join(dir, 'sub');
+      fs.mkdirSync(sub);
+      fs.writeFileSync(path.join(dir, 'a.xsd'), '');
+      fs.writeFileSync(path.join(sub, 'b.xsd'), '');
+      fs.writeFileSync(path.join(dir, 'readme.txt'), '');
+      expect(expandDirectories([dir])).toEqual([
+        path.join(dir, 'a.xsd'),
+        path.join(sub, 'b.xsd'),
+      ]);
     });
   });
 
-  it('validates XML against XSD successfully', async () => {
-    await withTempDirAsync(async (dir) => {
-      const xsdFile = path.join(dir, 'test.xsd');
-      const xmlFile = path.join(dir, 'test.xml');
-      const xsd = `<?xml version="1.0"?>
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
-  <xs:element name="root" type="xs:string"/>
+  it('returns non-existent paths as-is', () => {
+    expect(expandDirectories(['nope.xsd'])).toEqual(['nope.xsd']);
+  });
+});
+
+describe('discoverDependencies (unit)', () => {
+  it('finds transitive include dependencies', () => {
+    withTempDir((dir) => {
+      const leaf = path.join(dir, 'leaf.xsd');
+      const main = path.join(dir, 'main.xsd');
+      fs.writeFileSync(leaf, '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="x" type="xs:string"/></xs:schema>');
+      fs.writeFileSync(main, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:include schemaLocation="leaf.xsd"/></xs:schema>`);
+      const deps = discoverDependencies(main);
+      expect(deps).toContain(main);
+      expect(deps).toContain(leaf);
+    });
+  });
+});
+
+describe('stripImports (unit)', () => {
+  it('removes import/include/redefine tags', () => {
+    const xsd = `<xs:schema>
+  <xs:import namespace="urn:lib" schemaLocation="lib.xsd"/>
+  <xs:include schemaLocation="types.xsd"/>
+  <xs:element name="root"/>
 </xs:schema>`;
-      const xml = '<?xml version="1.0"?><root xmlns="urn:test">hello</root>';
-      fs.writeFileSync(xsdFile, xsd);
-      fs.writeFileSync(xmlFile, xml);
-      await expect(cmdValidate([xmlFile, '--xsd', xsdFile])).resolves.toBeUndefined();
-    });
-  });
-
-  it('throws when XML does not match XSD', async () => {
-    await withTempDirAsync(async (dir) => {
-      const xsdFile = path.join(dir, 'test.xsd');
-      const xmlFile = path.join(dir, 'test.xml');
-      const xsd = `<?xml version="1.0"?>
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
-  <xs:element name="root" type="xs:string"/>
-</xs:schema>`;
-      const xml = '<?xml version="1.0"?><wrong xmlns="urn:test">hello</wrong>';
-      fs.writeFileSync(xsdFile, xsd);
-      fs.writeFileSync(xmlFile, xml);
-      await expect(cmdValidate([xmlFile, '--xsd', xsdFile])).rejects.toThrow('Validation failed');
-    });
-  });
-
-  it('handles --help', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await cmdValidate(['--help']);
-    expect(logSpy).toHaveBeenCalledWith(VALIDATE_USAGE);
-    logSpy.mockRestore();
+    const result = stripImports(xsd);
+    expect(result).not.toMatch(/xs:import/);
+    expect(result).not.toMatch(/xs:include/);
+    expect(result).toContain('xs:element name="root"');
   });
 });
