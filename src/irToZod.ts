@@ -489,7 +489,14 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     // clobber its type meta (and collide when two roots share one type).
     const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
-    schemaLines.push(`export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `root: ${JSON.stringify(root)}`)};`);
+    const rootMeta = [`root: ${JSON.stringify(root)}`];
+    if (rootDef.defaultValue !== undefined) {
+      rootMeta.push(`defaultValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.defaultValue)}`);
+    }
+    if (rootDef.fixedValue !== undefined) {
+      rootMeta.push(`fixedValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.fixedValue)}`);
+    }
+    schemaLines.push(`export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, rootMeta.join(', '))};`);
   }
 
   const xsdImports = [

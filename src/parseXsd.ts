@@ -1017,7 +1017,9 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         typeName,
         cardinality: parseCardinality(child),
         nillable: child['@_nillable'] === true || child['@_nillable'] === 'true',
-        description: extractDocumentation(child)
+        description: extractDocumentation(child),
+        ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
+        ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {})
       };
       if (!rootElements.includes(qname)) {
         rootElements.push(qname);

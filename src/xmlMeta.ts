@@ -30,6 +30,13 @@ export type XmlFieldMeta = {
 export type XmlMeta = {
   qname?: QName;
   root?: QName;
+  /**
+   * Root element default/fixed (coerced JS value). Same rule as field
+   * defaults: applies to a present-but-empty root element, so the runtime
+   * substitutes it while walking rather than encoding a zod default.
+   */
+  defaultValue?: unknown;
+  fixedValue?: unknown;
   fields?: Record<string, XmlFieldMeta>;
 };
 

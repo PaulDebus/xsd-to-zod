@@ -59,6 +59,9 @@ export type ElementDef = {
   cardinality: Cardinality;
   nillable?: boolean;
   description?: string;
+  /** Raw lexicals; coerced to the JS type at emission (#68). */
+  defaultValue?: string;
+  fixedValue?: string;
 };
 
 export type XsdIr = {
