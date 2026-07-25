@@ -310,6 +310,10 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       }
     });
 
+    if (repeatedChoice && !requiredChoice) {
+      continue;
+    }
+
     const countCheck = repeatedChoice
       ? '> 0'
       : requiredChoice
@@ -320,7 +324,7 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
 
     const names = branches.map((b) => b.map((f) => clarkToLocal(f.qname)).join('+')).join(', ');
     const message = repeatedChoice
-      ? `${requiredChoice ? 'choice requires at least one of' : 'choice allows any of'}: ${names}`
+      ? `choice requires at least one of: ${names}`
       : `${requiredChoice ? 'choice requires exactly one of' : 'choice allows at most one of'}: ${names}`;
     refines.push(`.refine((val) => {\n${lines.join('\n')}\n}, { message: ${JSON.stringify(message)} })`);
   }

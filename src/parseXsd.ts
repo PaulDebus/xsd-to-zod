@@ -311,6 +311,7 @@ type FieldCollectionContext = {
   formDefaults: SchemaFormDefaults;
   elements: Record<string, ElementDef>;
   choiceCounter: { value: number };
+  choiceGroupCardinality: Map<string, Cardinality>;
   complexTypes: Record<string, ComplexTypeDef>;
   syntheticTypes: SyntheticTypeContext;
   groups: Record<string, GroupEntry>;
@@ -327,7 +328,6 @@ type CollectFieldsScope = {
   choiceGroup?: string;
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
-  choiceGroupCardinality?: Map<string, Cardinality>;
 };
 
 const collectFields = (
@@ -467,8 +467,7 @@ const collectFields = (
       collectFields(child, ctx, {
         ownerNs, fields, choiceGroup,
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-        choiceBranch,
-        choiceGroupCardinality: scope.choiceGroupCardinality
+        choiceBranch
       });
       continue;
     }
@@ -476,9 +475,7 @@ const collectFields = (
     if (localTag === 'choice') {
       const groupId = `${ctx.choiceCounter.value++}`;
       const choiceCard = combineCardinality(inheritedCardinality, parseCardinality(child));
-      if (scope.choiceGroupCardinality) {
-        scope.choiceGroupCardinality.set(groupId, choiceCard);
-      }
+      ctx.choiceGroupCardinality.set(groupId, choiceCard);
       // Each direct child of the xs:choice is one branch. Branch identity is
       // threaded through as choiceBranch so fields inlined from a group ref or
       // nested compositor stay together as a single branch (#73 / ipo-style
@@ -494,8 +491,7 @@ const collectFields = (
           ownerNs, fields,
           choiceGroup: groupId,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-          choiceBranch: branchId,
-          choiceGroupCardinality: scope.choiceGroupCardinality
+          choiceBranch: branchId
         });
       }
       continue;
@@ -510,8 +506,7 @@ const collectFields = (
         collectFields(groupEntry.node, { ...ctx, nsMap: groupEntry.nsMap, formDefaults: groupEntry.formDefaults }, {
           ownerNs: groupEntry.ownerNs, fields, choiceGroup,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-          choiceBranch,
-          choiceGroupCardinality: scope.choiceGroupCardinality
+          choiceBranch
         });
       } else {
         diagnostics.add(`unresolved group ref "${refQName}"`);
@@ -527,8 +522,7 @@ const collectFields = (
       if (attrEntry) {
         collectFields(attrEntry.node, { ...ctx, nsMap: attrEntry.nsMap, formDefaults: attrEntry.formDefaults }, {
           ownerNs: attrEntry.ownerNs, fields, choiceGroup,
-          inheritedCardinality, choiceBranch,
-          choiceGroupCardinality: scope.choiceGroupCardinality
+          inheritedCardinality, choiceBranch
         });
       } else {
         diagnostics.add(`unresolved attributeGroup ref "${refQName}"`);
@@ -575,7 +569,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch, choiceGroupCardinality: scope.choiceGroupCardinality });
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
       continue;
     }
 
@@ -587,7 +581,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch, choiceGroupCardinality: scope.choiceGroupCardinality });
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
     }
   }
 };
@@ -639,11 +633,17 @@ export const parseXsd = (files: string[]): XsdIr => {
   const attributes: Record<string, GlobalAttributeDecl> = {};
   const unresolvedRefs = new Set<string>();
 
+  const choiceGroupsMeta = (entries: Map<string, Cardinality> | Record<string, Cardinality>): object => {
+    const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
+    return Object.keys(record).length > 0 ? { choiceGroups: record } : {};
+  };
+
   const fieldContext = (nsMap: Record<string, string>, formDefaults: SchemaFormDefaults, targetNs: string): FieldCollectionContext => ({
     nsMap,
     formDefaults,
     elements,
     choiceCounter: { value: 0 },
+    choiceGroupCardinality: new Map(),
     complexTypes,
     syntheticTypes: { targetNs, counter: syntheticTypeCounter, simpleTypes },
     groups,
@@ -923,16 +923,14 @@ export const parseXsd = (files: string[]): XsdIr => {
       if (!name) continue;
       const qname = toClark(effectiveNs, name);
       const fields: IrField[] = [];
-      const choiceGroupCard = new Map<string, Cardinality>();
-      collectFields(child, fieldContext(resolveNsMap, fileFormDefaults, effectiveNs), {
+      const fCtx = fieldContext(resolveNsMap, fileFormDefaults, effectiveNs);
+      collectFields(child, fCtx, {
         ownerNs: effectiveNs, fields,
-        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
-        choiceGroupCardinality: choiceGroupCard
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
 
-      const choiceGroups = Object.fromEntries(choiceGroupCard);
-      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...(Object.keys(choiceGroups).length > 0 ? { choiceGroups } : {}) };
+      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
     }
   }
 
@@ -940,11 +938,10 @@ export const parseXsd = (files: string[]): XsdIr => {
   for (const override of redefineOverrides) {
     if (override.kind === 'complexType') {
       const fields: IrField[] = [];
-      const choiceGroupCard = new Map<string, Cardinality>();
-      collectFields(override.node, fieldContext(override.nsMap, override.formDefaults, override.targetNs), {
+      const fCtx = fieldContext(override.nsMap, override.formDefaults, override.targetNs);
+      collectFields(override.node, fCtx, {
         ownerNs: override.targetNs, fields,
-        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
-        choiceGroupCardinality: choiceGroupCard
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
       const complexContent = nodeChildren(override.node)
         .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
@@ -958,13 +955,12 @@ export const parseXsd = (files: string[]): XsdIr => {
       const derivationNode = derivationEntry?.[1];
       const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
       const description = extractDocumentation(override.node);
-      const overrideChoiceGroups = Object.fromEntries(choiceGroupCard);
-      const cgMeta = Object.keys(overrideChoiceGroups).length > 0 ? { choiceGroups: overrideChoiceGroups } : {};
+      const cgMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
       if (baseType === override.qname && derivationKind === 'extension') {
         const original = complexTypes[override.qname];
         if (original) {
-          const mergedChoiceGroups = { ...original.choiceGroups, ...overrideChoiceGroups };
-          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...(Object.keys(mergedChoiceGroups).length > 0 ? { choiceGroups: mergedChoiceGroups } : {}) };
+          const mergedChoiceGroups = { ...original.choiceGroups, ...Object.fromEntries(fCtx.choiceGroupCardinality) };
+          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...choiceGroupsMeta(mergedChoiceGroups) };
         } else {
           complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description, ...cgMeta };
         }
@@ -990,14 +986,12 @@ export const parseXsd = (files: string[]): XsdIr => {
   // Process deferred inline types now that all elements are collected
   const processDeferredType = ({ typeName, container, ownerNs, nsMap, formDefaults }: DeferredInlineType) => {
     const fields: IrField[] = [];
-    const choiceGroupCard = new Map<string, Cardinality>();
-    collectFields(container, fieldContext(nsMap, formDefaults, ownerNs), {
+    const fCtx = fieldContext(nsMap, formDefaults, ownerNs);
+    collectFields(container, fCtx, {
       ownerNs, fields,
-      inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
-      choiceGroupCardinality: choiceGroupCard
+      inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
     });
-    const choiceGroups = Object.fromEntries(choiceGroupCard);
-    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...(Object.keys(choiceGroups).length > 0 ? { choiceGroups } : {}) };
+    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
   };
 
   for (const deferred of deferredInlineTypes) {
