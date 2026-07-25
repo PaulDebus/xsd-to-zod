@@ -81,6 +81,10 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
   }
 
   switch (parts.local) {
+    case 'anyType':
+      // Open content: the runtime walks/serializes it generically (open shape);
+      // zod stays permissive for this lax tier.
+      return 'z.unknown()';
     case 'string':
     case 'token':
     case 'date':
@@ -394,6 +398,9 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
 const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
   const entries = type.fields.map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
+    if (field.typeName === '{http://www.w3.org/2001/XMLSchema}anyType') {
+      parts.push('open: true');
+    }
     if (field.kind === 'element' && field.defaultValue !== undefined && field.fixedValue === undefined) {
       parts.push(`defaultValue: ${typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.defaultValue)}`);
     }
@@ -499,6 +506,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`];
+    if (rootDef.typeName === '{http://www.w3.org/2001/XMLSchema}anyType') {
+      rootMeta.push('open: true');
+    }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(`defaultValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.defaultValue)}`);
     }

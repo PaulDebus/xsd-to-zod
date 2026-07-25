@@ -512,6 +512,15 @@ const readOccurrence = (
     if (nilValue === 'true' || nilValue === '1') {
       return null;
     }
+    if (fieldMeta.open) {
+      // Element default/fixed applies to present-but-empty open fields too.
+      const text = textOf(childNode);
+      if (text === undefined || text === '') {
+        const empty = substituteEmpty(field, fieldMeta);
+        if (empty.substituted) return empty.value;
+      }
+      return openWalk(childNode, childContext);
+    }
     if (hasObjectShape(field.itemSchema)) {
       return readObject(field.itemSchema, childNode, childContext);
     }
@@ -527,6 +536,9 @@ const readOccurrence = (
   if (entry === '') {
     const empty = substituteEmpty(field, fieldMeta);
     if (empty.substituted) return empty.value;
+  }
+  if (fieldMeta.open) {
+    return entry;
   }
   if (hasObjectShape(field.itemSchema)) {
     return readObject(field.itemSchema, { '#text': entry }, namespaceContext);
@@ -591,6 +603,10 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
     return null;
   }
 
+  if (meta.open) {
+    return openWalk(rootNode, namespaceContext);
+  }
+
   const typeSchema = peelOnce(schema);
   if (hasObjectShape(typeSchema)) {
     return readObject(typeSchema, rootNode, namespaceContext);
@@ -603,6 +619,61 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
     if (meta.defaultValue !== undefined) return meta.defaultValue;
   }
   return coerceLexical(text, typeSchema);
+};
+
+// Open content (xs:anyType, wildcards): schema-less walk into the normalized
+// open shape — clark-keyed child elements, '@'-prefixed attribute keys,
+// '_text' for character data next to attributes/children. A leaf element
+// collapses to its text string.
+const openWalk = (node: Record<string, unknown>, namespaceContext: Record<string, string>): unknown => {
+  const context = withNamespaceContext(namespaceContext, node);
+  const out: Record<string, unknown> = {};
+  let hasStructure = false;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '#text' || key === '#cdata' || key === '@_xmlns' || key.startsWith('@_xmlns:')) {
+      continue;
+    }
+    if (key.startsWith('@_')) {
+      const { prefix, local } = splitQName(key.slice(2));
+      const namespace = prefix ? (context[prefix] ?? '') : '';
+      // xsi:* attributes are processor directives (nil/type/schemaLocation),
+      // not content; the typed walker drops them too, and their QName values
+      // could not be re-serialized without declaring the value's prefix.
+      if (namespace === XSI_NS) {
+        continue;
+      }
+      out[`@${namespace ? `{${namespace}}` : ''}${local}`] = value === undefined ? value : String(value);
+      hasStructure = true;
+      continue;
+    }
+    const { prefix, local } = splitQName(key);
+    for (const item of toArray(value)) {
+      hasStructure = true;
+      // Namespace per item — repeated siblings may redeclare prefixes (#67).
+      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
+      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      const childKey = `{${namespace}}${local}`;
+      const childValue = itemNode ? openWalk(itemNode, context) : item;
+      const existing = out[childKey];
+      if (existing === undefined) {
+        out[childKey] = childValue;
+      } else if (Array.isArray(existing)) {
+        existing.push(childValue);
+      } else {
+        out[childKey] = [existing, childValue];
+      }
+    }
+  }
+  const text = textOf(node);
+  if (!hasStructure) {
+    // An empty open element is empty-string content, not xsi:nil.
+    return text === undefined ? '' : text;
+  }
+  if (text !== undefined && text !== '') {
+    out._text = text;
+  }
+  return out;
 };
 
 // ---------------------------------------------------------------------------
@@ -628,6 +699,43 @@ const elementName = (qname: string, prefixMap: Map<string, string>): string => {
 
 type SerializeCtx = {
   prefixMap: Map<string, string>;
+};
+
+// Serialize the normalized open shape (see openWalk): attributes, child
+// elements (arrays repeat), '_text'. Leaf values serialize as text.
+const openSerialize = (value: unknown, ctx: SerializeCtx): { attributes: string[]; body: string; usesXsi: boolean } => {
+  if (value === null || typeof value !== 'object') {
+    return { attributes: [], body: serializePrimitive(value), usesXsi: false };
+  }
+  const attributes: string[] = [];
+  const elements: string[] = [];
+  let usesXsi = false;
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (entry === undefined) {
+      continue;
+    }
+    if (key === '_text') {
+      elements.push(serializePrimitive(entry));
+      continue;
+    }
+    if (key.startsWith('@')) {
+      attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(entry)}"`);
+      continue;
+    }
+    const tag = elementName(key, ctx.prefixMap);
+    for (const item of Array.isArray(entry) ? entry : [entry]) {
+      if (item === null) {
+        usesXsi = true;
+        elements.push(`<${tag} xsi:nil="true"/>`);
+        continue;
+      }
+      const inner = openSerialize(item, ctx);
+      usesXsi = usesXsi || inner.usesXsi;
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+      elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
+    }
+  }
+  return { attributes, body: elements.join(''), usesXsi };
 };
 
 const serializePrimitive = (value: unknown): string => {
@@ -719,6 +827,13 @@ const writeObjectFields = (
         elements.push(`<${localName} xsi:nil="true"/>`);
         continue;
       }
+      if (fieldMeta.open) {
+        const inner = openSerialize(item, ctx);
+        usesXsi = usesXsi || inner.usesXsi;
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+        elements.push(`<${localName}${attrStr}>${inner.body}</${localName}>`);
+        continue;
+      }
       if (hasObjectShape(field.itemSchema) && typeof item === 'object' && !Array.isArray(item)) {
         const inner = writeObjectFields(field.itemSchema, item as Record<string, unknown>, ctx);
         usesXsi = usesXsi || inner.usesXsi;
@@ -799,6 +914,11 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   let usesXsi = false;
   if (data === null || data === undefined) {
     usesXsi = true;
+  } else if (meta.open) {
+    const inner = openSerialize(data, ctx);
+    attributes = inner.attributes;
+    usesXsi = inner.usesXsi;
+    body = inner.body;
   } else if (hasObjectShape(typeSchema)) {
     const inner = writeObjectFields(typeSchema, data as Record<string, unknown>, ctx);
     attributes = inner.attributes;

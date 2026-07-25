@@ -16,6 +16,12 @@ export type XmlFieldMeta = {
    * Attribute defaults are plain `.default()` on the field schema instead.
    */
   defaultValue?: unknown;
+  /**
+   * Open (xs:anyType) content: the field holds the normalized open shape
+   * (clark-keyed children, '@'-prefixed attributes, '_text') rather than a
+   * schema-driven structure; the runtime walks/serializes it generically.
+   */
+  open?: boolean;
 };
 
 /**
@@ -37,6 +43,8 @@ export type XmlMeta = {
    */
   defaultValue?: unknown;
   fixedValue?: unknown;
+  /** Open (xs:anyType) root element — see XmlFieldMeta.open. */
+  open?: boolean;
   fields?: Record<string, XmlFieldMeta>;
 };
 
