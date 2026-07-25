@@ -64,7 +64,7 @@ const expectedValid = (testNode: AnyNode): boolean =>
 // http://www.w3.org/TR/2004/REC-xmlschema-1-20041028/#Complex_Type_Definitions
 // → xmlschema-1#Complex_Type_Definitions. Non-spec hrefs return undefined.
 const specAnchor = (ref: string): string | undefined => {
-  const match = ref.match(/xmlschema-(\d)[^/#]*#(.+)$/);
+  const match = ref.match(/xmlschema-(\d)[^#]*#(.+)$/);
   return match ? `xmlschema-${match[1]}#${match[2]}` : undefined;
 };
 
