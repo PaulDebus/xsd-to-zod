@@ -219,6 +219,42 @@ describe('CLI e2e', () => {
     });
   });
 
+  it('requires --name when processing multiple inputs (#82)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsd1 = path.join(dir, 'a.xsd');
+      const xsd2 = path.join(dir, 'b.xsd');
+      fs.writeFileSync(xsd1, XSD);
+      fs.writeFileSync(xsd2, XSD);
+      const r = await runCli([xsd1, xsd2, '-o', dir]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('--name/-n is required when processing multiple XSD files');
+    });
+  });
+
+  it('derives the output name from a single directory input (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      const schemaDir = path.join(dir, 'schemas');
+      fs.mkdirSync(schemaDir);
+      fs.writeFileSync(path.join(schemaDir, 'one.xsd'), XSD);
+      fs.writeFileSync(path.join(schemaDir, 'two.xsd'), XSD);
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([schemaDir, '-o', outDir]);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'schemas.zod.ts'))).toBe(true);
+    });
+  });
+
+  it('does not recurse infinitely into symlinked directories (#34)', async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, 'schema.xsd'), XSD);
+      fs.symlinkSync(dir, path.join(dir, 'loop'));
+      const outDir = path.join(dir, 'out');
+      const r = await runCli([dir, '-o', outDir, '--name', 'all']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, 'all.zod.ts'))).toBe(true);
+    });
+  });
+
   it('writes no output files when any XSD in a directory is invalid (#34)', async () => {
     await withTempDirAsync(async (dir) => {
       const validFile = path.join(dir, 'valid.xsd');

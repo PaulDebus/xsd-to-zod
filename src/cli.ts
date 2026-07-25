@@ -52,7 +52,7 @@ const importGeneratedModule = async (schemasCode: string): Promise<Record<string
   }
 };
 
-export const expandDirectories = (files: string[]): string[] => {
+export const expandDirectories = (files: string[], visitedDirs = new Set<string>()): string[] => {
   const expanded: string[] = [];
   for (const file of files) {
     if (!existsSync(file)) {
@@ -61,9 +61,15 @@ export const expandDirectories = (files: string[]): string[] => {
     }
     const stat = statSync(file);
     if (stat.isDirectory()) {
+      // Guard against symlink cycles: visit each real directory only once.
+      const real = realpathSync(file);
+      if (visitedDirs.has(real)) {
+        continue;
+      }
+      visitedDirs.add(real);
       const entries = readdirSync(file);
       for (const entry of entries) {
-        expanded.push(...expandDirectories([join(file, entry)]));
+        expanded.push(...expandDirectories([join(file, entry)], visitedDirs));
       }
     } else if (extname(file) === '.xsd') {
       expanded.push(file);
@@ -139,6 +145,26 @@ export const isLibrary = (filePath: string): boolean => {
 // Program
 // ---------------------------------------------------------------------------
 
+type GenerateOptions = {
+  out: string;
+  name?: string;
+  format?: boolean;
+  includeLibraries?: boolean;
+  allowMissingImports?: boolean;
+  silent?: boolean;
+};
+
+type ValidateOptions = {
+  xsd: string;
+  root?: string;
+  engine: string;
+};
+
+type BundleOptions = {
+  out?: string;
+  format?: boolean;
+};
+
 const program = new Command()
   .name('xsd-to-zod')
   .exitOverride()
@@ -151,7 +177,7 @@ const program = new Command()
   .option('--include-libraries', 'Include type-definition-only schemas (those without root elements)')
   .option('--allow-missing-imports', 'Suppress warnings for unresolved XSD references; unresolved element refs map to z.unknown() instead of being dropped')
   .option('--silent', 'Suppress informational output (warnings are still shown)')
-  .action(async (filesOrDirs: string[], opts) => {
+  .action(async (filesOrDirs: string[], opts: GenerateOptions) => {
     const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
     const files = expandDirectories(filesOrDirs);
 
@@ -159,21 +185,13 @@ const program = new Command()
       throw new Error('no .xsd files found in the given directories');
     }
 
-    let resolvedName = name;
-    if (!resolvedName) {
-      const stem = filesOrDirs[0]?.replace(/\.xsd$/i, '').split(/[\\/]/).pop();
-      if (!stem) {
-        throw new Error('--name/-n is required when processing multiple XSD files');
-      }
-      resolvedName = stem;
+    if (filesOrDirs.length > 1 && !name) {
+      throw new Error('--name/-n is required when processing multiple XSD files');
     }
 
-    if (files.length > 1 && !name) {
-      const dirName = basename(resolve(filesOrDirs[0]));
-      if (dirName === '.' || dirName === '..') {
-        throw new Error('--name/-n is required when processing multiple XSD files');
-      }
-      resolvedName = dirName;
+    const resolvedName = name ?? filesOrDirs[0]?.replace(/\.xsd$/i, '').split(/[\\/]/).filter(Boolean).pop();
+    if (!resolvedName || resolvedName === '.') {
+      throw new Error('cannot derive an output name from the input; pass --name/-n');
     }
 
     if (resolvedName === '..' || resolvedName !== basename(resolvedName)) {
@@ -226,7 +244,7 @@ program
   .requiredOption('-x, --xsd <file>', 'XSD schema file')
   .option('-r, --root <name>', 'Root element QName (auto-detected when unambiguous)')
   .option('-e, --engine <engine>', 'Validation engine: zod (default) or libxml2', 'zod')
-  .action(async (xmlFile: string, opts) => {
+  .action(async (xmlFile: string, opts: ValidateOptions) => {
     const { xsd: xsdFile, root, engine } = opts;
 
     if (!existsSync(xmlFile)) {
@@ -300,7 +318,7 @@ program
   .argument('<entry.xsd>', 'Entry XSD file to bundle')
   .option('-o, --out <file>', 'Output file path (default: <entry-stem>.bundled.xsd)')
   .option('-f, --format', 'Run formatter on the output')
-  .action((entryFile: string, opts) => {
+  .action((entryFile: string, opts: BundleOptions) => {
     const { format } = opts;
     let { out } = opts;
 

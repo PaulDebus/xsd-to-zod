@@ -54,7 +54,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "dependencies": {
     "@nodable/base-output-builder": "^2.0.0",
