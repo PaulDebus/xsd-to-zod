@@ -19,8 +19,10 @@
   "scripts": {
     "pretest": "npm run build",
     "pretest:coverage": "npm run build",
+    "pretest:quick": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:quick": "vitest run --config vitest.quick.config.ts",
     "build": "tsc -p tsconfig.build.json",
     "test:watch": "vitest",
     "lint": "tsc -p tsconfig.json --noEmit",

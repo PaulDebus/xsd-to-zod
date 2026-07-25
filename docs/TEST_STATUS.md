@@ -18,11 +18,12 @@ Codegen output itself is pinned by **golden snapshots** (`tests/golden.test.ts`)
 
 ## Test Levels
 
-| Level | Command | When | Scope | Est. Time |
-|-------|---------|------|-------|-----------|
-| **fast** | `npm test` | Every push/PR | Curated fixtures + xmlschema examples + UBL examples + W3C smoke tests | ~5s |
+| Level | Command | When | Scope |
+|-------|---------|------|-------|
+| **quick** | `npm run test:quick` | Dev loop | Curated fixtures + unit tests + golden snapshots + W3C Boeing smoke |
+| **full** | `npm test` | Every push/PR (CI) | Everything, incl. xmlschema examples, UBL examples and the expanded W3C selection |
 
-Extended and nightly conformance levels (full W3C corpus) are future work; the W3C smoke subset (`tests/roundtrip-w3c.test.ts`) already runs as part of `npm test`.
+Extended and nightly conformance levels (full W3C corpus) are future work; the W3C selection runs as part of `npm test`.
 
 ---
 
@@ -74,7 +75,7 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 **License:** W3C Document License — from [w3.org](https://www.w3.org/XML/2004/xml-schema-test-suite/)
 
-Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. A small smoke subset (the Boeing ipo1–ipo4 datasets) runs in the fast suite; running the full corpus is future work.
+Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels (ipo6 skipped: substitution groups unsupported); a broader valid-instance selection runs in the full level.
 
 Features tested include:
 - Built-in datatypes and facets
@@ -98,8 +99,8 @@ Features tested include:
 - [x] Negative test variants (7, with pinned lenient results)
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
-- [x] W3C smoke subset (Boeing ipo1–ipo4)
-- [x] CI workflow (fast on push/PR)
+- [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 skipped — substitution groups)
+- [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
