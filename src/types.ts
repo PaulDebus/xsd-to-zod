@@ -50,6 +50,7 @@ export type ComplexTypeDef = {
   baseType?: QName;
   fields: IrField[];
   description?: string;
+  choiceGroups?: Record<string, Cardinality>;
 };
 
 export type ElementDef = {

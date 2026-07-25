@@ -311,6 +311,7 @@ type FieldCollectionContext = {
   formDefaults: SchemaFormDefaults;
   elements: Record<string, ElementDef>;
   choiceCounter: { value: number };
+  choiceGroupCardinality: Map<string, Cardinality>;
   complexTypes: Record<string, ComplexTypeDef>;
   syntheticTypes: SyntheticTypeContext;
   groups: Record<string, GroupEntry>;
@@ -473,6 +474,8 @@ const collectFields = (
 
     if (localTag === 'choice') {
       const groupId = `${ctx.choiceCounter.value++}`;
+      const choiceCard = combineCardinality(inheritedCardinality, parseCardinality(child));
+      ctx.choiceGroupCardinality.set(groupId, choiceCard);
       // Each direct child of the xs:choice is one branch. Branch identity is
       // threaded through as choiceBranch so fields inlined from a group ref or
       // nested compositor stay together as a single branch (#73 / ipo-style
@@ -630,11 +633,17 @@ export const parseXsd = (files: string[]): XsdIr => {
   const attributes: Record<string, GlobalAttributeDecl> = {};
   const unresolvedRefs = new Set<string>();
 
+  const choiceGroupsMeta = (entries: Map<string, Cardinality> | Record<string, Cardinality>): Pick<ComplexTypeDef, 'choiceGroups'> => {
+    const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
+    return Object.keys(record).length > 0 ? { choiceGroups: record } : {};
+  };
+
   const fieldContext = (nsMap: Record<string, string>, formDefaults: SchemaFormDefaults, targetNs: string): FieldCollectionContext => ({
     nsMap,
     formDefaults,
     elements,
     choiceCounter: { value: 0 },
+    choiceGroupCardinality: new Map(),
     complexTypes,
     syntheticTypes: { targetNs, counter: syntheticTypeCounter, simpleTypes },
     groups,
@@ -914,13 +923,14 @@ export const parseXsd = (files: string[]): XsdIr => {
       if (!name) continue;
       const qname = toClark(effectiveNs, name);
       const fields: IrField[] = [];
-      collectFields(child, fieldContext(resolveNsMap, fileFormDefaults, effectiveNs), {
+      const fCtx = fieldContext(resolveNsMap, fileFormDefaults, effectiveNs);
+      collectFields(child, fCtx, {
         ownerNs: effectiveNs, fields,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
 
-      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child) };
+      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
     }
   }
 
@@ -928,7 +938,8 @@ export const parseXsd = (files: string[]): XsdIr => {
   for (const override of redefineOverrides) {
     if (override.kind === 'complexType') {
       const fields: IrField[] = [];
-      collectFields(override.node, fieldContext(override.nsMap, override.formDefaults, override.targetNs), {
+      const fCtx = fieldContext(override.nsMap, override.formDefaults, override.targetNs);
+      collectFields(override.node, fCtx, {
         ownerNs: override.targetNs, fields,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
@@ -944,17 +955,18 @@ export const parseXsd = (files: string[]): XsdIr => {
       const derivationNode = derivationEntry?.[1];
       const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
       const description = extractDocumentation(override.node);
+      const choiceGroupMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
+      const effectiveBaseType = baseType === override.qname ? undefined : baseType;
       if (baseType === override.qname && derivationKind === 'extension') {
         const original = complexTypes[override.qname];
         if (original) {
-          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description };
+          const mergedChoiceGroups = { ...original.choiceGroups, ...Object.fromEntries(fCtx.choiceGroupCardinality) };
+          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...choiceGroupsMeta(mergedChoiceGroups) };
         } else {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
         }
-      } else if (baseType === override.qname && derivationKind === 'restriction') {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
       } else {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType, description };
+        complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
       }
     } else if (override.kind === 'simpleType') {
       // Drop synthetic inline item/member types created for the previous definition
@@ -973,11 +985,12 @@ export const parseXsd = (files: string[]): XsdIr => {
   // Process deferred inline types now that all elements are collected
   const processDeferredType = ({ typeName, container, ownerNs, nsMap, formDefaults }: DeferredInlineType) => {
     const fields: IrField[] = [];
-    collectFields(container, fieldContext(nsMap, formDefaults, ownerNs), {
+    const fCtx = fieldContext(nsMap, formDefaults, ownerNs);
+    collectFields(container, fCtx, {
       ownerNs, fields,
       inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
     });
-    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs) };
+    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
   };
 
   for (const deferred of deferredInlineTypes) {
