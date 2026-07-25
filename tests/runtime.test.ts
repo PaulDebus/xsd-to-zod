@@ -132,6 +132,12 @@ describe('type coercion (#65)', () => {
     expect(serializeXml(nan)).toContain('>NaN</ns0:measure>');
   });
 
+  it('preserves the sign of -0 through the round-trip (#117)', () => {
+    const parsed = parseXml(doc('<text>x</text><count>1</count><flag>1</flag><measure>-0</measure>'));
+    expect(Object.is(parsed.measure, -0)).toBe(true);
+    expect(serializeXml(parsed)).toContain('>-0</ns0:measure>');
+  });
+
   it('returns null for an xsi:nil root', () => {
     const xml = '<doc xmlns="urn:rt" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>';
     expect(parseXml(xml)).toBeNull();
