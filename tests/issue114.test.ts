@@ -43,6 +43,28 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
 </xs:schema>`);
     expect(code).not.toMatch(/\.(gt|lt|min|max)\(/);
     expect(code).not.toContain('NaN');
+    // Skipped facets must leave a diagnostic in the generated code.
+    expect(code).toContain('facet minInclusive skipped');
+    expect(code).toContain('facet maxExclusive skipped');
+  });
+
+  it('skips length facets on NOTATION/QName restrictions (vacuous in XSD 1.0)', () => {
+    const code = codeFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns:t="urn:t">
+  <xs:simpleType name="Notations">
+    <xs:restriction base="xs:NOTATION">
+      <xs:enumeration value="jpeg"/>
+      <xs:enumeration value="g"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="Sized">
+    <xs:restriction base="t:Notations">
+      <xs:length value="4"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>`);
+    expect(code).toContain('facet length skipped: vacuous for xs:NOTATION in XSD 1.0');
+    expect(code).not.toContain('.length(4)');
   });
 
   it('emits length facets as a .length refine on enum/reference bases', () => {

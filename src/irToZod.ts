@@ -43,6 +43,28 @@ const resolvePrimitiveKind = (typeName: QName, ir: XsdIr, seen?: Set<string>): '
   return base ? resolvePrimitiveKind(base, ir, seenNames) : 'string';
 };
 
+// The XSD builtin local name a (possibly user-defined) simple type derives
+// from, e.g. 'NOTATION' or 'date'; undefined for lists/unions/unresolvable.
+const resolveBuiltinLocal = (typeName: QName, ir: XsdIr, seen?: Set<string>): string | undefined => {
+  const parts = trySplitClark(typeName);
+  if (!parts) {
+    return undefined;
+  }
+  if (parts.ns === XSD_NS) {
+    return parts.local;
+  }
+  const seenNames = seen ?? new Set<string>();
+  if (seenNames.has(typeName)) {
+    return undefined;
+  }
+  seenNames.add(typeName);
+  const simple = ir.simpleTypes[typeName];
+  if (!simple || simple.kind !== 'restriction') {
+    return undefined;
+  }
+  return resolveBuiltinLocal(simple.baseType, ir, seenNames);
+};
+
 const primitiveToZod = (typeName: QName, definedTypes: Set<string>): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -108,7 +130,7 @@ type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the resolved primitive kind — same rule as
 // fixed/default values (#68, #84).
-const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'number' | 'boolean' | 'string'): string => {
+const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'number' | 'boolean' | 'string', builtinLocal?: string): string => {
   if (!facets.length) return base;
 
   const enumFacets = facets.filter(f => f.kind === 'enumeration');
@@ -141,7 +163,12 @@ const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'num
         case 'length':
         case 'minLength':
         case 'maxLength': {
-          if (isStringType(result)) {
+          // XSD 1.0 vacuous rule: every QName/NOTATION value satisfies any
+          // length facet — skip them (with a diagnostic) rather than reject
+          // valid values (#124 review).
+          if (builtinLocal === 'NOTATION' || builtinLocal === 'QName') {
+            result += ` /* facet ${facet.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
+          } else if (isStringType(result)) {
             result += facet.kind === 'length' ? `.length(${facet.value})` : facet.kind === 'minLength' ? `.min(${facet.value})` : `.max(${facet.value})`;
           } else {
             // Non-string base (type reference, enum, list): the convenience
@@ -163,10 +190,12 @@ const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'num
             // schema supports (#114).
             const op = facet.kind === 'minInclusive' ? '>=' : facet.kind === 'maxInclusive' ? '<=' : facet.kind === 'minExclusive' ? '>' : '<';
             result += `.refine((val) => val ${op} ${facet.value}, { message: 'value out of range' })`;
+          } else {
+            // Order facets on non-numeric kinds (dates, durations) are
+            // skipped: the coerced/string value cannot be compared soundly —
+            // the libxml2 tier stays the conformance authority (#114).
+            result += ` /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
           }
-          // Order facets on non-numeric kinds (dates, durations) are skipped:
-          // the coerced/string value cannot be compared soundly — the libxml2
-          // tier stays the conformance authority (#114).
           break;
         }
         case 'totalDigits':
@@ -422,7 +451,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     } else {
       const baseExpr = primitiveToZod(simpleType.baseType, definedTypes);
       expr = simpleType.facets
-        ? withFacets(baseExpr, simpleType.facets, usage, resolvePrimitiveKind(simpleType.name, ir))
+        ? withFacets(baseExpr, simpleType.facets, usage, resolvePrimitiveKind(simpleType.name, ir), resolveBuiltinLocal(simpleType.name, ir))
         : baseExpr;
     }
     schemaLines.push(`${schemaRef(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`);
