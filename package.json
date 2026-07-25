@@ -54,12 +54,13 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "dependencies": {
     "@nodable/base-output-builder": "^2.0.0",
     "@nodable/compact-builder": "^2.0.0",
     "@nodable/flexible-xml-parser": "^1.10.0",
+    "commander": "^15.0.0",
     "iconv-lite": "^0.7.3",
     "zod": "^4.4.3"
   },

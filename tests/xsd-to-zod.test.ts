@@ -334,11 +334,20 @@ describe('xsd-to-zod v1 pipeline', () => {
       const file = path.join(dir, 'schema.xsd');
       fs.writeFileSync(file, BROKEN_XSD);
 
+      // Without allowMissingImports: unresolved element ref is dropped (old behaviour).
       const ir = parseXsd([file]);
       const holder = ir.complexTypes['{urn:broken}Holder'];
-      // Unresolvable refs are skipped; the resolvable fields remain, and the
-      // unresolved attribute ref keeps its xs:string fallback field.
       expect(holder.fields.map((f) => f.qname)).toEqual([
+        '{urn:broken}own',
+        '{urn:broken}missingAttr',
+        '{}weird',
+      ]);
+
+      // With allowMissingImports: unresolved element ref becomes a fallback field.
+      const irWithFlag = parseXsd([file], { allowMissingImports: true });
+      const holderWithFlag = irWithFlag.complexTypes['{urn:broken}Holder'];
+      expect(holderWithFlag.fields.map((f) => f.qname)).toEqual([
+        '{urn:broken}missing',
         '{urn:broken}own',
         '{urn:broken}missingAttr',
         '{}weird',

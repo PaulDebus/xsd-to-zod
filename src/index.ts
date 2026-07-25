@@ -1,4 +1,5 @@
 export { parseXsd } from './parseXsd.js';
+export type { ParseXsdOptions } from './parseXsd.js';
 export { Xsd2ZodError } from './errors.js';
 export { fieldKeyFromIr, irToZod, rootSchemaExportNames, sanitizeIdentifier } from './irToZod.js';
 export type { IrToZodOptions } from './irToZod.js';

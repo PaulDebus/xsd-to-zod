@@ -320,7 +320,28 @@ type FieldCollectionContext = {
   /** Global attribute declarations, mapped to their type and documentation. */
   attributes: Record<string, GlobalAttributeDecl>;
   diagnostics: Set<string>;
+  allowMissingImports: boolean;
 };
+
+// Shared shape for ref-based element fields.  The resolved-ref and
+// fallback-ref paths diverge only in typeName source, nillable origin and
+// optional metadata — this factory collapses the common structure.
+const buildRefField = (
+  effectiveCardinality: Cardinality,
+  qname: QName,
+  typeName: QName,
+  nillable: boolean,
+  choiceGroup: string | undefined,
+  choiceBranch: string | undefined,
+): IrField => ({
+  ...effectiveCardinality,
+  kind: 'element',
+  qname,
+  typeName,
+  nillable,
+  choiceGroup,
+  ...(choiceBranch ? { choiceBranch } : {}),
+});
 
 type CollectFieldsScope = {
   ownerNs: string;
@@ -336,7 +357,7 @@ const collectFields = (
   scope: CollectFieldsScope
 ): void => {
   const { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch } = scope;
-  const { nsMap, formDefaults, elements, complexTypes, syntheticTypes, groups, attributeGroups, deferredSyntheticTypes, attributes, diagnostics } = ctx;
+  const { nsMap, formDefaults, elements, complexTypes, syntheticTypes, groups, attributeGroups, deferredSyntheticTypes, attributes, diagnostics, allowMissingImports } = ctx;
   for (const [tag, child] of nodeChildren(container)) {
     const localTag = getNodeTagLocalName(tag);
     if (localTag === 'element') {
@@ -353,19 +374,23 @@ const collectFields = (
           const effectiveCardinality = combineCardinality(inheritedCardinality, parseCardinality(child));
           const description = extractDocumentation(child) ?? referenced.description;
           fields.push({
-            ...effectiveCardinality,
-            kind: 'element',
-            qname: refQName,
-            typeName: referenced.typeName,
-            nillable: child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
-            choiceGroup,
-            ...(choiceBranch ? { choiceBranch } : {}),
+            ...buildRefField(effectiveCardinality, refQName, referenced.typeName,
+              child['@_nillable'] === true || child['@_nillable'] === 'true' || referenced.nillable === true,
+              choiceGroup, choiceBranch),
             ...(child['@_default'] !== undefined ? { defaultValue: String(child['@_default']) } : {}),
             ...(child['@_fixed'] !== undefined ? { fixedValue: String(child['@_fixed']) } : {}),
-            ...(description !== undefined ? { description } : {})
+            ...(description !== undefined ? { description } : {}),
           });
         } else {
           diagnostics.add(`unresolved element ref "${refQName}"`);
+          if (allowMissingImports) {
+            const effectiveCardinality = combineCardinality(inheritedCardinality, parseCardinality(child));
+            fields.push(
+              buildRefField(effectiveCardinality, refQName, refQName,
+                child['@_nillable'] === true || child['@_nillable'] === 'true',
+                choiceGroup, choiceBranch),
+            );
+          }
         }
         continue;
       }
@@ -617,7 +642,14 @@ type RedefineOverride = {
   formDefaults: SchemaFormDefaults;
 };
 
-export const parseXsd = (files: string[]): XsdIr => {
+export type ParseXsdOptions = {
+  /** When true, unresolved element refs produce a fallback field with z.unknown()
+   *  type instead of being silently dropped. Without this flag, unresolved refs
+   *  are dropped (old behaviour) and only a warning is emitted. */
+  allowMissingImports?: boolean;
+};
+
+export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   const queue: QueueEntry[] = files.map((file) => ({ file: path.resolve(file) }));
 
   const simpleTypes: Record<string, SimpleTypeDef> = {};
@@ -650,7 +682,8 @@ export const parseXsd = (files: string[]): XsdIr => {
     attributeGroups,
     deferredSyntheticTypes,
     attributes,
-    diagnostics: unresolvedRefs
+    diagnostics: unresolvedRefs,
+    allowMissingImports: opts?.allowMissingImports ?? false
   });
 
   // Build import/include graph for topological sorting

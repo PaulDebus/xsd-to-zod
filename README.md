@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/xsd-to-zod.svg)](https://www.npmjs.com/package/xsd-to-zod)
 [![npm downloads](https://img.shields.io/npm/dm/xsd-to-zod.svg)](https://www.npmjs.com/package/xsd-to-zod)
 [![Tests](https://github.com/PaulDebus/xsd-to-zod/actions/workflows/test.yml/badge.svg)](https://github.com/PaulDebus/xsd-to-zod/actions/workflows/test.yml)
-[![Node.js >= 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+[![Node.js >= 22.12](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen.svg)](https://nodejs.org)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 > Turn XSD schemas into type-safe Zod parsers for XML.
@@ -95,6 +95,7 @@ const xml = serializeXml(orderSchema, data);
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
+- **CLI**: directory input (recursive `.xsd` discovery), `--include-libraries` (auto-skip type-definition-only schemas), `--allow-missing-imports` (suppress unresolved ref warnings), `--silent`, and `bundle` subcommand for merging imports into one self-contained XSD
 - **Encoding detection**: BOM and declaration sniffing (UTF-16LE/BE, CP1252, UTF-8) via `iconv-lite`
 - **Cardinality**: `minOccurs`/`maxOccurs` → `.optional()` / `z.array()` with `.min()`/`.max()` bounds; defaults/fixed with XSD-correct semantics (attribute defaults on absence, element defaults on present-but-empty)
 - **Nillable**: `xsi:nil="true"` → `.nullable()` in schema, round-trips through `serializeXml`
@@ -121,6 +122,9 @@ npm install libxml2-wasm
 npx xsd-to-zod schema.xsd -o src/generated --format
 # → src/generated/schema.zod.ts
 
+npx xsd-to-zod schemas/ -o src/generated --format
+# → src/generated/schemas.zod.ts (all .xsd files in the directory)
+
 npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 # → src/generated/my-api.zod.ts
 ```
@@ -130,6 +134,17 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 | `-o, --out <dir>` | Output directory (default: current directory) |
 | `-n, --name <name>` | Basename for the generated file (required with multiple inputs) |
 | `-f, --format` | Run `biome` / `prettier` / `eslint` on the generated file if configured |
+| `--include-libraries` | Include type-definition-only schemas (those without root elements); skipped by default |
+| `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
+| `--silent` | Suppress informational output (warnings are still shown) |
+
+Bundle all imports and includes into a single self-contained XSD:
+
+```sh
+xsd-to-zod bundle main.xsd                         # → main.bundled.xsd
+xsd-to-zod bundle main.xsd -o dist/schema.xsd      # → dist/schema.xsd
+xsd-to-zod bundle main.xsd --format                 # formatted output
+```
 
 Validate an XML document:
 
