@@ -559,10 +559,9 @@ const readField = (
 
   if (fieldMeta.kind === 'text') {
     const text = textOf(node);
-    if (text === undefined) {
-      return { present: false, value: undefined };
-    }
-    return { present: true, value: coerceLexical(text, field.itemSchema) };
+    // A present element without character data has empty-string content: valid
+    // for string-allowing types, and numeric coercion of '' still rejects.
+    return { present: true, value: coerceLexical(text ?? '', field.itemSchema) };
   }
 
   const values = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
@@ -597,7 +596,13 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
     return readObject(typeSchema, rootNode, namespaceContext);
   }
   // Simple-typed root element: the document value is the root's text content.
-  return coerceLexical(textOf(rootNode), typeSchema);
+  // XSD applies the root element's fixed/default to a present-but-empty root.
+  const text = textOf(rootNode);
+  if (text === undefined || text === '') {
+    if (meta.fixedValue !== undefined) return meta.fixedValue;
+    if (meta.defaultValue !== undefined) return meta.defaultValue;
+  }
+  return coerceLexical(text, typeSchema);
 };
 
 // ---------------------------------------------------------------------------
