@@ -130,29 +130,45 @@ const withFacets = (base: string, facets: Facet[], usage: FacetUsage, kind: 'num
     for (const facet of otherFacets) {
       switch (facet.kind) {
         case 'pattern':
-          result += `.regex(new RegExp(${JSON.stringify(facet.value)}))`;
+          // .regex() exists only on string schemas; elsewhere the pattern is
+          // checked against the coerced value's string form (#114).
+          if (isStringType(result)) {
+            result += `.regex(new RegExp(${JSON.stringify(facet.value)}))`;
+          } else {
+            result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(String(val)), { message: 'value does not match the pattern' })`;
+          }
           break;
         case 'length':
-          result += `.length(${facet.value})`;
-          break;
         case 'minLength':
-          result += `.min(${facet.value})`;
+        case 'maxLength': {
+          if (isStringType(result)) {
+            result += facet.kind === 'length' ? `.length(${facet.value})` : facet.kind === 'minLength' ? `.min(${facet.value})` : `.max(${facet.value})`;
+          } else {
+            // Non-string base (type reference, enum, list): the convenience
+            // methods don't exist there — refine on the .length of strings
+            // (characters) and arrays (list items) instead (#114).
+            const op = facet.kind === 'length' ? '===' : facet.kind === 'minLength' ? '>=' : '<=';
+            result += `.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${facet.value}, { message: 'length constraint violated' })`;
+          }
           break;
-        case 'maxLength':
-          result += `.max(${facet.value})`;
-          break;
+        }
         case 'minInclusive':
-          result += `.min(${facet.value})`;
-          break;
         case 'maxInclusive':
-          result += `.max(${facet.value})`;
-          break;
         case 'minExclusive':
-          result += `.gt(${facet.value})`;
+        case 'maxExclusive': {
+          if (isNumberType(result)) {
+            result += facet.kind === 'minInclusive' ? `.min(${facet.value})` : facet.kind === 'maxInclusive' ? `.max(${facet.value})` : facet.kind === 'minExclusive' ? `.gt(${facet.value})` : `.lt(${facet.value})`;
+          } else if (kind === 'number') {
+            // Numeric user-type reference: compare via refine, which any
+            // schema supports (#114).
+            const op = facet.kind === 'minInclusive' ? '>=' : facet.kind === 'maxInclusive' ? '<=' : facet.kind === 'minExclusive' ? '>' : '<';
+            result += `.refine((val) => val ${op} ${facet.value}, { message: 'value out of range' })`;
+          }
+          // Order facets on non-numeric kinds (dates, durations) are skipped:
+          // the coerced/string value cannot be compared soundly — the libxml2
+          // tier stays the conformance authority (#114).
           break;
-        case 'maxExclusive':
-          result += `.lt(${facet.value})`;
-          break;
+        }
         case 'totalDigits':
           usage.totalDigits = true;
           result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
