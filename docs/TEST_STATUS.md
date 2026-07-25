@@ -75,7 +75,9 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 **License:** W3C Document License — from [w3.org](https://www.w3.org/XML/2004/xml-schema-test-suite/)
 
-Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels (ipo6 skipped: substitution groups unsupported); a broader valid-instance selection runs in the full level.
+Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels (ipo6 pinned as `it.fails`: substitution groups unsupported); a broader valid-instance-only selection of 18 sun/ms test sets (`tests/roundtrip-w3c-extended.test.ts`) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`.
+
+Note: the pre-errata sun tests use relative namespace URIs (e.g. `targetNamespace="SType/ST_facets"`), which libxml2 refuses to load — for those cases the libxml2 cross-validation of the serialized XML is skipped (the zod-tier round-trip still runs in full).
 
 Features tested include:
 - Built-in datatypes and facets
@@ -87,7 +89,7 @@ Features tested include:
 
 ---
 
-## Phase 1 — Fast suite (current)
+## Phase 1 — Current suite
 
 - [x] Basic declarations (element, attribute, complexType, simpleType)
 - [x] Content models (sequence, choice, all)
@@ -99,18 +101,22 @@ Features tested include:
 - [x] Negative test variants (7, with pinned lenient results)
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
-- [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 skipped — substitution groups)
+- [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 pinned as `it.fails` — substitution groups)
+- [x] W3C sun/ms selection (2,296 valid-instance cases from 18 test sets; 1,847 passing, 448 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Larger W3C XSD 1.0 subset (50-100 cases)
+- [ ] Triage the pinned W3C known failures (largest buckets: order facets on string-typed schemas, pattern facets on non-string schemas, `xs:any` wildcards, element values arriving as `undefined`)
+- [ ] Invalid-instance (negative) W3C tests — assert the generated Zod schema rejects what the suite marks invalid, with the libxml2 tier as conformance authority where the Zod tier is intentionally lenient
+- [ ] Broader W3C subset (nistData, remaining msData: restriction/extension derivation, facets, compositors, cross-file imports)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (future)
 
-- [ ] Full W3C XSD 1.0 corpus
+- [ ] Full W3C XSD 1.0 corpus (`suite.xml`-driven discovery, category-based skip manifest, nightly job with published conformance report)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---

@@ -4,14 +4,15 @@ import { describe, it, expect } from 'vitest';
 import { runRoundTrip } from './helpers.js';
 import { parseXsd } from '../src/index.js';
 import { discoverValidCases } from './w3cDriver.js';
+import { REASONS } from './w3cKnownFailures.js';
 
 const W3C_DIR = path.resolve('testdata/upstream/w3c-xsdtests');
 
 // Cases exercising XSD features xsd-to-zod does not support yet, with the
 // reason. Keyed by `<testGroup>/<instanceTest>` name.
 const KNOWN_FAILURES = new Map<string, string>([
-  ['ipo6/ipo_1', 'substitution groups unsupported (salutation substitutes ipo:ExternFirstElement)'],
-  ['ipo6/ipo_2', 'substitution groups unsupported (salutation substitutes ipo:ExternFirstElement)'],
+  ['ipo6/ipo_1', `${REASONS.substitutionGroups} (salutation substitutes ipo:ExternFirstElement)`],
+  ['ipo6/ipo_2', `${REASONS.substitutionGroups} (salutation substitutes ipo:ExternFirstElement)`],
 ]);
 
 // Test groups are discovered from the .testSet metadata (#108), not hardcoded
@@ -24,12 +25,25 @@ describe('W3C smoke round-trip', () => {
 
   const boeingCases = discoverValidCases([path.join(W3C_DIR, 'boeingMeta/BoeingXSDTestSet.testSet')]);
 
+  // Every KNOWN_FAILURES key must match a discovered case — a stale key means
+  // the testSet changed or the case was renamed.
+  it('has no stale KNOWN_FAILURES entries', () => {
+    const discovered = new Set(boeingCases.map(c => c.name));
+    const stale = [...KNOWN_FAILURES.keys()].filter(k => !discovered.has(k));
+    expect(stale).toEqual([]);
+  });
+
   for (const c of boeingCases) {
     const anchors = c.specRefs.length > 0 ? ` [${c.specRefs.join(', ')}]` : '';
     const title = `round-trips W3C boeing/${c.name}${anchors}`;
     const reason = KNOWN_FAILURES.get(c.name);
     if (reason) {
-      it.skip(`${title} — SKIPPED: ${reason}`, () => {});
+      // Known failures run as it.fails: the round-trip actually executes, and
+      // a fix (here: substitution group support) turns the suite red until
+      // the entry is removed — same pattern as the extended suite.
+      it.fails(`${title} — KNOWN FAILURE: ${reason}`, async () => {
+        await runRoundTrip(c.xsdFiles, c.xmlFile);
+      }, 30_000);
     } else {
       it(title, async () => {
         await runRoundTrip(c.xsdFiles, c.xmlFile);

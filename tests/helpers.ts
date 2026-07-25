@@ -144,12 +144,21 @@ export function findRootSchema(mod: Record<string, unknown>, xml: string): z.Zod
 
 const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 
+// URIs with a scheme (e.g. http://...) are absolute; the pre-errata sun tests
+// in the W3C suite use relative namespace URIs like "SType/ST_facets", which
+// libxml2 refuses to load at all ("URI is not absolute").
+const isAbsoluteUri = (uri: string): boolean => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(uri);
+
 export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[]): Promise<void> {
   if (xsdFiles.length === 0) return;
 
   const { formatIssues, validateXml } = await import('../src/validate.js');
 
   const { namespace: rootNamespace } = extractRootInfo(xml);
+
+  // libxml2 cannot load schemas with a relative targetNamespace, so there is
+  // nothing to validate against; the zod-tier round-trip still ran (#108).
+  if (rootNamespace !== '' && !isAbsoluteUri(rootNamespace)) return;
 
   const candidates: { file: string; targetNamespace: string }[] = [];
   const errors: string[] = [];

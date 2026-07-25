@@ -5,16 +5,16 @@ import { splitQName } from '../src/qname.js';
 import { createOutputBuilder } from '../src/runtime.js';
 
 // Driver for the W3C XML Schema Test Suite (#108). Parses the `.testSet`
-// metadata files (and the top-level `suite.xml` index) to discover test
-// groups automatically instead of hardcoding data directories.
+// metadata files to discover test groups automatically instead of hardcoding
+// data directories.
 //
 // `.testSet` layout (namespace http://www.w3.org/XML/2004/xml-schema-test-suite/):
 //   testGroup → schemaTest (schemaDocument xlink:href, expected validity)
 //             → instanceTest (instanceDocument xlink:href, expected validity)
 //             → documentationReference xlink:href (links into the XSD spec)
 // All hrefs are relative to the metadata file's directory. Microsoft ships the
-// same format as `msMeta/*_w3c.xml`; suite.xml uses a `ts:` prefix — all
-// matching here is namespace-insensitive.
+// same format as `msMeta/*_w3c.xml` — all matching here is namespace-
+// insensitive.
 
 const parser = new XMLParser({
   skip: { attributes: false },
@@ -24,7 +24,9 @@ const parser = new XMLParser({
 
 type AnyNode = Record<string, unknown>;
 
-const asArray = <T>(value: T | T[] | undefined): T[] => {
+const isNode = (value: unknown): value is AnyNode => value !== null && typeof value === 'object';
+
+const asArray = (value: unknown): unknown[] => {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
 };
@@ -34,7 +36,7 @@ const localName = (tag: string): string => splitQName(tag).local;
 // The document's root element node, skipping the `?xml` declaration key.
 const rootOf = (parsed: AnyNode): AnyNode => {
   for (const [key, value] of Object.entries(parsed)) {
-    if (!key.startsWith('?') && value && typeof value === 'object') return value as AnyNode;
+    if (!key.startsWith('?') && isNode(value)) return value;
   }
   throw new Error('no root element found');
 };
@@ -43,8 +45,8 @@ const childrenOf = (node: AnyNode, name: string): AnyNode[] => {
   const found: AnyNode[] = [];
   for (const [key, value] of Object.entries(node)) {
     if (key.startsWith('@_') || localName(key) !== name) continue;
-    for (const entry of asArray(value as AnyNode | AnyNode[])) {
-      if (entry && typeof entry === 'object') found.push(entry as AnyNode);
+    for (const entry of asArray(value)) {
+      if (isNode(entry)) found.push(entry);
     }
   }
   return found;
@@ -68,7 +70,7 @@ const expectedValid = (testNode: AnyNode): boolean => {
 // http://www.w3.org/TR/2004/REC-xmlschema-1-20041028/#Complex_Type_Definitions
 // → xmlschema-1#Complex_Type_Definitions. Non-spec hrefs return undefined.
 const specAnchor = (ref: string): string | undefined => {
-  const match = ref.match(/xmlschema-(\d)[^/#]*#(.+)$/);
+  const match = ref.match(/xmlschema-(\d)[^#]*#(.+)$/);
   return match ? `xmlschema-${match[1]}#${match[2]}` : undefined;
 };
 
@@ -98,7 +100,7 @@ export interface W3cTestGroup {
 // discoverValidCases — do not add filtering here, or the two will drift.
 export const parseTestSet = (file: string): W3cTestGroup[] => {
   const dir = path.dirname(file);
-  const parsed = parser.parse(readXmlFile(file)) as AnyNode;
+  const parsed: AnyNode = parser.parse(readXmlFile(file));
   const root = rootOf(parsed);
 
   return childrenOf(root, 'testGroup').map(group => {
@@ -136,17 +138,6 @@ export const parseTestSet = (file: string): W3cTestGroup[] => {
       specRefs
     };
   });
-};
-
-/** Absolute paths of all testSet files referenced by the top-level suite.xml index. */
-export const parseSuiteIndex = (suiteFile: string): string[] => {
-  const dir = path.dirname(suiteFile);
-  const parsed = parser.parse(readXmlFile(suiteFile)) as AnyNode;
-  const root = rootOf(parsed);
-  return childrenOf(root, 'testSetRef')
-    .map(r => href(r))
-    .filter((h): h is string => h !== undefined)
-    .map(h => path.resolve(dir, h));
 };
 
 export interface W3cCase {
