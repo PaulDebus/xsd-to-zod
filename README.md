@@ -213,19 +213,19 @@ The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSch
 
 We ship a **multi-tier test suite** that exercises the full pipeline on real-world and curated fixtures. Every round-trip test validates: XSD → Zod schemas → parse XML (golden-file compare) → serialize back → re-parse → deep-compare → serialized XML validated against the original XSD using libxml2. A smoke test additionally runs `tsc --noEmit` over the generated output of every curated fixture, so invalid-TypeScript codegen bugs cannot slip through.
 
-Run it locally:
+Run it locally (`npm run test:quick` runs the dev-loop subset without the heavy upstream round-trips):
 
 ```sh
 npm test
 ```
 
-**Test matrix** (~185 tests, ~20 s):
+**Test matrix** (~250 tests):
 
 | Category | Count | What it covers |
 |----------|------:|----------------|
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
-| W3C smoke | 9 | Boeing IPO variants via [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule |
+| W3C Boeing | 12 (10 ✅, 2 ⏭️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⏭️: substitution groups) |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
