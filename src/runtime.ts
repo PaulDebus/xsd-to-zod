@@ -637,6 +637,8 @@ const serializePrimitive = (value: unknown): string => {
     if (Number.isNaN(value)) return 'NaN';
     if (value === Infinity) return 'INF';
     if (value === -Infinity) return '-INF';
+    // String(-0) is "0" — keep the sign so the round-trip preserves -0 (#117).
+    if (Object.is(value, -0)) return '-0';
   }
   return escapeXml(String(value));
 };
