@@ -633,7 +633,7 @@ export const parseXsd = (files: string[]): XsdIr => {
   const attributes: Record<string, GlobalAttributeDecl> = {};
   const unresolvedRefs = new Set<string>();
 
-  const choiceGroupsMeta = (entries: Map<string, Cardinality> | Record<string, Cardinality>): object => {
+  const choiceGroupsMeta = (entries: Map<string, Cardinality> | Record<string, Cardinality>): Pick<ComplexTypeDef, 'choiceGroups'> => {
     const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
     return Object.keys(record).length > 0 ? { choiceGroups: record } : {};
   };
@@ -955,19 +955,18 @@ export const parseXsd = (files: string[]): XsdIr => {
       const derivationNode = derivationEntry?.[1];
       const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
       const description = extractDocumentation(override.node);
-      const cgMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
+      const choiceGroupMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
+      const effectiveBaseType = baseType === override.qname ? undefined : baseType;
       if (baseType === override.qname && derivationKind === 'extension') {
         const original = complexTypes[override.qname];
         if (original) {
           const mergedChoiceGroups = { ...original.choiceGroups, ...Object.fromEntries(fCtx.choiceGroupCardinality) };
           complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...choiceGroupsMeta(mergedChoiceGroups) };
         } else {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description, ...cgMeta };
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
         }
-      } else if (baseType === override.qname && derivationKind === 'restriction') {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description, ...cgMeta };
       } else {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType, description, ...cgMeta };
+        complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
       }
     } else if (override.kind === 'simpleType') {
       // Drop synthetic inline item/member types created for the previous definition
