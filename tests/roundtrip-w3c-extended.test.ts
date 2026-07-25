@@ -2,16 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runRoundTrip } from './helpers.js';
-import { discoverValidCases } from './w3cDriver.js';
+import { discoverValidCases, type W3cTestSetRef } from './w3cDriver.js';
 import { W3C_KNOWN_FAILURES } from './w3cKnownFailures.js';
 
 const W3C_DIR = path.resolve('testdata/upstream/w3c-xsdtests');
 
 // Targeted selection of sun/ms test sets exercising supported features
-// (complexType, simpleType, elements, attributes, groups) — Phase 1b of #108.
+// (complexType, simpleType, elements, attributes, groups) — Phase 1b of #108,
+// extended in Phase 2 with the ms schema-composition/annotation sets and a
+// nist datatype pilot (group-filtered: the nist testSet is one giant file).
 // Whole test sets for known-unsupported features (IdConstrDefs, Wildcard(s),
 // IdentityConstraint, Notations) are excluded here.
-const TEST_SETS = [
+const TEST_SETS: W3cTestSetRef[] = [
   'sunMeta/suntest.testSet',
   'sunMeta/CType.testSet',
   'sunMeta/SType.testSet',
@@ -30,6 +32,11 @@ const TEST_SETS = [
   'msMeta/ModelGroups_w3c.xml',
   'msMeta/Particles_w3c.xml',
   'msMeta/DataTypes_w3c.xml',
+  'msMeta/Schema_w3c.xml',
+  'msMeta/Additional_w3c.xml',
+  'msMeta/Annotations_w3c.xml',
+  'msMeta/Errata10_w3c.xml',
+  { file: 'nistMeta/NISTXMLSchemaDatatypes.testSet', groupFilter: /^atomic-decimal-/ },
 ];
 
 describe('W3C extended round-trip (sun/ms selection)', () => {
@@ -38,7 +45,7 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
     return;
   }
 
-  const cases = discoverValidCases(TEST_SETS.map(f => path.join(W3C_DIR, f)));
+  const cases = discoverValidCases(TEST_SETS.map(ref => typeof ref === 'string' ? path.join(W3C_DIR, ref) : { ...ref, file: path.join(W3C_DIR, ref.file) }));
   const keyOf = (testSet: string, name: string): string =>
     `${path.basename(testSet).replace(/\.testSet$|_w3c\.xml$/, '')}/${name}`;
 
@@ -61,7 +68,7 @@ describe('W3C extended round-trip (sun/ms selection)', () => {
       JSON.stringify(
         {
           generated: new Date().toISOString(),
-          testSets: TEST_SETS,
+          testSets: TEST_SETS.map(ref => typeof ref === 'string' ? ref : `${ref.file} (groups: ${ref.groupFilter})`),
           totalCases: cases.length,
           knownFailures: W3C_KNOWN_FAILURES.size,
           bySpecSection: Object.fromEntries([...byAnchor.entries()].sort(([a], [b]) => a.localeCompare(b))),

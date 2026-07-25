@@ -149,15 +149,21 @@ export interface W3cCase {
   specRefs: string[];
 }
 
+/** A testSet file, optionally restricted to testGroups matching a name filter. */
+export type W3cTestSetRef = string | { file: string; groupFilter?: RegExp };
+
 /**
  * Positive round-trip cases from the given testSet files: groups whose schema
  * is expected valid, restricted to instances expected valid. Invalid-instance
  * tests are Phase 3 of #108.
  */
-export const discoverValidCases = (testSetFiles: string[]): W3cCase[] => {
+export const discoverValidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] => {
   const cases: W3cCase[] = [];
-  for (const testSet of testSetFiles) {
+  for (const ref of testSetFiles) {
+    const testSet = typeof ref === 'string' ? ref : ref.file;
+    const groupFilter = typeof ref === 'string' ? undefined : ref.groupFilter;
     for (const group of parseTestSet(testSet)) {
+      if (groupFilter && !groupFilter.test(group.name)) continue;
       if (!group.schemaExpectedValid || group.xsdFiles.length === 0) continue;
       for (const instance of group.instances) {
         if (!instance.expectedValid) continue;
