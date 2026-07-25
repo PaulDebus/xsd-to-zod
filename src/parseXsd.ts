@@ -327,6 +327,7 @@ type CollectFieldsScope = {
   choiceGroup?: string;
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
+  choiceGroupCardinality?: Map<string, Cardinality>;
 };
 
 const collectFields = (
@@ -466,13 +467,18 @@ const collectFields = (
       collectFields(child, ctx, {
         ownerNs, fields, choiceGroup,
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-        choiceBranch
+        choiceBranch,
+        choiceGroupCardinality: scope.choiceGroupCardinality
       });
       continue;
     }
 
     if (localTag === 'choice') {
       const groupId = `${ctx.choiceCounter.value++}`;
+      const choiceCard = combineCardinality(inheritedCardinality, parseCardinality(child));
+      if (scope.choiceGroupCardinality) {
+        scope.choiceGroupCardinality.set(groupId, choiceCard);
+      }
       // Each direct child of the xs:choice is one branch. Branch identity is
       // threaded through as choiceBranch so fields inlined from a group ref or
       // nested compositor stay together as a single branch (#73 / ipo-style
@@ -488,7 +494,8 @@ const collectFields = (
           ownerNs, fields,
           choiceGroup: groupId,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-          choiceBranch: branchId
+          choiceBranch: branchId,
+          choiceGroupCardinality: scope.choiceGroupCardinality
         });
       }
       continue;
@@ -503,7 +510,8 @@ const collectFields = (
         collectFields(groupEntry.node, { ...ctx, nsMap: groupEntry.nsMap, formDefaults: groupEntry.formDefaults }, {
           ownerNs: groupEntry.ownerNs, fields, choiceGroup,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-          choiceBranch
+          choiceBranch,
+          choiceGroupCardinality: scope.choiceGroupCardinality
         });
       } else {
         diagnostics.add(`unresolved group ref "${refQName}"`);
@@ -519,7 +527,8 @@ const collectFields = (
       if (attrEntry) {
         collectFields(attrEntry.node, { ...ctx, nsMap: attrEntry.nsMap, formDefaults: attrEntry.formDefaults }, {
           ownerNs: attrEntry.ownerNs, fields, choiceGroup,
-          inheritedCardinality, choiceBranch
+          inheritedCardinality, choiceBranch,
+          choiceGroupCardinality: scope.choiceGroupCardinality
         });
       } else {
         diagnostics.add(`unresolved attributeGroup ref "${refQName}"`);
@@ -566,7 +575,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch, choiceGroupCardinality: scope.choiceGroupCardinality });
       continue;
     }
 
@@ -578,7 +587,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
+      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch, choiceGroupCardinality: scope.choiceGroupCardinality });
     }
   }
 };
@@ -914,13 +923,16 @@ export const parseXsd = (files: string[]): XsdIr => {
       if (!name) continue;
       const qname = toClark(effectiveNs, name);
       const fields: IrField[] = [];
+      const choiceGroupCard = new Map<string, Cardinality>();
       collectFields(child, fieldContext(resolveNsMap, fileFormDefaults, effectiveNs), {
         ownerNs: effectiveNs, fields,
-        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+        choiceGroupCardinality: choiceGroupCard
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
 
-      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child) };
+      const choiceGroups = Object.fromEntries(choiceGroupCard);
+      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...(Object.keys(choiceGroups).length > 0 ? { choiceGroups } : {}) };
     }
   }
 
@@ -928,9 +940,11 @@ export const parseXsd = (files: string[]): XsdIr => {
   for (const override of redefineOverrides) {
     if (override.kind === 'complexType') {
       const fields: IrField[] = [];
+      const choiceGroupCard = new Map<string, Cardinality>();
       collectFields(override.node, fieldContext(override.nsMap, override.formDefaults, override.targetNs), {
         ownerNs: override.targetNs, fields,
-        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+        inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+        choiceGroupCardinality: choiceGroupCard
       });
       const complexContent = nodeChildren(override.node)
         .find(([key]) => getNodeTagLocalName(key) === 'complexContent')?.[1];
@@ -944,17 +958,20 @@ export const parseXsd = (files: string[]): XsdIr => {
       const derivationNode = derivationEntry?.[1];
       const baseType = derivationNode?.['@_base'] ? resolveTypeQName(String(derivationNode['@_base']), override.nsMap, unresolvedRefs) : undefined;
       const description = extractDocumentation(override.node);
+      const overrideChoiceGroups = Object.fromEntries(choiceGroupCard);
+      const cgMeta = Object.keys(overrideChoiceGroups).length > 0 ? { choiceGroups: overrideChoiceGroups } : {};
       if (baseType === override.qname && derivationKind === 'extension') {
         const original = complexTypes[override.qname];
         if (original) {
-          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description };
+          const mergedChoiceGroups = { ...original.choiceGroups, ...overrideChoiceGroups };
+          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...(Object.keys(mergedChoiceGroups).length > 0 ? { choiceGroups: mergedChoiceGroups } : {}) };
         } else {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description, ...cgMeta };
         }
       } else if (baseType === override.qname && derivationKind === 'restriction') {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description };
+        complexTypes[override.qname] = { name: override.qname, fields, baseType: undefined, description, ...cgMeta };
       } else {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType, description };
+        complexTypes[override.qname] = { name: override.qname, fields, baseType, description, ...cgMeta };
       }
     } else if (override.kind === 'simpleType') {
       // Drop synthetic inline item/member types created for the previous definition
@@ -973,11 +990,14 @@ export const parseXsd = (files: string[]): XsdIr => {
   // Process deferred inline types now that all elements are collected
   const processDeferredType = ({ typeName, container, ownerNs, nsMap, formDefaults }: DeferredInlineType) => {
     const fields: IrField[] = [];
+    const choiceGroupCard = new Map<string, Cardinality>();
     collectFields(container, fieldContext(nsMap, formDefaults, ownerNs), {
       ownerNs, fields,
-      inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
+      inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+      choiceGroupCardinality: choiceGroupCard
     });
-    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs) };
+    const choiceGroups = Object.fromEntries(choiceGroupCard);
+    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...(Object.keys(choiceGroups).length > 0 ? { choiceGroups } : {}) };
   };
 
   for (const deferred of deferredInlineTypes) {

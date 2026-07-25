@@ -278,7 +278,10 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
   const refines: string[] = [];
   for (const group of multiBranchGroups(type)) {
     const branches = choiceBranches(type, group);
-    const requiredChoice = branches.flat().some((f) => f.minOccurs > 0);
+    const flatFields = branches.flat();
+    const requiredChoice = flatFields.some((f) => f.minOccurs > 0);
+    const groupCard = type.choiceGroups?.[group];
+    const repeatedChoice = groupCard !== undefined && (groupCard.maxOccurs === 'unbounded' || groupCard.maxOccurs > 1);
 
     const lines: string[] = [];
     const completeNames: string[] = [];
@@ -307,12 +310,18 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       }
     });
 
-    const countCheck = requiredChoice ? '=== 1' : '<= 1';
+    const countCheck = repeatedChoice
+      ? '> 0'
+      : requiredChoice
+        ? '=== 1'
+        : '<= 1';
     const partialCheck = partialNames.length > 0 ? ` && ![${partialNames.join(', ')}].some(Boolean)` : '';
     lines.push(`return [${completeNames.join(', ')}].filter(Boolean).length ${countCheck}${partialCheck};`);
 
     const names = branches.map((b) => b.map((f) => clarkToLocal(f.qname)).join('+')).join(', ');
-    const message = `${requiredChoice ? 'choice requires exactly one of' : 'choice allows at most one of'}: ${names}`;
+    const message = repeatedChoice
+      ? `${requiredChoice ? 'choice requires at least one of' : 'choice allows any of'}: ${names}`
+      : `${requiredChoice ? 'choice requires exactly one of' : 'choice allows at most one of'}: ${names}`;
     refines.push(`.refine((val) => {\n${lines.join('\n')}\n}, { message: ${JSON.stringify(message)} })`);
   }
   return refines;
