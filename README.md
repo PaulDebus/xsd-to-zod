@@ -101,6 +101,7 @@ const xml = serializeXml(orderSchema, data);
 - **Nillable**: `xsi:nil="true"` → `.nullable()` in schema, round-trips through `serializeXml`
 - **Cyclic references**: every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so forward references and true cycles (e.g. `Person.manager: Person`) load without `ReferenceError`
 - **Two validation tiers**: the zod tier (typed parse, user-friendly `ZodError`s) and an optional libxml2 conformance tier (full XSD semantics, line-numbered errors)
+- **Builtin datatype lexicals**: the zod tier validates the XSD 1.0 lexical space of the date/time set, `duration`, `hexBinary`/`base64Binary`, `language`, and the `Name`/`NCName`/`NMTOKEN` family (values stay the original strings — no canonicalization), and emits value-space bounds for the bounded integer subtypes (`byte`, `short`, `int`, the unsigned variants ≤ 32 bit, `nonNegativeInteger` & co.)
 
 ## Install
 
