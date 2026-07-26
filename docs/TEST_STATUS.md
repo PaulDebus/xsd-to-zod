@@ -22,7 +22,7 @@ Codegen output itself is pinned by **golden snapshots** (`tests/golden.test.ts`)
 |-------|---------|------|-------|
 | **quick** | `npm run test:quick` | Dev loop | Curated fixtures + unit tests + golden snapshots + W3C Boeing smoke |
 | **full** | `npm test` | Every push/PR (CI) | Everything, incl. xmlschema examples, UBL examples and the expanded W3C selection |
-| **corpus** | `npm run test:corpus` | Nightly (cron) | Full XSD 1.0 W3C corpus via `suite.xml` discovery (`tests/corpus/`, excluded from the PR levels) |
+| **corpus** | `npm run test:corpus` | Merge to main + weekly | Full XSD 1.0 W3C corpus via `suite.xml` discovery (`tests/corpus/`, excluded from the PR levels) |
 
 ---
 
@@ -116,7 +116,7 @@ Features tested include:
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (nightly `test:corpus`, ~3 min: 13,899 valid-instance cases from 34 test sets — 9,845 passing, 4,050 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by safe-integer boundaries, lexical preservation for enum/pattern, and XSD regex translation; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 9,845 passing, 4,050 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by safe-integer boundaries, lexical preservation for enum/pattern, and XSD regex translation; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
