@@ -341,6 +341,8 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
     }
     case 'enum':
       return String(raw);
+    case 'nan':
+      return NaN;
     case 'union': {
       for (const option of (def as z.core.$ZodUnionDef).options) {
         try {
@@ -348,6 +350,13 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
           // A NaN produced for anything but the "NaN" lexical means the
           // numeric option was the wrong branch — try the next one (#116).
           if (typeof result === 'number' && Number.isNaN(result) && String(raw).trim() !== 'NaN') {
+            continue;
+          }
+          // Branch agreement: zod's union selects the first VALIDATING
+          // branch, so coercion must too. A refined string member (e.g.
+          // xs:gMonth in a union with a list type) no longer swallows every
+          // lexical as a passthrough string.
+          if (!(option as z.ZodType).safeParse(result).success) {
             continue;
           }
           return result;
@@ -826,6 +835,11 @@ const serializeListValue = (value: unknown): string => {
 };
 
 const serializeLeaf = (schema: AnySchema, value: unknown): string => {
+  // An array at a leaf is an XSD list value — also when it arrived through a
+  // union member, where the schema's def does not say 'array'.
+  if (Array.isArray(value)) {
+    return serializeListValue(value);
+  }
   const def = unwrapModifiers(schema)._zod.def;
   if (def.type === 'pipe') {
     const outDef = (def as z.core.$ZodPipeDef).out._zod.def;
