@@ -1,0 +1,30 @@
+name: W3C corpus
+
+on:
+  # Run when code changes land on main, weekly as a backstop (pinned W3C
+  # submodule moves, dependency drift), and on demand — not on a fixed nightly
+  # schedule, so idle periods cost no CI time.
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run test:corpus
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w3c-conformance-report
+          path: .xsd-to-zod-tests/w3c-conformance.json
+          if-no-files-found: ignore

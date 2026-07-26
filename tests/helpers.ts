@@ -160,20 +160,29 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
   // nothing to validate against; the zod-tier round-trip still ran (#108).
   if (rootNamespace !== '' && !isAbsoluteUri(rootNamespace)) return;
 
-  const candidates: { file: string; targetNamespace: string }[] = [];
+  const candidates: { file: string; targetNamespace: string; hasRemoteImport: boolean }[] = [];
   const errors: string[] = [];
   for (const xsdFile of xsdFiles.map(f => path.resolve(f))) {
     if (!fs.existsSync(xsdFile)) {
       errors.push(`XSD file not found: ${xsdFile}`);
       continue;
     }
-    candidates.push({ file: xsdFile, targetNamespace: readXmlFile(xsdFile).match(TARGET_NS_RE)?.[1] ?? '' });
+    const content = readXmlFile(xsdFile);
+    candidates.push({
+      file: xsdFile,
+      targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? '',
+      hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content)
+    });
   }
 
   // Only XSDs whose targetNamespace matches the serialized root are relevant;
   // validating against an arbitrary unrelated schema proves nothing (#83).
   const matching = candidates.filter(c => c.targetNamespace === rootNamespace);
   const pool = matching.length > 0 ? matching : candidates;
+
+  // Schemas importing remote (http(s)) schemaLocations cannot be validated
+  // offline: libxml2 would attempt a network fetch (and stall on timeouts).
+  if (pool.some(c => c.hasRemoteImport)) return;
 
   for (const { file } of pool) {
     try {
