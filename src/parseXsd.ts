@@ -12,6 +12,7 @@ import type {
   IrField,
   QName,
   SimpleTypeDef,
+  WildcardDef,
   XsdIr
 } from './types.js';
 
@@ -406,6 +407,7 @@ const buildRefField = (
 type CollectFieldsScope = {
   ownerNs: string;
   fields: IrField[];
+  wildcards: WildcardDef[];
   choiceGroup?: string;
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
@@ -416,7 +418,7 @@ const collectFields = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope
 ): void => {
-  const { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch } = scope;
+  const { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch } = scope;
   const { nsMap, formDefaults, elements, complexTypes, syntheticTypes, groups, attributeGroups, deferredSyntheticTypes, attributes, diagnostics, allowMissingImports } = ctx;
   for (const [tag, child] of nodeChildren(container)) {
     const localTag = getNodeTagLocalName(tag);
@@ -549,9 +551,14 @@ const collectFields = (
       continue;
     }
 
+    if (localTag === 'any' || localTag === 'anyAttribute') {
+      wildcards.push({ kind: localTag, namespaceConstraint: String(child['@_namespace'] ?? '##any') });
+      continue;
+    }
+
     if (localTag === 'sequence' || localTag === 'all') {
       collectFields(child, ctx, {
-        ownerNs, fields, choiceGroup,
+        ownerNs, fields, wildcards, choiceGroup,
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
         choiceBranch
       });
@@ -569,12 +576,12 @@ const collectFields = (
       let branchIndex = 0;
       for (const [branchTag, branchChild] of nodeChildren(child)) {
         const branchLocal = getNodeTagLocalName(branchTag);
-        if (branchLocal !== 'element' && branchLocal !== 'group' && branchLocal !== 'sequence' && branchLocal !== 'choice' && branchLocal !== 'all') {
+        if (branchLocal !== 'element' && branchLocal !== 'group' && branchLocal !== 'sequence' && branchLocal !== 'choice' && branchLocal !== 'all' && branchLocal !== 'any') {
           continue;
         }
         const branchId = `${groupId}.${branchIndex++}`;
         collectFields({ [branchTag]: branchChild }, ctx, {
-          ownerNs, fields,
+          ownerNs, fields, wildcards,
           choiceGroup: groupId,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
           choiceBranch: branchId
@@ -590,7 +597,7 @@ const collectFields = (
       const groupEntry = groups[refQName];
       if (groupEntry) {
         collectFields(groupEntry.node, { ...ctx, nsMap: groupEntry.nsMap, formDefaults: groupEntry.formDefaults }, {
-          ownerNs: groupEntry.ownerNs, fields, choiceGroup,
+          ownerNs: groupEntry.ownerNs, fields, wildcards, choiceGroup,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
           choiceBranch
         });
@@ -607,7 +614,7 @@ const collectFields = (
       const attrEntry = attributeGroups[refQName];
       if (attrEntry) {
         collectFields(attrEntry.node, { ...ctx, nsMap: attrEntry.nsMap, formDefaults: attrEntry.formDefaults }, {
-          ownerNs: attrEntry.ownerNs, fields, choiceGroup,
+          ownerNs: attrEntry.ownerNs, fields, wildcards, choiceGroup,
           inheritedCardinality, choiceBranch
         });
       } else {
@@ -655,7 +662,7 @@ const collectFields = (
           typeName: textType
         });
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
+      collectFields(derivation, ctx, { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch });
       continue;
     }
 
@@ -667,7 +674,7 @@ const collectFields = (
       if (!derivation) {
         continue;
       }
-      collectFields(derivation, ctx, { ownerNs, fields, choiceGroup, inheritedCardinality, choiceBranch });
+      collectFields(derivation, ctx, { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch });
     }
   }
 };
@@ -1036,14 +1043,15 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       if (!name) continue;
       const qname = toClark(effectiveNs, name);
       const fields: IrField[] = [];
+      const wildcards: WildcardDef[] = [];
       const fCtx = fieldContext(resolveNsMap, fileFormDefaults, effectiveNs);
       collectFields(child, fCtx, {
-        ownerNs: effectiveNs, fields,
+        ownerNs: effectiveNs, fields, wildcards,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
 
-      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
+      complexTypes[qname] = { name: qname, fields, baseType, description: extractDocumentation(child), ...choiceGroupsMeta(fCtx.choiceGroupCardinality), ...(wildcards.length > 0 ? { wildcards } : {}) };
     }
   }
 
@@ -1051,9 +1059,10 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   for (const override of redefineOverrides) {
     if (override.kind === 'complexType') {
       const fields: IrField[] = [];
+      const wildcards: WildcardDef[] = [];
       const fCtx = fieldContext(override.nsMap, override.formDefaults, override.targetNs);
       collectFields(override.node, fCtx, {
-        ownerNs: override.targetNs, fields,
+        ownerNs: override.targetNs, fields, wildcards,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
       });
       const complexContent = nodeChildren(override.node)
@@ -1074,12 +1083,13 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         const original = complexTypes[override.qname];
         if (original) {
           const mergedChoiceGroups = { ...original.choiceGroups, ...Object.fromEntries(fCtx.choiceGroupCardinality) };
-          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...choiceGroupsMeta(mergedChoiceGroups) };
+          const mergedWildcards = [...(original.wildcards ?? []), ...wildcards];
+          complexTypes[override.qname] = { name: override.qname, fields: [...original.fields, ...fields], baseType: original.baseType, description: description ?? original.description, ...choiceGroupsMeta(mergedChoiceGroups), ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}) };
         } else {
-          complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
+          complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta, ...(wildcards.length > 0 ? { wildcards } : {}) };
         }
       } else {
-        complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta };
+        complexTypes[override.qname] = { name: override.qname, fields, baseType: effectiveBaseType, description, ...choiceGroupMeta, ...(wildcards.length > 0 ? { wildcards } : {}) };
       }
     } else if (override.kind === 'simpleType') {
       // Preserve the original definition before it is replaced: a self-base in
@@ -1119,12 +1129,13 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   // Process deferred inline types now that all elements are collected
   const processDeferredType = ({ typeName, container, ownerNs, nsMap, formDefaults }: DeferredInlineType) => {
     const fields: IrField[] = [];
+    const wildcards: WildcardDef[] = [];
     const fCtx = fieldContext(nsMap, formDefaults, ownerNs);
     collectFields(container, fCtx, {
-      ownerNs, fields,
+      ownerNs, fields, wildcards,
       inheritedCardinality: { minOccurs: 1, maxOccurs: 1 }
     });
-    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...choiceGroupsMeta(fCtx.choiceGroupCardinality) };
+    complexTypes[typeName] = { name: typeName, fields, baseType: extractExtensionBase(container, nsMap, unresolvedRefs), ...choiceGroupsMeta(fCtx.choiceGroupCardinality), ...(wildcards.length > 0 ? { wildcards } : {}) };
   };
 
   for (const deferred of deferredInlineTypes) {
@@ -1154,11 +1165,26 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     nextStack.add(typeName);
     return [...resolveMergedFields(type.baseType, nextStack), ...type.fields];
   };
+  // Wildcards inherit down the extension chain, like fields.
+  const resolveMergedWildcards = (typeName: string, stack: Set<string>): WildcardDef[] => {
+    const type = complexTypes[typeName];
+    if (!type) {
+      return [];
+    }
+    if (!type.baseType || !complexTypes[type.baseType] || stack.has(typeName)) {
+      return type?.wildcards ?? [];
+    }
+    const nextStack = new Set(stack);
+    nextStack.add(typeName);
+    return [...resolveMergedWildcards(type.baseType, nextStack), ...(type.wildcards ?? [])];
+  };
 
   for (const [name, type] of Object.entries(complexTypes)) {
+    const mergedWildcards = resolveMergedWildcards(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
-      fields: resolveMergedFields(name, new Set())
+      fields: resolveMergedFields(name, new Set()),
+      ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {})
     };
   }
 

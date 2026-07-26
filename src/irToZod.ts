@@ -406,6 +406,15 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(', ')} }`;
   });
+  // Wildcard sentinels: '*' sweeps unmatched child elements, '@*' unmatched
+  // attributes into the open shape.
+  for (const wildcard of type.wildcards ?? []) {
+    if (wildcard.kind === 'any') {
+      entries.push(`"*": { kind: "any", qname: "{}*" }`);
+    } else {
+      entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
+    }
+  }
   return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(', ')} }`;
 };
 
@@ -490,7 +499,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
     schemaLines.push(
       `${schemaRef(complexType.name)} = ${registered(
-        `z.lazy(() => z.object({${props}})${choiceRefines(complexType).join('')})`,
+        `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? 'z.looseObject' : 'z.object'}({${props}})${choiceRefines(complexType).join('')})`,
         complexType.description,
         fieldsMetaFor(complexType, ir),
       )};`

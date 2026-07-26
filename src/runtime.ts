@@ -486,7 +486,71 @@ const readObject = (
       result[key] = value;
     }
   }
+  const fieldList = Object.values(fields);
+  const hasAny = fieldList.some(f => f.kind === 'any');
+  const hasAnyAttribute = fieldList.some(f => f.kind === 'anyAttribute');
+  if (hasAny || hasAnyAttribute) {
+    sweepWildcards(result, node, fieldList, namespaceContext, { any: hasAny, anyAttribute: hasAnyAttribute });
+  }
   return result;
+};
+
+// xs:any / xs:anyAttribute (lax tier): unmatched child elements/attributes are
+// captured in the normalized open shape (see openWalk). Namespace constraints
+// and processContents are deliberately unenforced — the libxml2 tier is the
+// conformance authority.
+const sweepWildcards = (
+  result: Record<string, unknown>,
+  node: Record<string, unknown>,
+  fieldList: XmlFieldMeta[],
+  namespaceContext: Record<string, string>,
+  wildcards: { any: boolean; anyAttribute: boolean }
+): void => {
+  const knownElements = new Set(fieldList.filter(f => f.kind === 'element').map(f => f.qname));
+  const knownAttributes = new Set(fieldList.filter(f => f.kind === 'attribute').map(f => f.qname));
+  const context = withNamespaceContext(namespaceContext, node);
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '#text' || key === '#cdata' || key === '@_xmlns' || key.startsWith('@_xmlns:')) {
+      continue;
+    }
+    if (key.startsWith('@_')) {
+      if (!wildcards.anyAttribute) {
+        continue;
+      }
+      const { prefix, local } = splitQName(key.slice(2));
+      const namespace = prefix ? (context[prefix] ?? '') : '';
+      // xsi:* directives are processor metadata, not content (see openWalk).
+      if (namespace === XSI_NS || knownAttributes.has(`{${namespace}}${local}`)) {
+        continue;
+      }
+      result[`@${namespace ? `{${namespace}}` : ''}${local}`] = value === undefined ? value : String(value);
+      continue;
+    }
+    if (!wildcards.any) {
+      continue;
+    }
+    const { prefix, local } = splitQName(key);
+    for (const item of toArray(value)) {
+      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
+      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      // Unqualified fields also match unprefixed elements in the inherited
+      // default namespace (same leniency as findElementValues) — not extras.
+      if (knownElements.has(`{${namespace}}${local}`) || (knownElements.has(`{}${local}`) && !prefix)) {
+        continue;
+      }
+      const childKey = `{${namespace}}${local}`;
+      const childValue = itemNode ? openWalk(itemNode, context) : item;
+      const existing = result[childKey];
+      if (existing === undefined) {
+        result[childKey] = childValue;
+      } else if (Array.isArray(existing)) {
+        existing.push(childValue);
+      } else {
+        result[childKey] = [existing, childValue];
+      }
+    }
+  }
 };
 
 // Present-but-empty element: XSD applies default/fixed here (#66).
@@ -842,6 +906,40 @@ const writeObjectFields = (
         continue;
       }
       elements.push(`<${localName}>${serializeLeaf(field.itemSchema, item)}</${localName}>`);
+    }
+  }
+
+  // Wildcard extras: data keys captured by the wildcard sweep that no declared
+  // field owns. Written after the declared fields (see sweepWildcards).
+  const fieldList = Object.values(fields);
+  const hasAny = fieldList.some(f => f.kind === 'any');
+  const hasAnyAttribute = fieldList.some(f => f.kind === 'anyAttribute');
+  if (hasAny || hasAnyAttribute) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key in fields || value === undefined) {
+        continue;
+      }
+      if (key.startsWith('@')) {
+        if (hasAnyAttribute) {
+          attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`);
+        }
+        continue;
+      }
+      if (!hasAny) {
+        continue;
+      }
+      const tag = elementName(key, ctx.prefixMap);
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (item === null) {
+          usesXsi = true;
+          elements.push(`<${tag} xsi:nil="true"/>`);
+          continue;
+        }
+        const inner = openSerialize(item, ctx);
+        usesXsi = usesXsi || inner.usesXsi;
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+        elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
+      }
     }
   }
 

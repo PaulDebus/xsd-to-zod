@@ -51,6 +51,14 @@ export type ComplexTypeDef = {
   fields: IrField[];
   description?: string;
   choiceGroups?: Record<string, Cardinality>;
+  /** xs:any / xs:anyAttribute wildcards (lax tier: content is captured in the open shape). */
+  wildcards?: WildcardDef[];
+};
+
+export type WildcardDef = {
+  kind: 'any' | 'anyAttribute';
+  /** Raw namespace constraint, e.g. '##any', '##other', '##targetNamespace ##local'. */
+  namespaceConstraint: string;
 };
 
 export type ElementDef = {
