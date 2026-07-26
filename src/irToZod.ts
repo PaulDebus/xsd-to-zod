@@ -340,7 +340,11 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
   for (const group of multiBranchGroups(type)) {
     const branches = choiceBranches(type, group);
     const flatFields = branches.flat();
-    const requiredChoice = flatFields.some((f) => f.minOccurs > 0);
+    // A choice group is only required when it is not emptiable: a single
+    // branch with minOccurs="0" makes the whole group match empty (verified
+    // against libxml2). Field minOccurs already folds in the choice particle's
+    // own minOccurs (combineCardinality multiplies).
+    const requiredChoice = flatFields.every((f) => f.minOccurs > 0);
     const groupCard = type.choiceGroups?.[group];
     const repeatedChoice = groupCard !== undefined && (groupCard.maxOccurs === 'unbounded' || groupCard.maxOccurs > 1);
 
