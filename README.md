@@ -53,8 +53,12 @@ The generated `order.zod.ts` looks like:
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 
-const schemas: Record<string, z.ZodTypeAny> = {};
-schemas["{urn:example}OrderType"] = z.lazy(() => z.object({
+export interface OrderType {
+  item: string[];
+  sku: string;
+  "@id": number;
+}
+const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({
   "item": z.array(z.string()),
   "sku": z.string(),
   "@id": z.number().int(),
@@ -66,9 +70,13 @@ schemas["{urn:example}OrderType"] = z.lazy(() => z.object({
     "@id": { kind: "attribute", qname: "id" },
   },
 });
-export const orderSchema = z.lazy(() => schemas["{urn:example}OrderType"])
+export const orderSchema = z.lazy(() => OrderTypeSchema)
   .register(xmlRegistry, { root: "{urn:example}order" });
 ```
+
+Every complex type becomes an exported interface plus a schema const annotated
+`z.ZodType<Interface>`, so `z.infer<typeof orderSchema>` is `OrderType` — full
+compile-time types, including for mutually recursive XSD types.
 
 Use it in TypeScript:
 

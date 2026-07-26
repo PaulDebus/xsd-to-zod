@@ -777,7 +777,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}CountryCode"] = z.string().regex(new RegExp("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });'
+          'const CountryCodeSchema = z.string().regex(new RegExp("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });'
         );
       });
     });
@@ -786,7 +786,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}StatusCode"] = z.enum(["active", "inactive", "pending"]).register(xmlRegistry, { qname: "{urn:facets}StatusCode" });'
+          'const StatusCodeSchema = z.enum(["active", "inactive", "pending"]).register(xmlRegistry, { qname: "{urn:facets}StatusCode" });'
         );
       });
     });
@@ -795,7 +795,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Quantity"] = z.number().int().min(1).max(100).register(xmlRegistry, { qname: "{urn:facets}Quantity" });'
+          'const QuantitySchema = z.number().int().min(1).max(100).register(xmlRegistry, { qname: "{urn:facets}Quantity" });'
         );
       });
     });
@@ -804,7 +804,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Price"] = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).min(0).register(xmlRegistry, { qname: "{urn:facets}Price" });'
+          'const PriceSchema = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).min(0).register(xmlRegistry, { qname: "{urn:facets}Price" });'
         );
       });
     });
@@ -822,7 +822,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}Temperature"] = z.number().gt(-273.15).lt(10000).register(xmlRegistry, { qname: "{urn:facets}Temperature" });'
+          'const TemperatureSchema = z.number().gt(-273.15).lt(10000).register(xmlRegistry, { qname: "{urn:facets}Temperature" });'
         );
       });
     });
@@ -831,7 +831,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          "schemas[\"{urn:facets}ShortCode\"] = z.string().regex(new RegExp(\"[A-Z0-9]{3,8}\")).refine((val) => [\"ADM\", \"USR\"].includes(val), { message: 'value is not one of the allowed values' }).register(xmlRegistry, { qname: \"{urn:facets}ShortCode\" });"
+          "const ShortCodeSchema = z.string().regex(new RegExp(\"[A-Z0-9]{3,8}\")).refine((val) => [\"ADM\", \"USR\"].includes(val), { message: 'value is not one of the allowed values' }).register(xmlRegistry, { qname: \"{urn:facets}ShortCode\" });"
         );
       });
     });
@@ -840,7 +840,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}LargeInt"] = z.number().int().refine(xsdTotalDigits(5), { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });'
+          'const LargeIntSchema = z.number().int().refine(xsdTotalDigits(5), { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });'
         );
       });
     });
@@ -849,7 +849,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}NameType"] = z.string().min(2).max(50).register(xmlRegistry, { qname: "{urn:facets}NameType" });'
+          'const NameTypeSchema = z.string().min(2).max(50).register(xmlRegistry, { qname: "{urn:facets}NameType" });'
         );
       });
     });
@@ -858,7 +858,7 @@ describe('xsd-to-zod v1 pipeline', () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:facets}TokenType"] = z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()).register(xmlRegistry, { qname: "{urn:facets}TokenType" });'
+          'const TokenTypeSchema = z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()).register(xmlRegistry, { qname: "{urn:facets}TokenType" });'
         );
       });
     });
@@ -869,7 +869,7 @@ describe('xsd-to-zod v1 pipeline', () => {
         fs.writeFileSync(file, NUM_ENUM_XSD);
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'schemas["{urn:numEnum}Priority"] = z.union([z.literal(1), z.literal(2), z.literal(3)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });'
+          'const PrioritySchema = z.union([z.literal(1), z.literal(2), z.literal(3)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });'
         );
       });
     });
@@ -1023,10 +1023,10 @@ describe('xsd-to-zod v1 pipeline', () => {
       const ir = parseXsd([xsdFile]);
       const { schemas } = irToZod(ir);
 
-      expect(schemas).toContain('schemas["{urn:cyclic}PersonType"] = z.lazy(() => z.object({');
-      expect(schemas).toContain('schemas["{urn:cyclic}TeamType"] = z.lazy(() => z.object({');
-      expect(schemas).toContain('export const personSchema = z.lazy(() => schemas["{urn:cyclic}PersonType"]).register(xmlRegistry, { root: "{urn:cyclic}person" });');
-      expect(schemas).toContain('export const teamSchema = z.lazy(() => schemas["{urn:cyclic}TeamType"]).register(xmlRegistry, { root: "{urn:cyclic}team" });');
+      expect(schemas).toContain('const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({');
+      expect(schemas).toContain('const TeamTypeSchema: z.ZodType<TeamType> = z.lazy(() => z.object({');
+      expect(schemas).toContain('export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person" });');
+      expect(schemas).toContain('export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}team" });');
 
       const mod = await importGeneratedSchemas(schemas) as {
         personSchema: { parse: (v: unknown) => unknown };
