@@ -1,8 +1,13 @@
-name: W3C corpus (nightly)
+name: W3C corpus
 
 on:
+  # Run when code changes land on main, weekly as a backstop (pinned W3C
+  # submodule moves, dependency drift), and on demand — not on a fixed nightly
+  # schedule, so idle periods cost no CI time.
+  push:
+    branches: [main]
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '17 3 * * 1'
   workflow_dispatch:
 
 jobs:
