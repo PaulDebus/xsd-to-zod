@@ -109,15 +109,16 @@ const resolveBuiltinLocal = (typeName: QName, ir: XsdIr, seen?: Set<string>): st
   return resolveBuiltinLocal(simple.baseType, ir, seenNames);
 };
 
-const primitiveToZod = (typeName: QName, definedTypes: Set<string>, usedHelpers: Set<string>): string => {
+const primitiveToZod = (typeName: QName, definedTypes: Set<string>, constName: ReadonlyMap<QName, string>, usedHelpers: Set<string>): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
     return 'z.unknown()';
   }
   if (parts.ns !== XSD_NS) {
     // Unresolvable references (e.g. type="string" in a schema whose default
-    // namespace is the targetNamespace) must not emit a dangling schemas lookup.
-    return definedTypes.has(typeName) ? `schemas[${JSON.stringify(typeName)}]` : 'z.unknown()';
+    // namespace is the targetNamespace) must not emit a dangling reference.
+    const ref = constName.get(typeName);
+    return definedTypes.has(typeName) && ref !== undefined ? ref : 'z.unknown()';
   }
 
   if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
@@ -485,14 +486,101 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
 // the structural logic in irToZod stays readable (#84).
 // ---------------------------------------------------------------------------
 
-/** `schemas["{ns}local"]` — a reference to a named schema in the module. */
-const schemaRef = (name: QName): string => `schemas[${JSON.stringify(name)}]`;
+// ---------------------------------------------------------------------------
+// Static types (#146). Every named type becomes a standalone const so its
+// inferred zod type survives; the old `schemas: Record<string, z.ZodTypeAny>`
+// registry erased all of it (z.infer → any). Complex types additionally get
+// an exported TS interface, and their schema const is annotated
+// z.ZodType<Interface> — the annotation breaks the circular type inference
+// that mutually recursive types would otherwise trigger.
+// ---------------------------------------------------------------------------
 
-/**
- * Wrap an expression with `.describe()` (when a description is present) and
- * `.register(xmlRegistry, { … })` — the standard suffix for every schema
- * definition.
- */
+// Parenthesize union type expressions when nested in an array.
+const tsArrayOf = (type: string): string => `${type.includes(' | ') ? `(${type})` : type}[]`;
+
+// TS output type for a type reference, mirroring the runtime output of the
+// generated zod expression. Interfaces exist only for complex types; simple
+// types are inlined structurally.
+const tsTypeOfTypeName = (
+  typeName: QName,
+  ir: XsdIr,
+  ifaceName: ReadonlyMap<QName, string>,
+  seen: Set<QName>
+): string => {
+  const parts = trySplitClark(typeName);
+  if (!parts) {
+    return 'unknown';
+  }
+  if (parts.ns === XSD_NS) {
+    if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
+      return 'number';
+    }
+    switch (parts.local) {
+      case 'anyType':
+        return 'unknown';
+      case 'boolean':
+        return 'boolean';
+      case 'decimal':
+      case 'float':
+      case 'double':
+        return 'number';
+      default:
+        return 'string';
+    }
+  }
+  if (ir.complexTypes[typeName] !== undefined) {
+    return ifaceName.get(typeName) ?? 'unknown';
+  }
+  const simple = ir.simpleTypes[typeName];
+  if (simple === undefined || seen.has(typeName)) {
+    return 'unknown';
+  }
+  seen.add(typeName);
+  if (simple.kind === 'list') {
+    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen));
+  }
+  if (simple.kind === 'union') {
+    const members = simple.memberTypes.map(mt => tsTypeOfTypeName(mt, ir, ifaceName, seen));
+    return members.length > 0 ? members.join(' | ') : 'unknown';
+  }
+  // Restriction: a pure enumeration on a direct builtin base becomes a
+  // literal union (mirrors withFacets); anything else has the base's type.
+  const facets = simple.facets ?? [];
+  const enumFacets = facets.filter(f => f.kind === 'enumeration');
+  const otherFacets = facets.filter(f => f.kind !== 'enumeration' && f.kind !== 'whiteSpace');
+  const baseParts = trySplitClark(simple.baseType);
+  if (enumFacets.length > 0 && otherFacets.length === 0 && baseParts?.ns === XSD_NS && baseParts.local !== 'anyType') {
+    const kind = resolvePrimitiveKind(simple.baseType, ir);
+    return enumFacets.map(f => typedLiteral(kind, f.value)).join(' | ');
+  }
+  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen);
+};
+
+// One interface property line for a field, mirroring withCardinality:
+// optionality from minOccurs/choice, [] from maxOccurs, null from nillable,
+// literal types for fixed values. Attribute defaults make the zod output
+// non-optional (.default() fills absence).
+const tsFieldLine = (
+  field: IrField,
+  ir: XsdIr,
+  ifaceName: ReadonlyMap<QName, string>,
+  forceOptional: boolean
+): string => {
+  let type = field.fixedValue !== undefined
+    ? typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.fixedValue)
+    : tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set());
+  if (field.nillable) {
+    type += ' | null';
+  }
+  if (field.maxOccurs === 'unbounded' || field.maxOccurs > 1) {
+    type = tsArrayOf(type);
+  }
+  const hasAttributeDefault =
+    field.kind === 'attribute' && field.defaultValue !== undefined && field.fixedValue === undefined;
+  const optional = (field.minOccurs === 0 || forceOptional) && !hasAttributeDefault;
+  return `  ${JSON.stringify(toFieldKey(field))}${optional ? '?' : ''}: ${type};`;
+};
+
 /**
  * Build a `.register(xmlRegistry, { … })` suffix with optional `.describe()`.
  * `metaBody` is the pre-formatted interior of the meta object literal (e.g.
@@ -500,6 +588,14 @@ const schemaRef = (name: QName): string => `schemas[${JSON.stringify(name)}]`;
  */
 const registered = (expr: string, description: string | undefined, metaBody: string): string =>
   `${withDescription(expr, description)}.register(xmlRegistry, { ${metaBody} })`;
+
+// Names TS forbids as interface identifiers (primitive/literal type keywords).
+// An XSD type named "boolean" or "any" gets a Type suffix instead.
+const TS_TYPE_RESERVED = new Set([
+  'any', 'unknown', 'never', 'void', 'undefined', 'null', 'string', 'number',
+  'boolean', 'object', 'symbol', 'bigint', 'true', 'false', 'this', 'infer',
+  'function', 'intrinsic',
+]);
 
 export type IrToZodOptions = {
   // Emit plain JavaScript (no TS type annotations) so the output can be
@@ -513,13 +609,39 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
   const usedHelpers = new Set<string>();
 
+  // Unique identifiers for the generated module, shared across value and type
+  // space so an interface can never shadow a root export (public API of
+  // generated modules — those names keep their historic shape).
+  const exportNames = rootSchemaExportNames(ir.rootElements);
+  const usedNames = new Set<string>(exportNames.values());
+  const alloc = (base: string): string => {
+    let name = base;
+    let n = 2;
+    while (usedNames.has(name)) {
+      name = `${base}${n}`;
+      n += 1;
+    }
+    usedNames.add(name);
+    return name;
+  };
+  const constName = new Map<QName, string>();
+  const ifaceName = new Map<QName, string>();
+  const sortedSimpleTypes = sortSimpleTypes(ir);
+  for (const t of sortedSimpleTypes) {
+    constName.set(t.name, alloc(`${sanitizeIdentifier(clarkToLocal(t.name))}Schema`));
+  }
+  for (const t of Object.values(ir.complexTypes)) {
+    const local = sanitizeIdentifier(clarkToLocal(t.name));
+    constName.set(t.name, alloc(`${local}Schema`));
+    ifaceName.set(t.name, alloc(TS_TYPE_RESERVED.has(local) ? `${local}Type` : local));
+  }
+
   schemaLines.push('// AUTO-GENERATED — DO NOT EDIT');
   const importLineIndex = schemaLines.length;
   schemaLines.push(''); // import line, filled in at the end once facet usage is known
-  schemaLines.push(opts?.js ? 'const schemas = {};' : 'const schemas: Record<string, z.ZodTypeAny> = {};');
 
-  // Simple and complex types share the `schemas[...]` namespace in the
-  // generated module — a qname collision would silently overwrite. Fail loud.
+  // Simple and complex types share the generated module's value namespace —
+  // a qname collision would silently reference the wrong const. Fail loud.
   const claimedTypeNames = new Set<string>();
   const claimTypeName = (qname: string): void => {
     if (claimedTypeNames.has(qname)) {
@@ -528,38 +650,52 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     claimedTypeNames.add(qname);
   };
 
-  for (const simpleType of sortSimpleTypes(ir)) {
+  // Interfaces first: exported so consumers can name the inferred types, and
+  // the const annotations below refer to them. js mode has no type level.
+  if (!opts?.js) {
+    for (const complexType of Object.values(ir.complexTypes)) {
+      claimTypeName(complexType.name);
+      const multiBranch = multiBranchGroups(complexType);
+      const props = complexType.fields
+        .map((field) => tsFieldLine(field, ir, ifaceName, field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup)))
+        .join('\n');
+      const indexSignature = complexType.wildcards && complexType.wildcards.length > 0 ? '\n  [key: string]: unknown;' : '';
+      schemaLines.push(`export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`);
+    }
+  }
+
+  for (const simpleType of sortedSimpleTypes) {
     claimTypeName(simpleType.name);
     let expr: string;
     if (simpleType.kind === 'list') {
-      const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, usedHelpers);
+      const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, constName, usedHelpers);
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === 'union') {
-      const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes, usedHelpers));
+      const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes, constName, usedHelpers));
       expr = `z.union([${memberExprs.join(', ')}])`;
     } else {
-      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, usedHelpers);
+      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, constName, usedHelpers);
       expr = simpleType.facets
         ? withFacets(baseExpr, simpleType.facets, usage, resolvePrimitiveKind(simpleType.name, ir), resolveBuiltinLocal(simpleType.name, ir))
         : baseExpr;
     }
-    schemaLines.push(`${schemaRef(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`);
+    schemaLines.push(`const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`);
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
-    claimTypeName(complexType.name);
     const multiBranch = multiBranchGroups(complexType);
     const props = complexType.fields
       .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withDescription(withCardinality(
-        primitiveToZod(field.typeName, definedTypes, usedHelpers),
+        primitiveToZod(field.typeName, definedTypes, constName, usedHelpers),
         field,
         ir,
         field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup)
       ), field.description)}`)
       .join(', ');
 
+    const annotation = opts?.js ? '' : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     schemaLines.push(
-      `${schemaRef(complexType.name)} = ${registered(
+      `const ${constName.get(complexType.name)}${annotation} = ${registered(
         `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? 'z.looseObject' : 'z.object'}({${props}})${choiceRefines(complexType).join('')})`,
         complexType.description,
         fieldsMetaFor(complexType, ir),
@@ -567,13 +703,12 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     );
   }
 
-  const exportNames = rootSchemaExportNames(ir.rootElements);
   for (const root of ir.rootElements) {
     const rootDef = ir.elements[root];
     // Root exports are fresh wrapper objects: registry meta is keyed by schema
     // object identity, so registering { root } on the shared type schema would
     // clobber its type meta (and collide when two roots share one type).
-    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, usedHelpers)})`;
+    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`];
     if (rootDef.typeName === '{http://www.w3.org/2001/XMLSchema}anyType') {
