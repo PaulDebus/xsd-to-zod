@@ -799,6 +799,14 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         const schemaLocation = child['@_schemaLocation'] ? String(child['@_schemaLocation']) : '';
         if (!schemaLocation) continue;
 
+        // schemaLocation is only a hint: remote URLs are never read as local
+        // files (and "must not resolve" tests rely on that). Skip with a
+        // diagnostic instead of crashing.
+        if (/^https?:/i.test(schemaLocation)) {
+          unresolvedRefs.add(`unresolvable remote schemaLocation "${schemaLocation}" skipped`);
+          continue;
+        }
+
         const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
         addDependency(entry.file, resolved);
 

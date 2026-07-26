@@ -48,7 +48,6 @@ const KNOWN_ANOMALIES = new Map<string, string>([
   ['Attribute/attZ014a/attZ014a.i', 'both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)'],
   ['Attribute/attZ014b/attZ014b.i', 'both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)'],
   ['Particles/particlesZ001/particlesZ001.i', 'both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)'],
-  ['DataTypes/anyURI_a004_1339/anyURI_a004_1339.i', 'schema imports an unresolvable http schemaLocation (must-not-resolve test)'],
   ['Additional/addB066/addB066.i', 'both tiers accept (needs triage)'],
 ]);
 

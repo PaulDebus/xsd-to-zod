@@ -1,0 +1,25 @@
+name: W3C corpus (nightly)
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run test:corpus
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w3c-conformance-report
+          path: .xsd-to-zod-tests/w3c-conformance.json
+          if-no-files-found: ignore

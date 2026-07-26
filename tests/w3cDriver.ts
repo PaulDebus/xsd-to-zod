@@ -140,6 +140,17 @@ export const parseTestSet = (file: string): W3cTestGroup[] => {
   });
 };
 
+/** Absolute paths of all testSet files referenced by the top-level suite.xml index. */
+export const parseSuiteIndex = (suiteFile: string): string[] => {
+  const dir = path.dirname(suiteFile);
+  const parsed: AnyNode = parser.parse(readXmlFile(suiteFile));
+  const root = rootOf(parsed);
+  return childrenOf(root, 'testSetRef')
+    .map(r => href(r))
+    .filter((h): h is string => h !== undefined)
+    .map(h => path.resolve(dir, h));
+};
+
 export interface W3cCase {
   /** e.g. "ipo1/ipo_1" */
   name: string;
