@@ -309,7 +309,7 @@ const TokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().spl
 const InlineIntOrString_member0Schema = z.number().int().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member0" });
 const InlineIntOrString_member1Schema = z.string().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member1" });
 const InlineIntOrStringSchema = z.union([InlineIntOrString_member0Schema, InlineIntOrString_member1Schema]).register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString" });
-const IntOrStringSchema = z.union([z.number().int(), z.string()]).register(xmlRegistry, { qname: "{urn:curated}IntOrString" });
+const IntOrStringSchema = z.union([z.number().int().min(-2147483648).max(2147483647), z.string()]).register(xmlRegistry, { qname: "{urn:curated}IntOrString" });
 const FlagsTypeSchema: z.ZodType<FlagsType> = z.lazy(() => z.object({"active": z.boolean(), "verified": z.boolean()})).register(xmlRegistry, { qname: "{urn:curated}FlagsType", fields: { "active": { kind: "element", qname: "{urn:curated}active" }, "verified": { kind: "element", qname: "{urn:curated}verified" } } });
 const MeasurementTypeSchema: z.ZodType<MeasurementType> = z.lazy(() => z.object({"value": z.number(), "precision": z.number()})).register(xmlRegistry, { qname: "{urn:curated}MeasurementType", fields: { "value": { kind: "element", qname: "{urn:curated}value" }, "precision": { kind: "element", qname: "{urn:curated}precision" } } });
 const CountTypeSchema: z.ZodType<CountType> = z.lazy(() => z.object({"count": z.number().int(), "total": z.number().int()})).register(xmlRegistry, { qname: "{urn:curated}CountType", fields: { "count": { kind: "element", qname: "{urn:curated}count" }, "total": { kind: "element", qname: "{urn:curated}total" } } });

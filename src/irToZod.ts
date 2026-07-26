@@ -14,6 +14,50 @@ const XSD_NS = 'http://www.w3.org/2001/XMLSchema';
 
 const NUMBER_PRIMITIVES = new Set([...XSD_INTEGER_TYPE_NAMES, 'decimal', 'float', 'double']);
 
+// Builtins whose lexical space the zod tier can check (xsdLexicals.ts has the
+// validators): builtin local name → exported validator function. QName,
+// NOTATION, anyURI, normalizedString and token are absent on purpose — see
+// xsdLexicals.ts for why their lexical check is impossible or vacuous.
+const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
+  ['date', 'xsdDate'],
+  ['dateTime', 'xsdDateTime'],
+  ['time', 'xsdTime'],
+  ['gYear', 'xsdGYear'],
+  ['gYearMonth', 'xsdGYearMonth'],
+  ['gMonth', 'xsdGMonth'],
+  ['gMonthDay', 'xsdGMonthDay'],
+  ['gDay', 'xsdGDay'],
+  ['duration', 'xsdDuration'],
+  ['hexBinary', 'xsdHexBinary'],
+  ['base64Binary', 'xsdBase64Binary'],
+  ['language', 'xsdLanguage'],
+  ['Name', 'xsdName'],
+  ['NCName', 'xsdNCName'],
+  ['ID', 'xsdNCName'],
+  ['IDREF', 'xsdNCName'],
+  ['ENTITY', 'xsdNCName'],
+  ['NMTOKEN', 'xsdNMTOKEN'],
+  ['NMTOKENS', 'xsdNMTOKENS'],
+  ['IDREFS', 'xsdNCNames'],
+  ['ENTITIES', 'xsdNCNames'],
+]);
+
+// Value-space bounds for the bounded integer builtins. long/unsignedLong are
+// absent: their bounds exceed Number.MAX_SAFE_INTEGER, so a min/max on the
+// coerced JS number would be unsound — they stay z.number().int().
+const XSD_INTEGER_BOUNDS: ReadonlyMap<string, { min?: number; max?: number }> = new Map([
+  ['byte', { min: -128, max: 127 }],
+  ['short', { min: -32768, max: 32767 }],
+  ['int', { min: -2147483648, max: 2147483647 }],
+  ['unsignedByte', { min: 0, max: 255 }],
+  ['unsignedShort', { min: 0, max: 65535 }],
+  ['unsignedInt', { min: 0, max: 4294967295 }],
+  ['nonNegativeInteger', { min: 0 }],
+  ['nonPositiveInteger', { max: 0 }],
+  ['negativeInteger', { max: -1 }],
+  ['positiveInteger', { min: 1 }],
+]);
+
 // Resolve a (possibly user-defined) simple type to its builtin base kind, so
 // fixed/default values are coerced to the JS type the runtime produces (#87).
 const resolvePrimitiveKind = (typeName: QName, ir: XsdIr, seen?: Set<string>): 'number' | 'boolean' | 'string' => {
@@ -65,7 +109,7 @@ const resolveBuiltinLocal = (typeName: QName, ir: XsdIr, seen?: Set<string>): st
   return resolveBuiltinLocal(simple.baseType, ir, seenNames);
 };
 
-const primitiveToZod = (typeName: QName, definedTypes: Set<string>, constName: ReadonlyMap<QName, string>): string => {
+const primitiveToZod = (typeName: QName, definedTypes: Set<string>, constName: ReadonlyMap<QName, string>, usedHelpers: Set<string>): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
     return 'z.unknown()';
@@ -78,7 +122,21 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>, constName: R
   }
 
   if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
-    return 'z.number().int()';
+    const bounds = XSD_INTEGER_BOUNDS.get(parts.local);
+    let expr = 'z.number().int()';
+    if (bounds?.min !== undefined) {
+      expr += `.min(${bounds.min})`;
+    }
+    if (bounds?.max !== undefined) {
+      expr += `.max(${bounds.max})`;
+    }
+    return expr;
+  }
+
+  const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
+  if (validator) {
+    usedHelpers.add(validator);
+    return `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
   }
 
   switch (parts.local) {
@@ -88,8 +146,6 @@ const primitiveToZod = (typeName: QName, definedTypes: Set<string>, constName: R
       return 'z.unknown()';
     case 'string':
     case 'token':
-    case 'date':
-    case 'dateTime':
       return 'z.string()';
     case 'boolean':
       return 'z.boolean()';
@@ -551,6 +607,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([...Object.keys(ir.simpleTypes), ...Object.keys(ir.complexTypes)]);
   const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
+  const usedHelpers = new Set<string>();
 
   // Unique identifiers for the generated module, shared across value and type
   // space so an interface can never shadow a root export (public API of
@@ -611,13 +668,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     claimTypeName(simpleType.name);
     let expr: string;
     if (simpleType.kind === 'list') {
-      const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, constName);
+      const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, constName, usedHelpers);
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === 'union') {
-      const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes, constName));
+      const memberExprs = simpleType.memberTypes.map(mt => primitiveToZod(mt, definedTypes, constName, usedHelpers));
       expr = `z.union([${memberExprs.join(', ')}])`;
     } else {
-      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, constName);
+      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, constName, usedHelpers);
       expr = simpleType.facets
         ? withFacets(baseExpr, simpleType.facets, usage, resolvePrimitiveKind(simpleType.name, ir), resolveBuiltinLocal(simpleType.name, ir))
         : baseExpr;
@@ -629,7 +686,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     const multiBranch = multiBranchGroups(complexType);
     const props = complexType.fields
       .map((field) => `${JSON.stringify(toFieldKey(field))}: ${withDescription(withCardinality(
-        primitiveToZod(field.typeName, definedTypes, constName),
+        primitiveToZod(field.typeName, definedTypes, constName, usedHelpers),
         field,
         ir,
         field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup)
@@ -651,7 +708,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     // Root exports are fresh wrapper objects: registry meta is keyed by schema
     // object identity, so registering { root } on the shared type schema would
     // clobber its type meta (and collide when two roots share one type).
-    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName)})`;
+    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`];
     if (rootDef.typeName === '{http://www.w3.org/2001/XMLSchema}anyType') {
@@ -668,7 +725,8 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
   const xsdImports = [
     usage.totalDigits ? 'xsdTotalDigits' : undefined,
-    usage.fractionDigits ? 'xsdFractionDigits' : undefined
+    usage.fractionDigits ? 'xsdFractionDigits' : undefined,
+    ...[...usedHelpers].sort()
   ].filter((name): name is string => name !== undefined);
   schemaLines[importLineIndex] =
     `import { z } from 'zod';\n` +

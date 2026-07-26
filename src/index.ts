@@ -10,6 +10,25 @@ export { runPostGenerationFormatting } from './postProcess.js';
 export { xmlRegistry } from './xmlMeta.js';
 export type { XmlFieldMeta, XmlMeta } from './xmlMeta.js';
 export { countFractionDigits, countTotalDigits, xsdFractionDigits, xsdTotalDigits } from './xsdChecks.js';
+export {
+  xsdBase64Binary,
+  xsdDate,
+  xsdDateTime,
+  xsdDuration,
+  xsdGDay,
+  xsdGMonth,
+  xsdGMonthDay,
+  xsdGYear,
+  xsdGYearMonth,
+  xsdHexBinary,
+  xsdLanguage,
+  xsdName,
+  xsdNCName,
+  xsdNCNames,
+  xsdNMTOKEN,
+  xsdNMTOKENS,
+  xsdTime
+} from './xsdLexicals.js';
 export type {
   Cardinality,
   ComplexTypeDef,
