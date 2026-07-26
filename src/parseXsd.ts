@@ -803,7 +803,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         // files (and "must not resolve" tests rely on that). Skip with a
         // diagnostic instead of crashing.
         if (/^https?:/i.test(schemaLocation)) {
-          unresolvedRefs.add(`unresolvable remote schemaLocation "${schemaLocation}" skipped`);
+          unresolvedRefs.add(`remote schemaLocation "${schemaLocation}" skipped (not resolved)`);
           continue;
         }
 
