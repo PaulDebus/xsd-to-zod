@@ -133,7 +133,7 @@ const parseSimpleTypeDef = (
           )
         : toClark(XSD_NS, "string");
     }
-    return { name: qname, kind: "list", itemType, description };
+    return { name: qname, kind: "list", itemType, ...(description !== undefined && { description }) };
   }
 
   const unionChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === "union")?.[1];
@@ -157,7 +157,7 @@ const parseSimpleTypeDef = (
           ),
         );
     }
-    return { name: qname, kind: "union", memberTypes, description };
+    return { name: qname, kind: "union", memberTypes, ...(description !== undefined && { description }) };
   }
 
   const restriction = nodeChildren(node).find(
@@ -173,8 +173,8 @@ const parseSimpleTypeDef = (
     name: qname,
     kind: "restriction",
     baseType,
-    facets: facets.length > 0 ? facets : undefined,
-    description,
+    ...(facets.length > 0 ? { facets } : {}),
+    ...(description !== undefined && { description }),
   };
 };
 
@@ -288,12 +288,12 @@ const collectNamespaceMap = (schemaNode: AnyNode): Record<string, string> => {
     const prefix = suffix.startsWith(":") ? suffix.slice(1) : "";
     nsMap[prefix] = String(value);
   }
-  if (!nsMap.xs) {
-    nsMap.xs = XSD_NS;
+  if (!nsMap["xs"]) {
+    nsMap["xs"] = XSD_NS;
   }
   // The xml prefix is implicitly bound and need not be declared (XML Namespaces spec).
-  if (!nsMap.xml) {
-    nsMap.xml = "http://www.w3.org/XML/1998/namespace";
+  if (!nsMap["xml"]) {
+    nsMap["xml"] = "http://www.w3.org/XML/1998/namespace";
   }
   return nsMap;
 };
@@ -482,8 +482,8 @@ const buildRefField = (
   qname,
   typeName,
   nillable,
-  choiceGroup,
-  ...(choiceBranch ? { choiceBranch } : {}),
+  ...(choiceGroup !== undefined && { choiceGroup }),
+  ...(choiceBranch !== undefined && { choiceBranch }),
 });
 
 type CollectFieldsScope = {
@@ -625,8 +625,8 @@ const collectFields = (
         ),
         typeName,
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
-        choiceGroup,
-        ...(choiceBranch ? { choiceBranch } : {}),
+        ...(choiceGroup !== undefined && { choiceGroup }),
+        ...(choiceBranch !== undefined && { choiceBranch }),
         ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
         ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
         ...(description === undefined ? {} : { description }),
@@ -714,9 +714,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        choiceGroup,
+        ...(choiceGroup !== undefined && { choiceGroup }),
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-        choiceBranch,
+        ...(choiceBranch !== undefined && { choiceBranch }),
       });
       continue;
     }
@@ -774,9 +774,9 @@ const collectFields = (
             ownerNs: groupEntry.ownerNs,
             fields,
             wildcards,
-            choiceGroup,
+            ...(choiceGroup !== undefined && { choiceGroup }),
             inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-            choiceBranch,
+            ...(choiceBranch !== undefined && { choiceBranch }),
           },
         );
       } else {
@@ -804,9 +804,9 @@ const collectFields = (
             ownerNs: attrEntry.ownerNs,
             fields,
             wildcards,
-            choiceGroup,
+            ...(choiceGroup !== undefined && { choiceGroup }),
             inheritedCardinality,
-            choiceBranch,
+            ...(choiceBranch !== undefined && { choiceBranch }),
           },
         );
       } else {
@@ -862,9 +862,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        choiceGroup,
+        ...(choiceGroup !== undefined && { choiceGroup }),
         inheritedCardinality,
-        choiceBranch,
+        ...(choiceBranch !== undefined && { choiceBranch }),
       });
       continue;
     }
@@ -881,9 +881,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        choiceGroup,
+        ...(choiceGroup !== undefined && { choiceGroup }),
         inheritedCardinality,
-        choiceBranch,
+        ...(choiceBranch !== undefined && { choiceBranch }),
       });
     }
   }
@@ -1063,7 +1063,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           if (!pending.has(depKey)) {
             pending.set(depKey, {
               file: resolved,
-              inheritedTargetNs: ns,
+              ...(ns !== undefined && { inheritedTargetNs: ns }),
             });
           }
         }
@@ -1235,9 +1235,10 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
               )
             : toClark(XSD_NS, "string");
         }
+        const attrDescription = extractDocumentation(child);
         attributes[qname] = {
           typeName,
-          description: extractDocumentation(child),
+          ...(attrDescription !== undefined && { description: attrDescription }),
         };
       }
     }
@@ -1380,12 +1381,13 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       }
 
       const qname = toClark(effectiveNs, name);
+      const description = extractDocumentation(child);
       elements[qname] = {
         name: qname,
         typeName,
         cardinality: parseCardinality(child),
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
-        description: extractDocumentation(child),
+        ...(description !== undefined && { description }),
         ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
         ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
       };
@@ -1418,12 +1420,13 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
+      const description = extractDocumentation(child);
 
       complexTypes[qname] = {
         name: qname,
         fields,
-        baseType,
-        description: extractDocumentation(child),
+        ...(baseType !== undefined && { baseType }),
+        ...(description !== undefined && { description }),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
         ...(wildcards.length > 0 ? { wildcards } : {}),
       };
@@ -1470,8 +1473,10 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           complexTypes[override.qname] = {
             name: override.qname,
             fields: [...original.fields, ...fields],
-            baseType: original.baseType,
-            description: description ?? original.description,
+            ...(original.baseType !== undefined && { baseType: original.baseType }),
+            ...((description ?? original.description) !== undefined && {
+              description: description ?? original.description,
+            }),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
           };
@@ -1479,8 +1484,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           complexTypes[override.qname] = {
             name: override.qname,
             fields,
-            baseType: effectiveBaseType,
-            description,
+            ...(effectiveBaseType !== undefined && { baseType: effectiveBaseType }),
+            ...(description !== undefined && { description }),
             ...choiceGroupMeta,
             ...(wildcards.length > 0 ? { wildcards } : {}),
           };
@@ -1489,8 +1494,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         complexTypes[override.qname] = {
           name: override.qname,
           fields,
-          baseType: effectiveBaseType,
-          description,
+          ...(effectiveBaseType !== undefined && { baseType: effectiveBaseType }),
+          ...(description !== undefined && { description }),
           ...choiceGroupMeta,
           ...(wildcards.length > 0 ? { wildcards } : {}),
         };
@@ -1555,10 +1560,11 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       wildcards,
       inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
     });
+    const baseType = extractExtensionBase(container, nsMap, unresolvedRefs);
     complexTypes[typeName] = {
       name: typeName,
       fields,
-      baseType: extractExtensionBase(container, nsMap, unresolvedRefs),
+      ...(baseType !== undefined && { baseType }),
       ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
       ...(wildcards.length > 0 ? { wildcards } : {}),
     };

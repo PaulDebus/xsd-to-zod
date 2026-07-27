@@ -810,7 +810,7 @@ const openWalk = (
     return text === undefined ? "" : text;
   }
   if (text !== undefined && text !== "") {
-    out._text = text;
+    out["_text"] = text;
   }
   return out;
 };

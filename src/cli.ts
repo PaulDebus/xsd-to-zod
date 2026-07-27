@@ -105,7 +105,7 @@ export const discoverDependencies = (entryFile: string, visited = new Set<string
   );
   let match: RegExpExecArray | null = re.exec(content);
   while (match !== null) {
-    const depPath = resolve(dirname(resolved), match[1]);
+    const depPath = resolve(dirname(resolved), match[1] ?? "");
     if (existsSync(depPath)) {
       files.push(...discoverDependencies(depPath, visited));
     }
@@ -140,7 +140,10 @@ export const isLibrary = (filePath: string): boolean => {
     if (!schemaMatch) {
       return false;
     }
-    const fullTag = schemaMatch[1]; // e.g. 'schema', 'xs:schema', 'xsd:schema'
+    const fullTag = schemaMatch[1];
+    if (!fullTag) {
+      return false;
+    }
     const prefix = fullTag.replace(/schema$/, "");
     if (!content.includes(`</${prefix}schema>`)) {
       return false;
@@ -260,7 +263,9 @@ const program = new Command()
       return;
     }
 
-    const ir = parseXsd(nonLibraryFiles, { allowMissingImports });
+    const ir = parseXsd(nonLibraryFiles, {
+      ...(allowMissingImports !== undefined && { allowMissingImports }),
+    });
 
     if (!allowMissingImports) {
       warnUnresolvedRefs(ir);
@@ -398,7 +403,7 @@ program
       const content = readFileSync(file, "utf8");
       const schemaMatch = content.match(/<((?:xs:)?schema)\b[^>]*>([\s\S]*)<\/\1>/);
       if (schemaMatch) {
-        bodies.push(stripImports(schemaMatch[2]));
+        bodies.push(stripImports(schemaMatch[2] ?? ""));
       }
     }
 

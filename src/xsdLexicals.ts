@@ -62,12 +62,12 @@ const match =
 
 export const xsdDate = (value: string): boolean => {
   const m = DATE_RE.exec(collapseWhiteSpace(value));
-  return m !== null && validYearMonthDay(m[1], m[2], m[3]);
+  return m !== null && validYearMonthDay(m[1]!, m[2]!, m[3]!);
 };
 
 export const xsdDateTime = (value: string): boolean => {
   const m = DATE_TIME_RE.exec(collapseWhiteSpace(value));
-  return m !== null && validYearMonthDay(m[1], m[2], m[3]);
+  return m !== null && validYearMonthDay(m[1]!, m[2]!, m[3]!);
 };
 
 export const xsdTime = match(TIME_RE);

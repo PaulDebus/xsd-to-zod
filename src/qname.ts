@@ -30,7 +30,7 @@ export const splitClark = (qname: string): { namespace: string; local: string } 
 // Strict split: undefined for input that is not in Clark notation.
 export const trySplitClark = (qname: string): { ns: string; local: string } | undefined => {
   const match = qname.match(/^\{(.*)}(.*)$/);
-  return match ? { ns: match[1], local: match[2] } : undefined;
+  return match ? { ns: match[1]!, local: match[2]! } : undefined;
 };
 
 export const clarkToLocal = (qname: string): string => splitClark(qname).local;

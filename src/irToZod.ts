@@ -826,6 +826,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
   for (const root of ir.rootElements) {
     const rootDef = ir.elements[root];
+    if (!rootDef) {
+      continue;
+    }
     // Root exports are fresh wrapper objects: registry meta is keyed by schema
     // object identity, so registering { root } on the shared type schema would
     // clobber its type meta (and collide when two roots share one type).

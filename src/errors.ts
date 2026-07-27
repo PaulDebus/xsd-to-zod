@@ -9,6 +9,8 @@ export class Xsd2ZodError extends Error {
     super(message);
     this.name = "Xsd2ZodError";
     this.code = code;
-    this.file = options?.file;
+    if (options?.file !== undefined) {
+      this.file = options.file;
+    }
   }
 }
