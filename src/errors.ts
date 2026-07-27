@@ -7,7 +7,7 @@ export class Xsd2ZodError extends Error {
 
   constructor(code: string, message: string, options?: { file?: string }) {
     super(message);
-    this.name = 'Xsd2ZodError';
+    this.name = "Xsd2ZodError";
     this.code = code;
     this.file = options?.file;
   }

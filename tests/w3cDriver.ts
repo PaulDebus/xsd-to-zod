@@ -1,8 +1,8 @@
-import path from 'node:path';
-import XMLParser from '@nodable/flexible-xml-parser';
-import { readXmlFile } from '../src/index.js';
-import { splitQName } from '../src/qname.js';
-import { createOutputBuilder } from '../src/runtime.js';
+import path from "node:path";
+import XMLParser from "@nodable/flexible-xml-parser";
+import { readXmlFile } from "../src/index.js";
+import { splitQName } from "../src/qname.js";
+import { createOutputBuilder } from "../src/runtime.js";
 
 // Driver for the W3C XML Schema Test Suite (#108). Parses the `.testSet`
 // metadata files to discover test groups automatically instead of hardcoding
@@ -18,16 +18,18 @@ import { createOutputBuilder } from '../src/runtime.js';
 
 const parser = new XMLParser({
   skip: { attributes: false },
-  attributes: { prefix: '@_' },
-  OutputBuilder: createOutputBuilder()
+  attributes: { prefix: "@_" },
+  OutputBuilder: createOutputBuilder(),
 });
 
 type AnyNode = Record<string, unknown>;
 
-const isNode = (value: unknown): value is AnyNode => value !== null && typeof value === 'object';
+const isNode = (value: unknown): value is AnyNode => value !== null && typeof value === "object";
 
 const asArray = (value: unknown): unknown[] => {
-  if (value === undefined) return [];
+  if (value === undefined) {
+    return [];
+  }
   return Array.isArray(value) ? value : [value];
 };
 
@@ -36,17 +38,23 @@ const localName = (tag: string): string => splitQName(tag).local;
 // The document's root element node, skipping the `?xml` declaration key.
 const rootOf = (parsed: AnyNode): AnyNode => {
   for (const [key, value] of Object.entries(parsed)) {
-    if (!key.startsWith('?') && isNode(value)) return value;
+    if (!key.startsWith("?") && isNode(value)) {
+      return value;
+    }
   }
-  throw new Error('no root element found');
+  throw new Error("no root element found");
 };
 
 const childrenOf = (node: AnyNode, name: string): AnyNode[] => {
   const found: AnyNode[] = [];
   for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith('@_') || localName(key) !== name) continue;
+    if (key.startsWith("@_") || localName(key) !== name) {
+      continue;
+    }
     for (const entry of asArray(value)) {
-      if (isNode(entry)) found.push(entry);
+      if (isNode(entry)) {
+        found.push(entry);
+      }
     }
   }
   return found;
@@ -54,7 +62,9 @@ const childrenOf = (node: AnyNode, name: string): AnyNode[] => {
 
 const href = (node: AnyNode): string | undefined => {
   for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith('@_') && localName(key.slice(2)) === 'href') return String(value);
+    if (key.startsWith("@_") && localName(key.slice(2)) === "href") {
+      return String(value);
+    }
   }
   return undefined;
 };
@@ -62,8 +72,8 @@ const href = (node: AnyNode): string | undefined => {
 // A test node is expected to carry exactly one <expected validity="...">
 // child; require it to be present and unambiguously "valid".
 const expectedValid = (testNode: AnyNode): boolean => {
-  const expected = childrenOf(testNode, 'expected');
-  return expected.length > 0 && expected.every(e => e['@_validity'] === 'valid');
+  const expected = childrenOf(testNode, "expected");
+  return expected.length > 0 && expected.every((e) => e["@_validity"] === "valid");
 };
 
 // Spec anchor from a documentationReference href, e.g.
@@ -103,39 +113,43 @@ export const parseTestSet = (file: string): W3cTestGroup[] => {
   const parsed: AnyNode = parser.parse(readXmlFile(file));
   const root = rootOf(parsed);
 
-  return childrenOf(root, 'testGroup').map(group => {
-    const schemaTests = childrenOf(group, 'schemaTest');
+  return childrenOf(root, "testGroup").map((group) => {
+    const schemaTests = childrenOf(group, "schemaTest");
     const xsdFiles = schemaTests
-      .flatMap(t => childrenOf(t, 'schemaDocument'))
-      .map(d => href(d))
+      .flatMap((t) => childrenOf(t, "schemaDocument"))
+      .map((d) => href(d))
       .filter((h): h is string => h !== undefined)
-      .map(h => path.resolve(dir, h));
+      .map((h) => path.resolve(dir, h));
 
-    const instances = childrenOf(group, 'instanceTest').map(t => {
-      const doc = childrenOf(t, 'instanceDocument').map(d => href(d)).find(h => h !== undefined);
-      return {
-        name: String(t['@_name'] ?? ''),
-        xmlFile: path.resolve(dir, doc ?? ''),
-        expectedValid: expectedValid(t)
-      };
-    }).filter(i => i.xmlFile !== dir);
+    const instances = childrenOf(group, "instanceTest")
+      .map((t) => {
+        const doc = childrenOf(t, "instanceDocument")
+          .map((d) => href(d))
+          .find((h) => h !== undefined);
+        return {
+          name: String(t["@_name"] ?? ""),
+          xmlFile: path.resolve(dir, doc ?? ""),
+          expectedValid: expectedValid(t),
+        };
+      })
+      .filter((i) => i.xmlFile !== dir);
 
     const specRefs = [
       ...new Set(
-        childrenOf(group, 'documentationReference')
-          .map(d => href(d))
-          .map(h => (h === undefined ? undefined : specAnchor(h)))
-          .filter((a): a is string => a !== undefined)
-      )
+        childrenOf(group, "documentationReference")
+          .map((d) => href(d))
+          .map((h) => (h === undefined ? undefined : specAnchor(h)))
+          .filter((a): a is string => a !== undefined),
+      ),
     ];
 
     return {
-      name: String(group['@_name'] ?? ''),
+      name: String(group["@_name"] ?? ""),
       testSet: file,
       xsdFiles,
       schemaExpectedValid: schemaTests.length > 0 && schemaTests.every(expectedValid),
       instances,
-      specRefs
+      specRefs,
     };
   });
 };
@@ -145,10 +159,10 @@ export const parseSuiteIndex = (suiteFile: string): string[] => {
   const dir = path.dirname(suiteFile);
   const parsed: AnyNode = parser.parse(readXmlFile(suiteFile));
   const root = rootOf(parsed);
-  return childrenOf(root, 'testSetRef')
-    .map(r => href(r))
+  return childrenOf(root, "testSetRef")
+    .map((r) => href(r))
     .filter((h): h is string => h !== undefined)
-    .map(h => path.resolve(dir, h));
+    .map((h) => path.resolve(dir, h));
 };
 
 export interface W3cCase {
@@ -166,19 +180,25 @@ export type W3cTestSetRef = string | { file: string; groupFilter?: RegExp };
 const discoverCases = (testSetFiles: W3cTestSetRef[], instanceValid: boolean): W3cCase[] => {
   const cases: W3cCase[] = [];
   for (const ref of testSetFiles) {
-    const testSet = typeof ref === 'string' ? ref : ref.file;
-    const groupFilter = typeof ref === 'string' ? undefined : ref.groupFilter;
+    const testSet = typeof ref === "string" ? ref : ref.file;
+    const groupFilter = typeof ref === "string" ? undefined : ref.groupFilter;
     for (const group of parseTestSet(testSet)) {
-      if (groupFilter && !groupFilter.test(group.name)) continue;
-      if (!group.schemaExpectedValid || group.xsdFiles.length === 0) continue;
+      if (groupFilter && !groupFilter.test(group.name)) {
+        continue;
+      }
+      if (!group.schemaExpectedValid || group.xsdFiles.length === 0) {
+        continue;
+      }
       for (const instance of group.instances) {
-        if (instance.expectedValid !== instanceValid) continue;
+        if (instance.expectedValid !== instanceValid) {
+          continue;
+        }
         cases.push({
-          name: `${group.name}/${instance.name || path.basename(instance.xmlFile, '.xml')}`,
+          name: `${group.name}/${instance.name || path.basename(instance.xmlFile, ".xml")}`,
           testSet,
           xsdFiles: group.xsdFiles,
           xmlFile: instance.xmlFile,
-          specRefs: group.specRefs
+          specRefs: group.specRefs,
         });
       }
     }
@@ -190,11 +210,13 @@ const discoverCases = (testSetFiles: W3cTestSetRef[], instanceValid: boolean): W
  * Positive round-trip cases from the given testSet files: groups whose schema
  * is expected valid, restricted to instances expected valid.
  */
-export const discoverValidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] => discoverCases(testSetFiles, true);
+export const discoverValidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] =>
+  discoverCases(testSetFiles, true);
 
 /**
  * Negative cases: groups whose schema is expected valid, restricted to
  * instances expected INVALID. (Schema-validity tests — groups whose schema is
  * expected invalid — are a separate, still uncovered mode.)
  */
-export const discoverInvalidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] => discoverCases(testSetFiles, false);
+export const discoverInvalidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] =>
+  discoverCases(testSetFiles, false);

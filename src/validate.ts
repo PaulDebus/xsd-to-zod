@@ -11,9 +11,7 @@ export type XmlValidationIssue = {
   column?: number;
 };
 
-export type ValidateXmlResult =
-  | { valid: true }
-  | { valid: false; issues: XmlValidationIssue[] };
+export type ValidateXmlResult = { valid: true } | { valid: false; issues: XmlValidationIssue[] };
 
 export type ValidateXmlOptions = {
   /**
@@ -25,7 +23,7 @@ export type ValidateXmlOptions = {
   url?: string;
 };
 
-type Libxml2 = typeof import('libxml2-wasm');
+type Libxml2 = typeof import("libxml2-wasm");
 
 let libxml2Promise: Promise<Libxml2> | null = null;
 
@@ -36,16 +34,16 @@ const loadLibxml2 = (): Promise<Libxml2> => {
   const promise = (async () => {
     let libxml2: Libxml2;
     try {
-      libxml2 = await import('libxml2-wasm');
+      libxml2 = await import("libxml2-wasm");
     } catch {
       throw new Error(
-        "xsd-to-zod/validate requires the optional peer dependency 'libxml2-wasm'. Install it with: npm install libxml2-wasm"
+        "xsd-to-zod/validate requires the optional peer dependency 'libxml2-wasm'. Install it with: npm install libxml2-wasm",
       );
     }
     // Filesystem input providers let relative xs:include/xs:import resolve
     // against the schema url. Node-only; best-effort everywhere else.
     try {
-      const { xmlRegisterFsInputProviders } = await import('libxml2-wasm/lib/nodejs.mjs');
+      const { xmlRegisterFsInputProviders } = await import("libxml2-wasm/lib/nodejs.mjs");
       xmlRegisterFsInputProviders();
     } catch {
       // Non-Node runtime or bundler without the subpath — schemas with
@@ -67,12 +65,17 @@ const toIssues = (error: unknown): XmlValidationIssue[] => {
   const details = (error as { details?: unknown } | null)?.details;
   if (Array.isArray(details) && details.length > 0) {
     return details.map((detail) => {
-      const d = detail as { message?: unknown; file?: unknown; line?: unknown; col?: unknown };
+      const d = detail as {
+        message?: unknown;
+        file?: unknown;
+        line?: unknown;
+        col?: unknown;
+      };
       return {
         message: String(d.message ?? error),
-        ...(typeof d.file === 'string' && d.file !== '' ? { file: d.file } : {}),
-        ...(typeof d.line === 'number' && d.line > 0 ? { line: d.line } : {}),
-        ...(typeof d.col === 'number' && d.col > 0 ? { column: d.col } : {}),
+        ...(typeof d.file === "string" && d.file !== "" ? { file: d.file } : {}),
+        ...(typeof d.line === "number" && d.line > 0 ? { line: d.line } : {}),
+        ...(typeof d.col === "number" && d.col > 0 ? { column: d.col } : {}),
       };
     });
   }
@@ -83,9 +86,9 @@ const toIssues = (error: unknown): XmlValidationIssue[] => {
 export const formatIssues = (issues: XmlValidationIssue[]): string[] =>
   issues.map((issue) => {
     const where =
-      issue.line !== undefined
-        ? `line ${issue.line}${issue.column !== undefined ? `, column ${issue.column}` : ''}: `
-        : '';
+      issue.line === undefined
+        ? ""
+        : `line ${issue.line}${issue.column === undefined ? "" : `, column ${issue.column}`}: `;
     return `${where}${issue.message}`;
   });
 
@@ -97,14 +100,20 @@ export const formatIssues = (issues: XmlValidationIssue[]): string[] =>
  * Typical upload gate: `validateXml` (contract check, line-numbered errors)
  * → `parseXml` (typed data + zod validation).
  */
-export const validateXml = async (xml: string, xsd: string, opts?: ValidateXmlOptions): Promise<ValidateXmlResult> => {
+export const validateXml = async (
+  xml: string,
+  xsd: string,
+  opts?: ValidateXmlOptions,
+): Promise<ValidateXmlResult> => {
   const { XmlDocument, XsdValidator } = await loadLibxml2();
 
-  let xmlDoc: InstanceType<Libxml2['XmlDocument']> | undefined;
-  let schemaDoc: InstanceType<Libxml2['XmlDocument']> | undefined;
-  let validator: InstanceType<Libxml2['XsdValidator']> | undefined;
+  let xmlDoc: InstanceType<Libxml2["XmlDocument"]> | undefined;
+  let schemaDoc: InstanceType<Libxml2["XmlDocument"]> | undefined;
+  let validator: InstanceType<Libxml2["XsdValidator"]> | undefined;
   try {
-    schemaDoc = opts?.url ? XmlDocument.fromString(xsd, { url: opts.url }) : XmlDocument.fromString(xsd);
+    schemaDoc = opts?.url
+      ? XmlDocument.fromString(xsd, { url: opts.url })
+      : XmlDocument.fromString(xsd);
     validator = XsdValidator.fromDoc(schemaDoc);
     xmlDoc = XmlDocument.fromString(xml);
     try {

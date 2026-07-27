@@ -7,10 +7,13 @@
 const canonicalParts = (value: number): { digits: string; exponent: number } => {
   const abs = Math.abs(value);
   if (abs === 0) {
-    return { digits: '0', exponent: 0 };
+    return { digits: "0", exponent: 0 };
   }
-  const [mantissa, exponent] = abs.toExponential().split('e');
-  return { digits: mantissa.replace('.', '').replace(/0+$/, '') || '0', exponent: Number(exponent) };
+  const [mantissa, exponent] = abs.toExponential().split("e");
+  return {
+    digits: mantissa.replace(".", "").replace(/0+$/, "") || "0",
+    exponent: Number(exponent),
+  };
 };
 
 // Significant digits: exponent form is expanded so 1200 has 2 and 0.0012 has 2.
@@ -28,8 +31,12 @@ export const countFractionDigits = (value: number): number => {
   return Math.max(0, digits.length - (exponent + 1));
 };
 
-export const xsdTotalDigits = (limit: number): ((value: number) => boolean) =>
-  (value) => !Number.isFinite(value) || countTotalDigits(value) <= limit;
+export const xsdTotalDigits =
+  (limit: number): ((value: number) => boolean) =>
+  (value) =>
+    !Number.isFinite(value) || countTotalDigits(value) <= limit;
 
-export const xsdFractionDigits = (limit: number): ((value: number) => boolean) =>
-  (value) => !Number.isFinite(value) || countFractionDigits(value) <= limit;
+export const xsdFractionDigits =
+  (limit: number): ((value: number) => boolean) =>
+  (value) =>
+    !Number.isFinite(value) || countFractionDigits(value) <= limit;

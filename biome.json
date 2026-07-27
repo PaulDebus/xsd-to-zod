@@ -1,0 +1,71 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off",
+        "noVoid": "error",
+        "noUselessStringRaw": "off"
+      },
+      "correctness": {
+        "noConstAssign": "error",
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "noUnreachable": "error",
+        "noUnusedPrivateClassMembers": "error",
+        "noSwitchDeclarations": "error"
+      },
+      "performance": {
+        "noAccumulatingSpread": "error"
+      },
+      "style": {
+        "noNegationElse": "error",
+        "noShoutyConstants": "error",
+        "useBlockStatements": "error",
+        "useCollapsedElseIf": "error",
+        "useConsistentArrayType": "error",
+        "useForOf": "error",
+        "useNodejsImportProtocol": "error"
+      },
+      "suspicious": {
+        "noEmptyBlockStatements": "error",
+        "noExplicitAny": "error",
+        "noSkippedTests": "off",
+        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["tests/**/*.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noEmptyBlockStatements": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    }
+  ],
+  "files": {
+    "includes": ["**", "!**/dist", "!**/node_modules", "!**/testdata"]
+  }
+}

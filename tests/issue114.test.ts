@@ -1,24 +1,24 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { irToZod, parseXsd } from '../src/index.js';
-import { generateAndImport, withTempDir, withTempDirAsync } from './helpers.js';
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { irToZod, parseXsd } from "../src/index.js";
+import { generateAndImport, withTempDir, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for the issue-#114 facet codegen fixes: facet
 // checks must only be emitted in a form the mapped Zod schema supports.
 
 const codeFor = (xsd: string): string => {
-  let code = '';
+  let code = "";
   withTempDir((dir) => {
-    const file = path.join(dir, 'schema.xsd');
+    const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
     code = irToZod(parseXsd([file])).schemas;
   });
   return code;
 };
 
-describe('facet codegen on incompatible Zod types (#114)', () => {
-  it('emits pattern as a String(val) refine on non-string bases', () => {
+describe("facet codegen on incompatible Zod types (#114)", () => {
+  it("emits pattern as a String(val) refine on non-string bases", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="FiveDigits">
@@ -27,11 +27,11 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
     </xs:restriction>
   </xs:simpleType>
 </xs:schema>`);
-    expect(code).not.toContain('.regex(');
-    expect(code).toContain('.test(String(val))');
+    expect(code).not.toContain(".regex(");
+    expect(code).toContain(".test(String(val))");
   });
 
-  it('skips order facets on string-typed bases (no .gt/.lt/NaN emission)', () => {
+  it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="Window">
@@ -42,13 +42,13 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
   </xs:simpleType>
 </xs:schema>`);
     expect(code).not.toMatch(/\.(gt|lt|min|max)\(/);
-    expect(code).not.toContain('NaN');
+    expect(code).not.toContain("NaN");
     // Skipped facets must leave a diagnostic in the generated code.
-    expect(code).toContain('facet minInclusive skipped');
-    expect(code).toContain('facet maxExclusive skipped');
+    expect(code).toContain("facet minInclusive skipped");
+    expect(code).toContain("facet maxExclusive skipped");
   });
 
-  it('skips length facets on NOTATION/QName restrictions (vacuous in XSD 1.0)', () => {
+  it("skips length facets on NOTATION/QName restrictions (vacuous in XSD 1.0)", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns:t="urn:t">
   <xs:simpleType name="Notations">
@@ -63,11 +63,11 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
     </xs:restriction>
   </xs:simpleType>
 </xs:schema>`);
-    expect(code).toContain('facet length skipped: vacuous for xs:NOTATION in XSD 1.0');
-    expect(code).not.toContain('.length(4)');
+    expect(code).toContain("facet length skipped: vacuous for xs:NOTATION in XSD 1.0");
+    expect(code).not.toContain(".length(4)");
   });
 
-  it('emits length facets as a .length refine on enum/reference bases', () => {
+  it("emits length facets as a .length refine on enum/reference bases", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns:t="urn:t">
   <xs:simpleType name="Base">
@@ -82,13 +82,15 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
     </xs:restriction>
   </xs:simpleType>
 </xs:schema>`);
-    expect(code).toContain('val.length >= 2');
+    expect(code).toContain("val.length >= 2");
   });
 
-  it('generated module imports and validates (pattern refine rejects mismatches)', async () => {
+  it("generated module imports and validates (pattern refine rejects mismatches)", async () => {
     await withTempDirAsync(async (dir) => {
-      const file = path.join(dir, 'schema.xsd');
-      fs.writeFileSync(file, `<?xml version="1.0"?>
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(
+        file,
+        `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="FiveDigits">
     <xs:restriction base="xs:integer">
@@ -96,9 +98,10 @@ describe('facet codegen on incompatible Zod types (#114)', () => {
     </xs:restriction>
   </xs:simpleType>
   <xs:element name="n" type="FiveDigits"/>
-</xs:schema>`);
+</xs:schema>`,
+      );
       const mod = await generateAndImport([file]);
-      const schema = Object.values(mod)[0] as import('zod').z.ZodType;
+      const schema = Object.values(mod)[0] as import("zod").z.ZodType;
       expect(schema.safeParse(12345).success).toBe(true);
       expect(schema.safeParse(123).success).toBe(false);
     });

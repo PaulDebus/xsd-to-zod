@@ -1,9 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { generateAndImport, withTempDirAsync } from './helpers.js';
-import { parseXml } from '../src/index.js';
-import type { z } from 'zod';
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import type { z } from "zod";
+import { parseXml } from "../src/index.js";
+import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Regression test for choice-group id collisions across a derivation: an
 // extension's xs:choice is a separate group appended after the base content,
@@ -29,19 +29,21 @@ const XSD = `<?xml version="1.0"?>
   <xs:element name="root" type="t:Derived"/>
 </xs:schema>`;
 
-describe('choice groups across extension (#121)', () => {
-  it('accepts one branch from the base choice plus one from the extension choice', async () => {
+describe("choice groups across extension (#121)", () => {
+  it("accepts one branch from the base choice plus one from the extension choice", async () => {
     await withTempDirAsync(async (dir) => {
-      const file = path.join(dir, 'schema.xsd');
+      const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file]);
       const schema = Object.values(mod)[0] as z.ZodType;
 
       const valid = parseXml(schema, '<root xmlns="urn:ch"><b>1</b><c>2</c></root>');
-      expect(valid).toEqual({ b: '1', c: '2' });
+      expect(valid).toEqual({ b: "1", c: "2" });
 
       // Two branches of the same (base) choice are still rejected.
-      expect(() => parseXml(schema, '<root xmlns="urn:ch"><a>1</a><b>2</b><c>3</c></root>')).toThrow(/choice/);
+      expect(() =>
+        parseXml(schema, '<root xmlns="urn:ch"><a>1</a><b>2</b><c>3</c></root>'),
+      ).toThrow(/choice/);
     });
   });
 });

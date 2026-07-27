@@ -1,16 +1,26 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { expect } from 'vitest';
-import { z } from 'zod';
-import { irToZod, parseXsd, parseXml, readXmlFile, safeParseXml, serializeXml, xmlRegistry } from '../src/index.js';
-import { decodeTagNameCharRefs } from '../src/runtime.js';
-import type { SimpleTypeDef } from '../src/types.js';
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { expect } from "vitest";
+import type { z } from "zod";
+import {
+  irToZod,
+  parseXml,
+  parseXsd,
+  readXmlFile,
+  safeParseXml,
+  serializeXml,
+  xmlRegistry,
+} from "../src/index.js";
+import { decodeTagNameCharRefs } from "../src/runtime.js";
+import type { SimpleTypeDef } from "../src/types.js";
 
 // Narrow a SimpleTypeDef to its restriction variant in tests (#84).
-export const asRestriction = (type: SimpleTypeDef): Extract<SimpleTypeDef, { kind: 'restriction' }> => {
-  if (type.kind !== 'restriction') {
+export const asRestriction = (
+  type: SimpleTypeDef,
+): Extract<SimpleTypeDef, { kind: "restriction" }> => {
+  if (type.kind !== "restriction") {
     throw new Error(`expected restriction simple type, got ${type.kind}`);
   }
   return type;
@@ -24,15 +34,17 @@ export interface TestCase {
 
 export function discoverCuratedCases(): TestCase[] {
   const cases: TestCase[] = [];
-  const base = path.resolve('testdata/curated');
+  const base = path.resolve("testdata/curated");
 
-  for (const cat of fs.readdirSync(base, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== 'negative')) {
+  for (const cat of fs
+    .readdirSync(base, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && d.name !== "negative")) {
     const catPath = path.join(base, cat.name);
     const files = fs.readdirSync(catPath);
-    const allXsdPaths = files.filter(f => f.endsWith('.xsd')).map(f => path.join(catPath, f));
+    const allXsdPaths = files.filter((f) => f.endsWith(".xsd")).map((f) => path.join(catPath, f));
 
-    for (const xmlFile of files.filter(f => f.endsWith('.xml'))) {
-      const stem = xmlFile.replace(/\.xml$/, '');
+    for (const xmlFile of files.filter((f) => f.endsWith(".xml"))) {
+      const stem = xmlFile.replace(/\.xml$/, "");
       cases.push({
         name: `${cat.name}/${stem}`,
         xsdFiles: allXsdPaths,
@@ -47,7 +59,7 @@ export function discoverCuratedCases(): TestCase[] {
 export { readXmlFile };
 
 export const withTempDir = (fn: (dir: string) => void): void => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd-to-zod-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xsd-to-zod-"));
   try {
     fn(dir);
   } finally {
@@ -55,8 +67,10 @@ export const withTempDir = (fn: (dir: string) => void): void => {
   }
 };
 
-export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>): Promise<void> => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xsd-to-zod-'));
+export const withTempDirAsync = async (
+  fn: (dir: string) => void | Promise<void>,
+): Promise<void> => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xsd-to-zod-"));
   try {
     await fn(dir);
   } finally {
@@ -68,14 +82,16 @@ export const withTempDirAsync = async (fn: (dir: string) => void | Promise<void>
 // package root so the bare `zod` import and the `xsd-to-zod` self-reference
 // resolve (self-reference does not work from inside node_modules), and the
 // worktree stays clean (the dotdir is gitignored).
-export async function importGeneratedSchemas(schemasCode: string): Promise<Record<string, unknown>> {
-  const baseDir = path.resolve('.xsd-to-zod-tests');
+export async function importGeneratedSchemas(
+  schemasCode: string,
+): Promise<Record<string, unknown>> {
+  const baseDir = path.resolve(".xsd-to-zod-tests");
   fs.mkdirSync(baseDir, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(baseDir, 'schema-'));
+  const dir = fs.mkdtempSync(path.join(baseDir, "schema-"));
   try {
-    const file = path.join(dir, 'schema.zod.ts');
+    const file = path.join(dir, "schema.zod.ts");
     fs.writeFileSync(file, schemasCode);
-    return await import(pathToFileURL(file).href) as Record<string, unknown>;
+    return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -87,9 +103,9 @@ export const generateAndImport = (xsdFiles: string[]): Promise<Record<string, un
 
 const stripProlog = (xml: string): string =>
   xml
-    .replace(/<\?[\s\S]*?\?>/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!DOCTYPE(?:[^\[\]>]|\[[\s\S]*?\])*>/i, '');
+    .replace(/<\?[\s\S]*?\?>/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!DOCTYPE(?:[^[\]>]|\[[\s\S]*?\])*>/i, "");
 
 export interface RootInfo {
   local: string;
@@ -101,21 +117,27 @@ export interface RootInfo {
 export function extractRootInfo(xml: string): RootInfo {
   const cleaned = decodeTagNameCharRefs(stripProlog(xml));
   const match = cleaned.match(/<([^\s/>!?]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/);
-  if (!match) throw new Error('Cannot find root element in XML');
+  if (!match) {
+    throw new Error("Cannot find root element in XML");
+  }
   const [, qname, attrText] = match;
-  const colonIdx = qname.indexOf(':');
-  const prefix = colonIdx >= 0 ? qname.slice(0, colonIdx) : '';
+  const colonIdx = qname.indexOf(":");
+  const prefix = colonIdx >= 0 ? qname.slice(0, colonIdx) : "";
   const local = colonIdx >= 0 ? qname.slice(colonIdx + 1) : qname;
-  const nsDecl = new RegExp(`xmlns${prefix ? `:${prefix}` : ''}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrText);
-  return { local, namespace: nsDecl?.[1] ?? nsDecl?.[2] ?? '' };
+  const nsDecl = new RegExp(
+    `xmlns${prefix ? `:${prefix}` : ""}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
+  ).exec(attrText);
+  return { local, namespace: nsDecl?.[1] ?? nsDecl?.[2] ?? "" };
 }
 
 const isZodSchema = (value: unknown): value is z.ZodType =>
-  value !== null && typeof value === 'object' && '_zod' in value;
+  value !== null && typeof value === "object" && "_zod" in value;
 
 // All exported root schemas of a generated module, with their registered root
 // element qnames.
-export function findRootSchemas(mod: Record<string, unknown>): { schema: z.ZodType; rootQName: string }[] {
+export function findRootSchemas(
+  mod: Record<string, unknown>,
+): { schema: z.ZodType; rootQName: string }[] {
   const roots: { schema: z.ZodType; rootQName: string }[] = [];
   for (const value of Object.values(mod)) {
     if (!isZodSchema(value)) {
@@ -133,11 +155,13 @@ export function findRootSchemas(mod: Record<string, unknown>): { schema: z.ZodTy
 export function findRootSchema(mod: Record<string, unknown>, xml: string): z.ZodType {
   const xmlRoot = extractRootInfo(xml);
   const roots = findRootSchemas(mod);
-  const exact = roots.find(r => r.rootQName === `{${xmlRoot.namespace}}${xmlRoot.local}`);
-  const byLocal = roots.find(r => r.rootQName.split('}').pop() === xmlRoot.local);
+  const exact = roots.find((r) => r.rootQName === `{${xmlRoot.namespace}}${xmlRoot.local}`);
+  const byLocal = roots.find((r) => r.rootQName.split("}").pop() === xmlRoot.local);
   const found = exact ?? byLocal;
   if (!found) {
-    expect.fail(`no generated root schema matches <${xmlRoot.local}> (roots: ${roots.map(r => r.rootQName).join(', ') || 'none'})`);
+    expect.fail(
+      `no generated root schema matches <${xmlRoot.local}> (roots: ${roots.map((r) => r.rootQName).join(", ") || "none"})`,
+    );
   }
   return found.schema;
 }
@@ -150,19 +174,27 @@ const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 const isAbsoluteUri = (uri: string): boolean => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(uri);
 
 export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[]): Promise<void> {
-  if (xsdFiles.length === 0) return;
+  if (xsdFiles.length === 0) {
+    return;
+  }
 
-  const { formatIssues, validateXml } = await import('../src/validate.js');
+  const { formatIssues, validateXml } = await import("../src/validate.js");
 
   const { namespace: rootNamespace } = extractRootInfo(xml);
 
   // libxml2 cannot load schemas with a relative targetNamespace, so there is
   // nothing to validate against; the zod-tier round-trip still ran (#108).
-  if (rootNamespace !== '' && !isAbsoluteUri(rootNamespace)) return;
+  if (rootNamespace !== "" && !isAbsoluteUri(rootNamespace)) {
+    return;
+  }
 
-  const candidates: { file: string; targetNamespace: string; hasRemoteImport: boolean }[] = [];
+  const candidates: {
+    file: string;
+    targetNamespace: string;
+    hasRemoteImport: boolean;
+  }[] = [];
   const errors: string[] = [];
-  for (const xsdFile of xsdFiles.map(f => path.resolve(f))) {
+  for (const xsdFile of xsdFiles.map((f) => path.resolve(f))) {
     if (!fs.existsSync(xsdFile)) {
       errors.push(`XSD file not found: ${xsdFile}`);
       continue;
@@ -170,19 +202,21 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
     const content = readXmlFile(xsdFile);
     candidates.push({
       file: xsdFile,
-      targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? '',
-      hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content)
+      targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? "",
+      hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content),
     });
   }
 
   // Only XSDs whose targetNamespace matches the serialized root are relevant;
   // validating against an arbitrary unrelated schema proves nothing (#83).
-  const matching = candidates.filter(c => c.targetNamespace === rootNamespace);
+  const matching = candidates.filter((c) => c.targetNamespace === rootNamespace);
   const pool = matching.length > 0 ? matching : candidates;
 
   // Schemas importing remote (http(s)) schemaLocations cannot be validated
   // offline: libxml2 would attempt a network fetch (and stall on timeouts).
-  if (pool.some(c => c.hasRemoteImport)) return;
+  if (pool.some((c) => c.hasRemoteImport)) {
+    return;
+  }
 
   for (const { file } of pool) {
     try {
@@ -190,17 +224,25 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
       if (result.valid) {
         return;
       }
-      errors.push(`${path.relative(process.cwd(), file)}: ${formatIssues(result.issues).join('; ')}`);
+      errors.push(
+        `${path.relative(process.cwd(), file)}: ${formatIssues(result.issues).join("; ")}`,
+      );
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`${path.relative(process.cwd(), file)}: ${msg}`);
     }
   }
 
-  expect.fail(`Serialized XML is not valid against the root namespace's XSD (${rootNamespace || 'no namespace'}):\n${errors.join('\n')}`);
+  expect.fail(
+    `Serialized XML is not valid against the root namespace's XSD (${rootNamespace || "no namespace"}):\n${errors.join("\n")}`,
+  );
 }
 
-export async function runRoundTrip(xsdFiles: string[], xmlFile: string, expected?: unknown): Promise<void> {
+export async function runRoundTrip(
+  xsdFiles: string[],
+  xmlFile: string,
+  expected?: unknown,
+): Promise<void> {
   const { schemas } = irToZod(parseXsd(xsdFiles));
   const xml = readXmlFile(xmlFile);
   const mod = await importGeneratedSchemas(schemas);
