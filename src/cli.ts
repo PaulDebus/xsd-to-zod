@@ -19,7 +19,7 @@ import { irToZod } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import type { XsdIr } from "./types.js";
 
-const _errorMessage = (e: unknown): string => {
+const errorMessage = (e: unknown): string => {
   if (e instanceof Xsd2ZodError) {
     const location = e.file ? `${e.file}: ` : "";
     return `${location}${e.message} [${e.code}]`;
@@ -28,8 +28,9 @@ const _errorMessage = (e: unknown): string => {
 };
 
 const warnUnresolvedRefs = (ir: XsdIr): void => {
-  for (const _ref of ir.unresolvedRefs) {
-    _ref;
+  for (const ref of ir.unresolvedRefs) {
+    // biome-ignore lint/suspicious/noConsole: CLI warning output
+    console.error(`warning: ${ref}`);
   }
 };
 
@@ -441,6 +442,8 @@ export const main = async (args: string[]): Promise<number> => {
         return 1;
       }
     }
+    // biome-ignore lint/suspicious/noConsole: CLI error output
+    console.error(`error: ${errorMessage(e)}`);
     return 1;
   }
 };
