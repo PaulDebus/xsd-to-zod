@@ -29,7 +29,6 @@ const errorMessage = (e: unknown): string => {
 
 const warnUnresolvedRefs = (ir: XsdIr): void => {
   for (const ref of ir.unresolvedRefs) {
-    // biome-ignore lint/suspicious/noConsole: CLI warning output
     console.error(`warning: ${ref}`);
   }
 };
@@ -447,7 +446,6 @@ export const main = async (args: string[]): Promise<number> => {
         return 1;
       }
     }
-    // biome-ignore lint/suspicious/noConsole: CLI error output
     console.error(`error: ${errorMessage(e)}`);
     return 1;
   }

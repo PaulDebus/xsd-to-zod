@@ -34,7 +34,7 @@
         "noEmptyBlockStatements": "error",
         "noExplicitAny": "error",
         "noSkippedTests": "off",
-        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
+        "noConsole": { "level": "warn", "options": { "allow": ["log", "error", "warn"] } }
       }
     }
   },
