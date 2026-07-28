@@ -109,7 +109,7 @@ const xml = serializeXml(orderSchema, data);
 - **Nillable**: `xsi:nil="true"` → `.nullable()` in schema, round-trips through `serializeXml`
 - **Cyclic references**: every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so forward references and true cycles (e.g. `Person.manager: Person`) load without `ReferenceError`
 - **Two validation tiers**: the zod tier (typed parse, user-friendly `ZodError`s) and an optional libxml2 conformance tier (full XSD semantics, line-numbered errors)
-- **Builtin datatype lexicals**: the zod tier validates the XSD 1.0 lexical space of the date/time set, `duration`, `hexBinary`/`base64Binary`, `language`, and the `Name`/`NCName`/`NMTOKEN` family (values stay the original strings — no canonicalization), and emits value-space bounds for the bounded integer subtypes (`byte`, `short`, `int`, the unsigned variants ≤ 32 bit, `nonNegativeInteger` & co.)
+- **Builtin datatype lexicals**: the zod tier validates the XSD 1.0 lexical space of the date/time set, `duration`, `hexBinary`/`base64Binary`, `language`, and the `Name`/`NCName`/`NMTOKEN` family (values stay the original strings — no canonicalization). Bounded integers that fit a JS number (`byte`, `short`, `int`, the unsigned variants ≤ 32 bit) map to `z.number().int()` with value-space bounds; the arbitrary-precision `xs:integer` family and the 64-bit `long`/`unsignedLong` map to `z.bigint()` so no valid lexical is lost to double rounding
 
 ## Install
 
@@ -235,9 +235,9 @@ npm test
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
 | W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: substitution groups) |
-| W3C sun/ms/nist selection | 2,615 (2,404 ✅, 219 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
+| W3C sun/ms/nist selection | 2,615 (2,417 ✅, 198 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
 | W3C negative (invalid instances) | 1,528 (1,520 ✅, 8 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
-| W3C full corpus (main + weekly) | 13,899 (9,845 ✅, 4,050 ⚠️) | All XSD 1.0 test sets via `suite.xml`; pins dominated by safe-integer, lexical preservation, regex translation |
+| W3C full corpus (main + weekly) | 13,899 (11,199 ✅, 2,700 ⚠️) | All XSD 1.0 test sets via `suite.xml`; pins dominated by lexical preservation, regex translation, wildcards and substitution groups |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
