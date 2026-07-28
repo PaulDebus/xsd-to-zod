@@ -1,5 +1,7 @@
 {
   "firstName": "John",
   "lastName": "Doe",
-  "age": 30
+  "age": {
+    "$bigint": "30"
+  }
 }

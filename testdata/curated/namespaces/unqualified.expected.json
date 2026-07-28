@@ -1,4 +1,6 @@
 {
   "data": "test data",
-  "value": 7
+  "value": {
+    "$bigint": "7"
+  }
 }

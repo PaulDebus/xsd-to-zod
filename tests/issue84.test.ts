@@ -51,7 +51,7 @@ describe("enum facet coercion (#84)", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, NUM_ENUM_XSD);
       const { schemas } = irToZod(parseXsd([file]));
-      expect(schemas).toContain(".refine((val) => [1, 2].includes(val)");
+      expect(schemas).toContain(".refine((val) => [1n, 2n].includes(val)");
     });
   });
 

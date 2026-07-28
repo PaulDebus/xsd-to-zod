@@ -1,5 +1,7 @@
 {
   "@id": "ABC-123",
   "@color": "red",
-  "@size": 42
+  "@size": {
+    "$bigint": "42"
+  }
 }
