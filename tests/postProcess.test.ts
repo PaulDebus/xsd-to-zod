@@ -32,14 +32,14 @@ const readLog = (log: string): string[] =>
 describe("runPostGenerationFormatting (#74)", () => {
   it("does nothing when there are no files", () => {
     withProject(["eslint"], ["eslint.config.js"], ({ cwd, log }) => {
-      runPostGenerationFormatting([], cwd);
+      expect(runPostGenerationFormatting([], cwd)).toBe(false);
       expect(readLog(log)).toEqual([]);
     });
   });
 
   it("runs biome format + lint when biome.json exists", () => {
     withProject(["biome", "eslint"], ["biome.json", "eslint.config.js"], ({ cwd, log }) => {
-      runPostGenerationFormatting(["out.zod.ts"], cwd);
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
       expect(readLog(log)).toEqual([
         "biome format --write out.zod.ts",
         "biome lint --write out.zod.ts",
@@ -49,28 +49,28 @@ describe("runPostGenerationFormatting (#74)", () => {
 
   it("does not fall through from prettier to eslint", () => {
     withProject(["prettier", "eslint"], [".prettierrc", "eslint.config.js"], ({ cwd, log }) => {
-      runPostGenerationFormatting(["out.zod.ts"], cwd);
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
       expect(readLog(log)).toEqual(["prettier --write out.zod.ts"]);
     });
   });
 
   it("skips eslint when no eslint config exists instead of crashing", () => {
     withProject(["eslint"], [], ({ cwd, log }) => {
-      expect(() => runPostGenerationFormatting(["out.zod.ts"], cwd)).not.toThrow();
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(false);
       expect(readLog(log)).toEqual([]);
     });
   });
 
   it("skips eslint when only a legacy .eslintrc exists — ESLint v9 ignores it (#74)", () => {
     withProject(["eslint"], [".eslintrc.json"], ({ cwd, log }) => {
-      expect(() => runPostGenerationFormatting(["out.zod.ts"], cwd)).not.toThrow();
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(false);
       expect(readLog(log)).toEqual([]);
     });
   });
 
   it("runs eslint --fix when an eslint config exists", () => {
     withProject(["eslint"], ["eslint.config.js"], ({ cwd, log }) => {
-      runPostGenerationFormatting(["out.zod.ts"], cwd);
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
       expect(readLog(log)).toEqual(["eslint --fix out.zod.ts"]);
     });
   });
@@ -86,6 +86,59 @@ describe("runPostGenerationFormatting (#74)", () => {
       expect(() => runPostGenerationFormatting(["out.zod.ts"], cwd)).toThrow(
         /prettier.*failed.*boom/s,
       );
+    });
+  });
+});
+
+describe("runPostGenerationFormatting — formatting must not be silently skipped (#143)", () => {
+  it("runs biome without a biome.json — biome formats fine with defaults", () => {
+    withProject(["biome"], [], ({ cwd, log }) => {
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+      expect(readLog(log)).toEqual([
+        "biome format --write out.zod.ts",
+        "biome lint --write out.zod.ts",
+      ]);
+    });
+  });
+
+  it("runs prettier without a config — prettier formats fine with defaults", () => {
+    withProject(["prettier"], [], ({ cwd, log }) => {
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+      expect(readLog(log)).toEqual(["prettier --write out.zod.ts"]);
+    });
+  });
+
+  it("prefers a configured tool over one running on defaults", () => {
+    withProject(["biome", "prettier"], [".prettierrc"], ({ cwd, log }) => {
+      expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+      expect(readLog(log)).toEqual(["prettier --write out.zod.ts"]);
+    });
+  });
+
+  it("finds the bin by walking up from a subdirectory (monorepo layout)", () => {
+    withProject(["biome"], ["biome.json"], ({ cwd }) => {
+      const subdir = path.join(cwd, "packages", "foo");
+      fs.mkdirSync(subdir, { recursive: true });
+      expect(runPostGenerationFormatting(["out.zod.ts"], subdir)).toBe(true);
+      // The fake bin logs relative to its spawn cwd (the subdirectory).
+      expect(readLog(path.join(subdir, "formatter.log"))).toEqual([
+        "biome format --write out.zod.ts",
+        "biome lint --write out.zod.ts",
+      ]);
+    });
+  });
+
+  it("skips biome and prettier for files they cannot format (e.g. bundled .xsd)", () => {
+    withProject(["biome", "prettier"], ["biome.json", ".prettierrc"], ({ cwd, log }) => {
+      expect(runPostGenerationFormatting(["out.xsd"], cwd)).toBe(false);
+      expect(readLog(log)).toEqual([]);
+    });
+  });
+
+  it("still runs eslint on non-JS/TS files when configured", () => {
+    withProject(["eslint"], ["eslint.config.js"], ({ cwd, log }) => {
+      expect(runPostGenerationFormatting(["out.xsd"], cwd)).toBe(true);
+      expect(readLog(log)).toEqual(["eslint --fix out.xsd"]);
     });
   });
 });

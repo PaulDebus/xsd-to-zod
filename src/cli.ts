@@ -280,8 +280,10 @@ const program = new Command()
     const zodFile = join(outDir, `${resolvedName}.zod.ts`);
     writeFileSync(zodFile, schemas, "utf8");
 
-    if (format) {
-      runPostGenerationFormatting([zodFile]);
+    if (format && !runPostGenerationFormatting([zodFile])) {
+      console.error(
+        "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
+      );
     }
 
     if (!silent) {
@@ -418,8 +420,10 @@ program
 
     writeFileSync(resolve(out), bundled, "utf8");
 
-    if (format) {
-      runPostGenerationFormatting([resolve(out)]);
+    if (format && !runPostGenerationFormatting([resolve(out)])) {
+      console.error(
+        "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
+      );
     }
 
     console.log(`Bundled ${files.length} file(s) → ${out}`);
