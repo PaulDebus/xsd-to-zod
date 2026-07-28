@@ -14,7 +14,7 @@
 // need schema context and are separate work.
 
 const collapseWhiteSpace = (value: string): string =>
-  value.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '');
+  value.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
 
 // XSD 1.0 timezones are bounded to -14:00..+14:00 (per errata).
 const TZ = String.raw`(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))`;
@@ -35,7 +35,8 @@ const G_DAY_RE = new RegExp(String.raw`^---${DAY}(?:${TZ})?$`);
 
 // Shape only; component presence is checked after the match ("P"/"PT" carry
 // no components and are invalid).
-const DURATION_RE = /^-?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/;
+const DURATION_RE =
+  /^-?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/;
 
 const daysInMonth = (year: number, month: number): number => {
   if (month === 2) {
@@ -54,16 +55,19 @@ const validYearMonthDay = (year: string, month: string, day: string): boolean =>
   return y !== 0 && Number(day) <= daysInMonth(y, m);
 };
 
-const match = (re: RegExp) => (value: string): boolean => re.test(collapseWhiteSpace(value));
+const match =
+  (re: RegExp) =>
+  (value: string): boolean =>
+    re.test(collapseWhiteSpace(value));
 
 export const xsdDate = (value: string): boolean => {
   const m = DATE_RE.exec(collapseWhiteSpace(value));
-  return m !== null && validYearMonthDay(m[1], m[2], m[3]);
+  return m !== null && validYearMonthDay(m[1]!, m[2]!, m[3]!);
 };
 
 export const xsdDateTime = (value: string): boolean => {
   const m = DATE_TIME_RE.exec(collapseWhiteSpace(value));
-  return m !== null && validYearMonthDay(m[1], m[2], m[3]);
+  return m !== null && validYearMonthDay(m[1]!, m[2]!, m[3]!);
 };
 
 export const xsdTime = match(TIME_RE);
@@ -94,13 +98,13 @@ export const xsdDuration = (value: string): boolean => {
     return false;
   }
   const components = m.slice(1);
-  const hasDate = components.slice(0, 3).some(c => c !== undefined);
-  const hasTime = components.slice(3).some(c => c !== undefined);
+  const hasDate = components.slice(0, 3).some((c) => c !== undefined);
+  const hasTime = components.slice(3).some((c) => c !== undefined);
   if (!hasDate && !hasTime) {
     return false; // bare "P" / "-P"
   }
   // A trailing "T" with no time components ("P1YT") is invalid.
-  return !value.includes('T') || hasTime;
+  return !value.includes("T") || hasTime;
 };
 
 export const xsdHexBinary = (value: string): boolean =>
@@ -109,7 +113,7 @@ export const xsdHexBinary = (value: string): boolean =>
 // Whitespace may separate base64 quads (spec BNF), so strip it all rather
 // than just collapsing.
 export const xsdBase64Binary = (value: string): boolean =>
-  /^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)?$/.test(value.replace(/\s+/g, ''));
+  /^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)?$/.test(value.replace(/\s+/g, ""));
 
 // XML Schema Part 2 pattern for xs:language (BCP 47-ish, not the full RFC).
 export const xsdLanguage = match(/^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/);
@@ -117,14 +121,17 @@ export const xsdLanguage = match(/^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/);
 // XML 1.0 (5th edition) Name productions. NameChar adds digits, '-', '.',
 // middle dot and combining ranges to NameStartChar; NCName* excludes ':'.
 const NAME_START_CHAR =
-  ':A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF' +
-  '\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD' +
-  '\\u{10000}-\\u{EFFFF}';
-const NCNAME_START_CHAR = NAME_START_CHAR.replace(':', '');
-const NAME_CHAR_EXTRA = '\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040';
-const NAME_RE = new RegExp(`^[${NAME_START_CHAR}][${NAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`, 'u');
-const NMTOKEN_RE = new RegExp(`^[${NAME_START_CHAR}${NAME_CHAR_EXTRA}]+$`, 'u');
-const NCNAME_RE = new RegExp(`^[${NCNAME_START_CHAR}][${NCNAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`, 'u');
+  ":A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF" +
+  "\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD" +
+  "\\u{10000}-\\u{EFFFF}";
+const NCNAME_START_CHAR = NAME_START_CHAR.replace(":", "");
+const NAME_CHAR_EXTRA = "\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040";
+const NAME_RE = new RegExp(`^[${NAME_START_CHAR}][${NAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`, "u");
+const NMTOKEN_RE = new RegExp(`^[${NAME_START_CHAR}${NAME_CHAR_EXTRA}]+$`, "u");
+const NCNAME_RE = new RegExp(
+  `^[${NCNAME_START_CHAR}][${NCNAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`,
+  "u",
+);
 
 export const xsdName = match(NAME_RE);
 export const xsdNCName = match(NCNAME_RE);
@@ -132,10 +139,12 @@ export const xsdNMTOKEN = match(NMTOKEN_RE);
 
 // XSD list types (NMTOKENS, IDREFS, ENTITIES): whitespace-separated items,
 // validated after the fixed whiteSpace=collapse.
-const listOf = (item: (value: string) => boolean) => (value: string): boolean => {
-  const collapsed = collapseWhiteSpace(value);
-  return collapsed !== '' && collapsed.split(' ').every(item);
-};
+const listOf =
+  (item: (value: string) => boolean) =>
+  (value: string): boolean => {
+    const collapsed = collapseWhiteSpace(value);
+    return collapsed !== "" && collapsed.split(" ").every(item);
+  };
 
 export const xsdNMTOKENS = listOf(match(NMTOKEN_RE));
 export const xsdNCNames = listOf(match(NCNAME_RE));

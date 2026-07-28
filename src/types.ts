@@ -2,10 +2,10 @@ export type QName = `{${string}}${string}`;
 
 export type Cardinality = {
   minOccurs: number;
-  maxOccurs: number | 'unbounded';
+  maxOccurs: number | "unbounded";
 };
 
-export type FieldKind = 'attribute' | 'element' | 'text';
+export type FieldKind = "attribute" | "element" | "text";
 
 export type IrField = Cardinality & {
   kind: FieldKind;
@@ -23,26 +23,26 @@ export type IrField = Cardinality & {
 };
 
 export type Facet =
-  | { kind: 'enumeration'; value: string }
-  | { kind: 'pattern'; value: string }
-  | { kind: 'length'; value: number }
-  | { kind: 'minLength'; value: number }
-  | { kind: 'maxLength'; value: number }
-  | { kind: 'minInclusive'; value: number }
-  | { kind: 'maxInclusive'; value: number }
-  | { kind: 'minExclusive'; value: number }
-  | { kind: 'maxExclusive'; value: number }
-  | { kind: 'totalDigits'; value: number }
-  | { kind: 'fractionDigits'; value: number }
-  | { kind: 'whiteSpace'; value: 'preserve' | 'replace' | 'collapse' };
+  | { kind: "enumeration"; value: string }
+  | { kind: "pattern"; value: string }
+  | { kind: "length"; value: number }
+  | { kind: "minLength"; value: number }
+  | { kind: "maxLength"; value: number }
+  | { kind: "minInclusive"; value: number }
+  | { kind: "maxInclusive"; value: number }
+  | { kind: "minExclusive"; value: number }
+  | { kind: "maxExclusive"; value: number }
+  | { kind: "totalDigits"; value: number }
+  | { kind: "fractionDigits"; value: number }
+  | { kind: "whiteSpace"; value: "preserve" | "replace" | "collapse" };
 
 export type SimpleTypeDef = {
   name: QName;
   description?: string;
 } & (
-  | { kind: 'restriction'; baseType: QName; facets?: Facet[] }
-  | { kind: 'list'; itemType: QName }
-  | { kind: 'union'; memberTypes: QName[] }
+  | { kind: "restriction"; baseType: QName; facets?: Facet[] }
+  | { kind: "list"; itemType: QName }
+  | { kind: "union"; memberTypes: QName[] }
 );
 
 export type ComplexTypeDef = {
@@ -56,7 +56,7 @@ export type ComplexTypeDef = {
 };
 
 export type WildcardDef = {
-  kind: 'any' | 'anyAttribute';
+  kind: "any" | "anyAttribute";
   /** Raw namespace constraint, e.g. '##any', '##other', '##targetNamespace ##local'. */
   namespaceConstraint: string;
 };

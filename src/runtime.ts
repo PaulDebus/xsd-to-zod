@@ -1,14 +1,14 @@
-import XMLParser from '@nodable/flexible-xml-parser';
-import { CompactBuilderFactory } from '@nodable/compact-builder';
-import { BaseOutputBuilderFactory, type BaseOutputBuilder } from '@nodable/base-output-builder';
-import type { z } from 'zod';
-import { splitClark, splitQName } from './qname.js';
-import { xmlRegistry, type XmlFieldMeta, type XmlMeta } from './xmlMeta.js';
+import { type BaseOutputBuilder, BaseOutputBuilderFactory } from "@nodable/base-output-builder";
+import { CompactBuilderFactory } from "@nodable/compact-builder";
+import XMLParser from "@nodable/flexible-xml-parser";
+import type { z } from "zod";
+import { splitClark, splitQName } from "./qname.js";
+import { type XmlFieldMeta, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 
-const XSI_NS = 'http://www.w3.org/2001/XMLSchema-instance';
+const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 
-type GetInstanceArgs = Parameters<BaseOutputBuilderFactory['getInstance']>;
-type RegisterArgs = Parameters<BaseOutputBuilderFactory['registerValueParser']>;
+type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
+type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
 
 // Works around a declaration bug in @nodable/compact-builder@2.0.0 (#86):
 // CompactBuilder.addElement is declared as addElement(tag, matcher) while the
@@ -22,8 +22,8 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   // so that every value arrives as a raw lexical and coerceLexical stays the
   // single coercion point for elements and attributes (#65).
   private readonly inner = new CompactBuilderFactory({
-    tags: { valueParsers: ['entity'] },
-    attributes: { valueParsers: ['entity'] },
+    tags: { valueParsers: ["entity"] },
+    attributes: { valueParsers: ["entity"] },
   });
 
   override getInstance(...args: GetInstanceArgs): BaseOutputBuilder {
@@ -35,70 +35,72 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   }
 }
 
-export const createOutputBuilder = (): BaseOutputBuilderFactory => new EntityCompactBuilderFactory();
+export const createOutputBuilder = (): BaseOutputBuilderFactory =>
+  new EntityCompactBuilderFactory();
 
 const parser = new XMLParser({
   skip: { attributes: false },
-  attributes: { prefix: '@_' },
+  attributes: { prefix: "@_" },
   // Keep CDATA under its own key: merged text passes through the entity value
   // parser, which would corrupt literal entity text inside CDATA sections (#64).
-  nameFor: { cdata: '#cdata' },
-  OutputBuilder: createOutputBuilder()
+  nameFor: { cdata: "#cdata" },
+  OutputBuilder: createOutputBuilder(),
 });
 
-const toArray = <T>(value: T | T[] | undefined): T[] => (value === undefined ? [] : Array.isArray(value) ? value : [value]);
+const toArray = <T>(value: T | T[] | undefined): T[] =>
+  value === undefined ? [] : Array.isArray(value) ? value : [value];
 
 // Text content of a parsed node: character data plus verbatim CDATA sections.
 // Interleaved order between text and CDATA is not preserved (mixed content is
 // unsupported); the common cases (text-only, CDATA-only) are exact.
 const textOf = (node: Record<string, unknown>): unknown => {
-  const text = node['#text'];
-  const cdata = node['#cdata'];
+  const text = node["#text"];
+  const cdata = node["#cdata"];
   if (cdata === undefined) {
     return text;
   }
-  const cdataText = Array.isArray(cdata) ? cdata.join('') : String(cdata);
-  return `${text === undefined ? '' : String(text)}${cdataText}`;
+  const cdataText = Array.isArray(cdata) ? cdata.join("") : String(cdata);
+  return `${text === undefined ? "" : String(text)}${cdataText}`;
 };
 
 const collectNamespaceDeclarations = (node: Record<string, unknown>): Record<string, string> => {
   const namespaces: Record<string, string> = {};
   for (const [key, value] of Object.entries(node)) {
-    if (key === '@_xmlns') {
-      namespaces[''] = String(value);
+    if (key === "@_xmlns") {
+      namespaces[""] = String(value);
       continue;
     }
-    if (!key.startsWith('@_xmlns:')) {
+    if (!key.startsWith("@_xmlns:")) {
       continue;
     }
-    namespaces[key.slice('@_xmlns:'.length)] = String(value);
+    namespaces[key.slice("@_xmlns:".length)] = String(value);
   }
   return namespaces;
 };
 
 const withNamespaceContext = (
   baseContext: Record<string, string>,
-  node: Record<string, unknown>
+  node: Record<string, unknown>,
 ): Record<string, string> => ({
   ...baseContext,
-  ...collectNamespaceDeclarations(node)
+  ...collectNamespaceDeclarations(node),
 });
 
 const escapeXml = (value: string): string =>
   value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;');
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 
 export const decodeXmlEntities = (xml: string): string =>
   xml
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&apos;', "'")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)));
 
@@ -116,10 +118,12 @@ export const decodeTagNameCharRefs = (xml: string): string => {
     .map((segment, i) => {
       const decoded = segment.replace(TAG_NAME, (tag) =>
         tag.replace(NUMERIC_CHAR_REF, (_, dec: string | undefined, hex: string | undefined) =>
-          String.fromCodePoint(dec !== undefined ? Number(dec) : parseInt(hex!, 16))));
-      return decoded + (cdataBlocks[i] ?? '');
+          String.fromCodePoint(dec === undefined ? parseInt(hex ?? "0", 16) : Number(dec)),
+        ),
+      );
+      return decoded + (cdataBlocks[i] ?? "");
     })
-    .join('');
+    .join("");
 };
 
 // ---------------------------------------------------------------------------
@@ -131,22 +135,22 @@ export const decodeTagNameCharRefs = (xml: string): string => {
 type AnyDef = z.core.$ZodTypeDef;
 type AnySchema = z.core.$ZodType;
 
-const defAs = <T extends AnyDef>(def: AnyDef, type: T['type']): T | undefined =>
+const defAs = <T extends AnyDef>(def: AnyDef, type: T["type"]): T | undefined =>
   def.type === type ? (def as T) : undefined;
 
 // Peel exactly one wrapper level (lazy/optional/nullable/default/readonly);
 // returns the input unchanged when it is not a wrapper.
 const peelOnce = (schema: AnySchema): AnySchema => {
   const def = schema._zod.def;
-  const lazy = defAs<z.core.$ZodLazyDef>(def, 'lazy');
+  const lazy = defAs<z.core.$ZodLazyDef>(def, "lazy");
   if (lazy) {
     return lazy.getter();
   }
   const wrapper =
-    defAs<z.core.$ZodOptionalDef>(def, 'optional') ??
-    defAs<z.core.$ZodNullableDef>(def, 'nullable') ??
-    defAs<z.core.$ZodDefaultDef>(def, 'default') ??
-    defAs<z.core.$ZodReadonlyDef>(def, 'readonly');
+    defAs<z.core.$ZodOptionalDef>(def, "optional") ??
+    defAs<z.core.$ZodNullableDef>(def, "nullable") ??
+    defAs<z.core.$ZodDefaultDef>(def, "default") ??
+    defAs<z.core.$ZodReadonlyDef>(def, "readonly");
   return wrapper ? wrapper.innerType : schema;
 };
 
@@ -165,7 +169,7 @@ const unwrapModifiers = (schema: AnySchema): AnySchema => {
 };
 
 const objectDefOf = (schema: AnySchema): z.core.$ZodObjectDef | undefined =>
-  defAs<z.core.$ZodObjectDef>(unwrapModifiers(schema)._zod.def, 'object');
+  defAs<z.core.$ZodObjectDef>(unwrapModifiers(schema)._zod.def, "object");
 
 const hasObjectShape = (schema: AnySchema): boolean => objectDefOf(schema) !== undefined;
 
@@ -224,40 +228,47 @@ const analyzeField = (schema: AnySchema): FieldAnalysis => {
   let fixedValue: unknown;
   for (;;) {
     const def = current._zod.def;
-    const optional = defAs<z.core.$ZodOptionalDef>(def, 'optional');
+    const optional = defAs<z.core.$ZodOptionalDef>(def, "optional");
     if (optional) {
       current = optional.innerType;
       continue;
     }
-    const nullable = defAs<z.core.$ZodNullableDef>(def, 'nullable');
+    const nullable = defAs<z.core.$ZodNullableDef>(def, "nullable");
     if (nullable) {
       current = nullable.innerType;
       continue;
     }
-    const readonly = defAs<z.core.$ZodReadonlyDef>(def, 'readonly');
+    const readonly = defAs<z.core.$ZodReadonlyDef>(def, "readonly");
     if (readonly) {
       current = readonly.innerType;
       continue;
     }
-    const array = defAs<z.core.$ZodArrayDef>(def, 'array');
+    const array = defAs<z.core.$ZodArrayDef>(def, "array");
     if (array) {
       isArray = true;
       current = array.element;
       continue;
     }
-    const dfault = defAs<z.core.$ZodDefaultDef>(def, 'default');
+    const dfault = defAs<z.core.$ZodDefaultDef>(def, "default");
     if (dfault) {
       hasDefault = true;
       defaultValue = dfault.defaultValue;
       current = dfault.innerType;
       continue;
     }
-    const literal = defAs<z.core.$ZodLiteralDef<z.core.util.Literal>>(def, 'literal');
+    const literal = defAs<z.core.$ZodLiteralDef<z.core.util.Literal>>(def, "literal");
     if (literal) {
       hasFixed = true;
       fixedValue = literal.values[0];
     }
-    return { itemSchema: current, isArray, hasDefault, defaultValue, hasFixed, fixedValue };
+    return {
+      itemSchema: current,
+      isArray,
+      hasDefault,
+      defaultValue,
+      hasFixed,
+      fixedValue,
+    };
   }
 };
 
@@ -266,19 +277,23 @@ const analyzeField = (schema: AnySchema): FieldAnalysis => {
 // def decides the conversion; there are no metadata typeNames anymore.
 // ---------------------------------------------------------------------------
 
-const BOOLEAN_LEXICALS = new Set(['true', 'false', '0', '1']);
+const BOOLEAN_LEXICALS = new Set(["true", "false", "0", "1"]);
 const INTEGER_LEXICAL = /^[+-]?\d+$/;
 const FLOAT_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
-const INT_FORMATS = new Set(['safeint', 'int32', 'uint32', 'int64', 'uint64']);
+const INT_FORMATS = new Set(["safeint", "int32", "uint32", "int64", "uint64"]);
 
 const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
   (def.checks ?? []).some((check) => {
     const checkDef = check._zod.def as { check?: string; format?: string };
-    return checkDef.check === 'number_format' && INT_FORMATS.has(checkDef.format ?? '');
+    return checkDef.check === "number_format" && INT_FORMATS.has(checkDef.format ?? "");
   });
 
 // XSD float/double special lexicals → JS values (#116).
-const FLOAT_SPECIALS: Record<string, number> = { INF: Infinity, '-INF': -Infinity, NaN: NaN };
+const FLOAT_SPECIALS: Record<string, number> = {
+  INF: Infinity,
+  "-INF": -Infinity,
+  NaN: NaN,
+};
 
 const coerceNumberValue = (trimmed: string): number => {
   // The specials are valid xs:float/xs:double lexicals; the generated schemas
@@ -311,11 +326,15 @@ const coerceBoolean = (raw: string): boolean => {
   if (!BOOLEAN_LEXICALS.has(trimmed)) {
     throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(trimmed)}`);
   }
-  return trimmed === 'true' || trimmed === '1';
+  return trimmed === "true" || trimmed === "1";
 };
 
 const coerceList = (raw: unknown, itemSchema: AnySchema): unknown[] =>
-  String(raw).trim().split(/\s+/).filter(Boolean).map((item) => coerceLexical(item, itemSchema));
+  String(raw)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((item) => coerceLexical(item, itemSchema));
 
 const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
   if (raw === undefined || raw === null) {
@@ -323,33 +342,33 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
   }
   const def = unwrapModifiers(schema)._zod.def;
   switch (def.type) {
-    case 'number':
+    case "number":
       return coerceNumber(String(raw), def as z.core.$ZodNumberDef);
-    case 'boolean':
+    case "boolean":
       return coerceBoolean(String(raw));
-    case 'string':
+    case "string":
       return String(raw);
-    case 'literal': {
+    case "literal": {
       const value = (def as z.core.$ZodLiteralDef<z.core.util.Literal>).values[0];
-      if (typeof value === 'number') {
+      if (typeof value === "number") {
         return coerceNumberValue(String(raw).trim());
       }
-      if (typeof value === 'boolean') {
+      if (typeof value === "boolean") {
         return coerceBoolean(String(raw));
       }
       return String(raw);
     }
-    case 'enum':
+    case "enum":
       return String(raw);
-    case 'nan':
+    case "nan":
       return NaN;
-    case 'union': {
+    case "union": {
       for (const option of (def as z.core.$ZodUnionDef).options) {
         try {
           const result = coerceLexical(raw, option);
           // A NaN produced for anything but the "NaN" lexical means the
           // numeric option was the wrong branch — try the next one (#116).
-          if (typeof result === 'number' && Number.isNaN(result) && String(raw).trim() !== 'NaN') {
+          if (typeof result === "number" && Number.isNaN(result) && String(raw).trim() !== "NaN") {
             continue;
           }
           // Branch agreement: zod's union selects the first VALIDATING
@@ -361,22 +380,22 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
           }
           return result;
         } catch {
-          continue;
+          // intentionally empty
         }
       }
       return String(raw);
     }
-    case 'pipe': {
+    case "pipe": {
       const pipe = def as z.core.$ZodPipeDef;
       const outDef = pipe.out._zod.def;
-      if (outDef.type === 'array') {
+      if (outDef.type === "array") {
         // XSD list: whitespace-separated lexicals, coerced per item.
         return coerceList(raw, (outDef as z.core.$ZodArrayDef).element);
       }
       // Other pipes (e.g. a whiteSpace preprocess) coerce as their inner type.
       return coerceLexical(raw, pipe.out);
     }
-    case 'array':
+    case "array":
       return coerceList(raw, (def as z.core.$ZodArrayDef).element);
     default:
       return raw;
@@ -390,15 +409,15 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
 const findAttributeValue = (
   node: Record<string, unknown>,
   qname: string,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
 ): unknown => {
   const expected = splitClark(qname);
   for (const [key, value] of Object.entries(node)) {
-    if (!key.startsWith('@_')) {
+    if (!key.startsWith("@_")) {
       continue;
     }
     const { prefix, local } = splitQName(key.slice(2));
-    const namespace = prefix ? (namespaceContext[prefix] ?? '') : '';
+    const namespace = prefix ? (namespaceContext[prefix] ?? "") : "";
     if (local === expected.local && namespace === expected.namespace) {
       return value;
     }
@@ -409,12 +428,12 @@ const findAttributeValue = (
 const findElementValues = (
   node: Record<string, unknown>,
   qname: string,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
 ): unknown[] => {
   const expected = splitClark(qname);
   const matches: unknown[] = [];
   for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith('@_') || key === '#text' || key === '#cdata') {
+    if (key.startsWith("@_") || key === "#text" || key === "#cdata") {
       continue;
     }
     const { prefix, local } = splitQName(key);
@@ -424,9 +443,12 @@ const findElementValues = (
     // Match per item, with each item's own xmlns context — repeated elements
     // may redeclare namespaces per sibling (#67).
     for (const item of toArray(value)) {
-      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode ? withNamespaceContext(namespaceContext, itemNode) : namespaceContext;
-      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
+      const itemContext = itemNode
+        ? withNamespaceContext(namespaceContext, itemNode)
+        : namespaceContext;
+      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
       if (namespace === expected.namespace) {
         matches.push(item);
         continue;
@@ -436,7 +458,7 @@ const findElementValues = (
       // default namespace. Accommodate them: a field in no namespace also
       // matches unprefixed elements (lenient by design; the libxml2 tier is
       // the strict one).
-      if (expected.namespace === '' && !prefix) {
+      if (expected.namespace === "" && !prefix) {
         matches.push(item);
       }
     }
@@ -446,14 +468,20 @@ const findElementValues = (
 
 const extractRoot = (
   parsed: Record<string, unknown>,
-  expectedQName: string
-): { root: Record<string, unknown>; namespaceContext: Record<string, string> } => {
+  expectedQName: string,
+): {
+  root: Record<string, unknown>;
+  namespaceContext: Record<string, string>;
+} => {
   const expected = splitClark(expectedQName);
   const entry = Object.entries(parsed).find(([key, value]) => {
-    const node = value && typeof value === 'object' ? (Array.isArray(value) ? value[0] : value) as Record<string, unknown> : {};
+    const node =
+      value && typeof value === "object"
+        ? ((Array.isArray(value) ? value[0] : value) as Record<string, unknown>)
+        : {};
     const namespaceContext = withNamespaceContext({}, node);
     const { prefix, local } = splitQName(key);
-    const namespace = prefix ? (namespaceContext[prefix] ?? '') : (namespaceContext[''] ?? '');
+    const namespace = prefix ? (namespaceContext[prefix] ?? "") : (namespaceContext[""] ?? "");
     return local === expected.local && namespace === expected.namespace;
   });
   if (!entry) {
@@ -462,13 +490,15 @@ const extractRoot = (
   if (Array.isArray(entry[1])) {
     // A repeated root tag parses to an array — treating its first item as the
     // root would silently drop siblings (#67).
-    throw new Error(`XML payload contains ${entry[1].length} '${expectedQName}' root elements; expected exactly one`);
+    throw new Error(
+      `XML payload contains ${entry[1].length} '${expectedQName}' root elements; expected exactly one`,
+    );
   }
-  if (entry[1] && typeof entry[1] === 'object') {
+  if (entry[1] && typeof entry[1] === "object") {
     const root = entry[1] as Record<string, unknown>;
     return { root, namespaceContext: withNamespaceContext({}, root) };
   }
-  return { root: { '#text': entry[1] }, namespaceContext: {} };
+  return { root: { "#text": entry[1] }, namespaceContext: {} };
 };
 
 // ---------------------------------------------------------------------------
@@ -478,7 +508,7 @@ const extractRoot = (
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
@@ -496,10 +526,13 @@ const readObject = (
     }
   }
   const fieldList = Object.values(fields);
-  const hasAny = fieldList.some(f => f.kind === 'any');
-  const hasAnyAttribute = fieldList.some(f => f.kind === 'anyAttribute');
+  const hasAny = fieldList.some((f) => f.kind === "any");
+  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
   if (hasAny || hasAnyAttribute) {
-    sweepWildcards(result, node, fieldList, namespaceContext, { any: hasAny, anyAttribute: hasAnyAttribute });
+    sweepWildcards(result, node, fieldList, namespaceContext, {
+      any: hasAny,
+      anyAttribute: hasAnyAttribute,
+    });
   }
   return result;
 };
@@ -513,26 +546,29 @@ const sweepWildcards = (
   node: Record<string, unknown>,
   fieldList: XmlFieldMeta[],
   namespaceContext: Record<string, string>,
-  wildcards: { any: boolean; anyAttribute: boolean }
+  wildcards: { any: boolean; anyAttribute: boolean },
 ): void => {
-  const knownElements = new Set(fieldList.filter(f => f.kind === 'element').map(f => f.qname));
-  const knownAttributes = new Set(fieldList.filter(f => f.kind === 'attribute').map(f => f.qname));
+  const knownElements = new Set(fieldList.filter((f) => f.kind === "element").map((f) => f.qname));
+  const knownAttributes = new Set(
+    fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
+  );
   const context = withNamespaceContext(namespaceContext, node);
   for (const [key, value] of Object.entries(node)) {
-    if (key === '#text' || key === '#cdata' || key === '@_xmlns' || key.startsWith('@_xmlns:')) {
+    if (key === "#text" || key === "#cdata" || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
       continue;
     }
-    if (key.startsWith('@_')) {
+    if (key.startsWith("@_")) {
       if (!wildcards.anyAttribute) {
         continue;
       }
       const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? '') : '';
+      const namespace = prefix ? (context[prefix] ?? "") : "";
       // xsi:* directives are processor metadata, not content (see openWalk).
       if (namespace === XSI_NS || knownAttributes.has(`{${namespace}}${local}`)) {
         continue;
       }
-      result[`@${namespace ? `{${namespace}}` : ''}${local}`] = value === undefined ? value : String(value);
+      result[`@${namespace ? `{${namespace}}` : ""}${local}`] =
+        value === undefined ? value : String(value);
       continue;
     }
     if (!wildcards.any) {
@@ -540,12 +576,16 @@ const sweepWildcards = (
     }
     const { prefix, local } = splitQName(key);
     for (const item of toArray(value)) {
-      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
       const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
       // Unqualified fields also match unprefixed elements in the inherited
       // default namespace (same leniency as findElementValues) — not extras.
-      if (knownElements.has(`{${namespace}}${local}`) || (knownElements.has(`{}${local}`) && !prefix)) {
+      if (
+        knownElements.has(`{${namespace}}${local}`) ||
+        (knownElements.has(`{}${local}`) && !prefix)
+      ) {
         continue;
       }
       const childKey = `{${namespace}}${local}`;
@@ -565,10 +605,14 @@ const sweepWildcards = (
 // Present-but-empty element: XSD applies default/fixed here (#66).
 const substituteEmpty = (
   field: FieldAnalysis,
-  fieldMeta: XmlFieldMeta
+  fieldMeta: XmlFieldMeta,
 ): { substituted: boolean; value?: unknown } => {
-  if (field.hasFixed) return { substituted: true, value: field.fixedValue };
-  if (fieldMeta.defaultValue !== undefined) return { substituted: true, value: fieldMeta.defaultValue };
+  if (field.hasFixed) {
+    return { substituted: true, value: field.fixedValue };
+  }
+  if (fieldMeta.defaultValue !== undefined) {
+    return { substituted: true, value: fieldMeta.defaultValue };
+  }
   return { substituted: false };
 };
 
@@ -576,21 +620,23 @@ const readOccurrence = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
   entry: unknown,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
 ): unknown => {
-  if (entry !== null && typeof entry === 'object') {
+  if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
     const childContext = withNamespaceContext(namespaceContext, childNode);
     const nilValue = findAttributeValue(childNode, `{${XSI_NS}}nil`, childContext);
-    if (nilValue === 'true' || nilValue === '1') {
+    if (nilValue === "true" || nilValue === "1") {
       return null;
     }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
       const text = textOf(childNode);
-      if (text === undefined || text === '') {
+      if (text === undefined || text === "") {
         const empty = substituteEmpty(field, fieldMeta);
-        if (empty.substituted) return empty.value;
+        if (empty.substituted) {
+          return empty.value;
+        }
       }
       return openWalk(childNode, childContext);
     }
@@ -598,23 +644,27 @@ const readOccurrence = (
       return readObject(field.itemSchema, childNode, childContext);
     }
     const text = textOf(childNode);
-    if (text === undefined || text === '') {
+    if (text === undefined || text === "") {
       const empty = substituteEmpty(field, fieldMeta);
-      if (empty.substituted) return empty.value;
+      if (empty.substituted) {
+        return empty.value;
+      }
     }
     return coerceLexical(text, field.itemSchema);
   }
 
   // Scalar entry: the parser yields text-only elements as bare strings.
-  if (entry === '') {
+  if (entry === "") {
     const empty = substituteEmpty(field, fieldMeta);
-    if (empty.substituted) return empty.value;
+    if (empty.substituted) {
+      return empty.value;
+    }
   }
   if (fieldMeta.open) {
     return entry;
   }
   if (hasObjectShape(field.itemSchema)) {
-    return readObject(field.itemSchema, { '#text': entry }, namespaceContext);
+    return readObject(field.itemSchema, { "#text": entry }, namespaceContext);
   }
   return coerceLexical(entry, field.itemSchema);
 };
@@ -625,32 +675,39 @@ const readField = (
   fieldMeta: XmlFieldMeta,
   fieldSchema: AnySchema,
   node: Record<string, unknown>,
-  namespaceContext: Record<string, string>
+  namespaceContext: Record<string, string>,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
-  if (fieldMeta.kind === 'attribute') {
+  if (fieldMeta.kind === "attribute") {
     const raw = findAttributeValue(node, fieldMeta.qname, namespaceContext);
     if (raw === undefined) {
       // Absent attribute: XSD applies default/fixed on absence. Validation
       // normally fills these via zod (.default()/z.literal); on the
       // validate:false fast path the walker supplies them from the def.
-      if (field.hasFixed) return { present: true, value: field.fixedValue };
-      if (field.hasDefault) return { present: true, value: field.defaultValue };
+      if (field.hasFixed) {
+        return { present: true, value: field.fixedValue };
+      }
+      if (field.hasDefault) {
+        return { present: true, value: field.defaultValue };
+      }
       return { present: false, value: undefined };
     }
     return { present: true, value: coerceLexical(raw, field.itemSchema) };
   }
 
-  if (fieldMeta.kind === 'text') {
+  if (fieldMeta.kind === "text") {
     const text = textOf(node);
     // A present element without character data has empty-string content: valid
     // for string-allowing types, and numeric coercion of '' still rejects.
-    return { present: true, value: coerceLexical(text ?? '', field.itemSchema) };
+    return {
+      present: true,
+      value: coerceLexical(text ?? "", field.itemSchema),
+    };
   }
 
   const values = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
-    readOccurrence(field, fieldMeta, entry, namespaceContext)
+    readOccurrence(field, fieldMeta, entry, namespaceContext),
   );
   if (field.isArray) {
     return { present: true, value: values };
@@ -666,13 +723,13 @@ const readField = (
 const walkRoot = (schema: AnySchema, xml: string): unknown => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
-    throw new Error('schema is not an XML root: no root qname registered in xmlRegistry');
+    throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
   const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
-  if (nilValue === 'true' || nilValue === '1') {
+  if (nilValue === "true" || nilValue === "1") {
     return null;
   }
 
@@ -687,9 +744,13 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
   // Simple-typed root element: the document value is the root's text content.
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
-  if (text === undefined || text === '') {
-    if (meta.fixedValue !== undefined) return meta.fixedValue;
-    if (meta.defaultValue !== undefined) return meta.defaultValue;
+  if (text === undefined || text === "") {
+    if (meta.fixedValue !== undefined) {
+      return meta.fixedValue;
+    }
+    if (meta.defaultValue !== undefined) {
+      return meta.defaultValue;
+    }
   }
   return coerceLexical(text, typeSchema);
 };
@@ -698,24 +759,28 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
 // open shape — clark-keyed child elements, '@'-prefixed attribute keys,
 // '_text' for character data next to attributes/children. A leaf element
 // collapses to its text string.
-const openWalk = (node: Record<string, unknown>, namespaceContext: Record<string, string>): unknown => {
+const openWalk = (
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+): unknown => {
   const context = withNamespaceContext(namespaceContext, node);
   const out: Record<string, unknown> = {};
   let hasStructure = false;
   for (const [key, value] of Object.entries(node)) {
-    if (key === '#text' || key === '#cdata' || key === '@_xmlns' || key.startsWith('@_xmlns:')) {
+    if (key === "#text" || key === "#cdata" || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
       continue;
     }
-    if (key.startsWith('@_')) {
+    if (key.startsWith("@_")) {
       const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? '') : '';
+      const namespace = prefix ? (context[prefix] ?? "") : "";
       // xsi:* attributes are processor directives (nil/type/schemaLocation),
       // not content; the typed walker drops them too, and their QName values
       // could not be re-serialized without declaring the value's prefix.
       if (namespace === XSI_NS) {
         continue;
       }
-      out[`@${namespace ? `{${namespace}}` : ''}${local}`] = value === undefined ? value : String(value);
+      out[`@${namespace ? `{${namespace}}` : ""}${local}`] =
+        value === undefined ? value : String(value);
       hasStructure = true;
       continue;
     }
@@ -723,9 +788,10 @@ const openWalk = (node: Record<string, unknown>, namespaceContext: Record<string
     for (const item of toArray(value)) {
       hasStructure = true;
       // Namespace per item — repeated siblings may redeclare prefixes (#67).
-      const itemNode = item !== null && typeof item === 'object' ? (item as Record<string, unknown>) : undefined;
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
       const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? '') : (itemContext[''] ?? '');
+      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
       const childKey = `{${namespace}}${local}`;
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = out[childKey];
@@ -741,10 +807,10 @@ const openWalk = (node: Record<string, unknown>, namespaceContext: Record<string
   const text = textOf(node);
   if (!hasStructure) {
     // An empty open element is empty-string content, not xsi:nil.
-    return text === undefined ? '' : text;
+    return text === undefined ? "" : text;
   }
-  if (text !== undefined && text !== '') {
-    out._text = text;
+  if (text !== undefined && text !== "") {
+    out["_text"] = text;
   }
   return out;
 };
@@ -755,7 +821,10 @@ const openWalk = (node: Record<string, unknown>, namespaceContext: Record<string
 
 const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
   if (prefixMap.has(uri)) {
-    return prefixMap.get(uri)!;
+    const existing = prefixMap.get(uri);
+    if (existing) {
+      return existing;
+    }
   }
   const next = `ns${prefixMap.size}`;
   prefixMap.set(uri, next);
@@ -776,8 +845,11 @@ type SerializeCtx = {
 
 // Serialize the normalized open shape (see openWalk): attributes, child
 // elements (arrays repeat), '_text'. Leaf values serialize as text.
-const openSerialize = (value: unknown, ctx: SerializeCtx): { attributes: string[]; body: string; usesXsi: boolean } => {
-  if (value === null || typeof value !== 'object') {
+const openSerialize = (
+  value: unknown,
+  ctx: SerializeCtx,
+): { attributes: string[]; body: string; usesXsi: boolean } => {
+  if (value === null || typeof value !== "object") {
     return { attributes: [], body: serializePrimitive(value), usesXsi: false };
   }
   const attributes: string[] = [];
@@ -787,11 +859,11 @@ const openSerialize = (value: unknown, ctx: SerializeCtx): { attributes: string[
     if (entry === undefined) {
       continue;
     }
-    if (key === '_text') {
+    if (key === "_text") {
       elements.push(serializePrimitive(entry));
       continue;
     }
-    if (key.startsWith('@')) {
+    if (key.startsWith("@")) {
       attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(entry)}"`);
       continue;
     }
@@ -804,34 +876,42 @@ const openSerialize = (value: unknown, ctx: SerializeCtx): { attributes: string[
       }
       const inner = openSerialize(item, ctx);
       usesXsi = usesXsi || inner.usesXsi;
-      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
       elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
     }
   }
-  return { attributes, body: elements.join(''), usesXsi };
+  return { attributes, body: elements.join(""), usesXsi };
 };
 
 const serializePrimitive = (value: unknown): string => {
   if (value === null || value === undefined) {
-    return '';
+    return "";
   }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
   }
-  if (typeof value === 'number') {
+  if (typeof value === "number") {
     // XSD lexicals for the float/double specials (#116).
-    if (Number.isNaN(value)) return 'NaN';
-    if (value === Infinity) return 'INF';
-    if (value === -Infinity) return '-INF';
+    if (Number.isNaN(value)) {
+      return "NaN";
+    }
+    if (value === Infinity) {
+      return "INF";
+    }
+    if (value === -Infinity) {
+      return "-INF";
+    }
     // String(-0) is "0" — keep the sign so the round-trip preserves -0 (#117).
-    if (Object.is(value, -0)) return '-0';
+    if (Object.is(value, -0)) {
+      return "-0";
+    }
   }
   return escapeXml(String(value));
 };
 
 const serializeListValue = (value: unknown): string => {
   const arr = Array.isArray(value) ? value : [value];
-  return arr.map(item => serializePrimitive(item)).join(' ');
+  return arr.map((item) => serializePrimitive(item)).join(" ");
 };
 
 const serializeLeaf = (schema: AnySchema, value: unknown): string => {
@@ -841,13 +921,13 @@ const serializeLeaf = (schema: AnySchema, value: unknown): string => {
     return serializeListValue(value);
   }
   const def = unwrapModifiers(schema)._zod.def;
-  if (def.type === 'pipe') {
+  if (def.type === "pipe") {
     const outDef = (def as z.core.$ZodPipeDef).out._zod.def;
-    if (outDef.type === 'array') {
+    if (outDef.type === "array") {
       return serializeListValue(value);
     }
   }
-  if (def.type === 'array') {
+  if (def.type === "array") {
     return serializeListValue(value);
   }
   return serializePrimitive(value);
@@ -856,7 +936,7 @@ const serializeLeaf = (schema: AnySchema, value: unknown): string => {
 const writeObjectFields = (
   schema: AnySchema,
   obj: Record<string, unknown>,
-  ctx: SerializeCtx
+  ctx: SerializeCtx,
 ): { attributes: string[]; elements: string[]; usesXsi: boolean } => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
@@ -872,7 +952,7 @@ const writeObjectFields = (
     }
     const field = analyzeField(fieldSchema);
 
-    if (fieldMeta.kind === 'attribute') {
+    if (fieldMeta.kind === "attribute") {
       if (value === undefined) {
         continue;
       }
@@ -880,11 +960,13 @@ const writeObjectFields = (
       if (field.hasDefault && value === field.defaultValue) {
         continue;
       }
-      attributes.push(`${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeLeaf(field.itemSchema, value)}"`);
+      attributes.push(
+        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeLeaf(field.itemSchema, value)}"`,
+      );
       continue;
     }
 
-    if (fieldMeta.kind === 'text') {
+    if (fieldMeta.kind === "text") {
       elements.push(serializeLeaf(field.itemSchema, value));
       continue;
     }
@@ -908,15 +990,15 @@ const writeObjectFields = (
       if (fieldMeta.open) {
         const inner = openSerialize(item, ctx);
         usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
         elements.push(`<${localName}${attrStr}>${inner.body}</${localName}>`);
         continue;
       }
-      if (hasObjectShape(field.itemSchema) && typeof item === 'object' && !Array.isArray(item)) {
+      if (hasObjectShape(field.itemSchema) && typeof item === "object" && !Array.isArray(item)) {
         const inner = writeObjectFields(field.itemSchema, item as Record<string, unknown>, ctx);
         usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
-        elements.push(`<${localName}${attrStr}>${inner.elements.join('')}</${localName}>`);
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+        elements.push(`<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`);
         continue;
       }
       elements.push(`<${localName}>${serializeLeaf(field.itemSchema, item)}</${localName}>`);
@@ -926,16 +1008,18 @@ const writeObjectFields = (
   // Wildcard extras: data keys captured by the wildcard sweep that no declared
   // field owns. Written after the declared fields (see sweepWildcards).
   const fieldList = Object.values(fields);
-  const hasAny = fieldList.some(f => f.kind === 'any');
-  const hasAnyAttribute = fieldList.some(f => f.kind === 'anyAttribute');
+  const hasAny = fieldList.some((f) => f.kind === "any");
+  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
   if (hasAny || hasAnyAttribute) {
     for (const [key, value] of Object.entries(obj)) {
       if (key in fields || value === undefined) {
         continue;
       }
-      if (key.startsWith('@')) {
+      if (key.startsWith("@")) {
         if (hasAnyAttribute) {
-          attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`);
+          attributes.push(
+            `${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`,
+          );
         }
         continue;
       }
@@ -951,7 +1035,7 @@ const writeObjectFields = (
         }
         const inner = openSerialize(item, ctx);
         usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(' ')}` : '';
+        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
         elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
       }
     }
@@ -979,7 +1063,7 @@ export type ParseXmlOptions = {
 export const safeParseXml = <S extends z.ZodType>(
   schema: S,
   xml: string,
-  opts?: ParseXmlOptions
+  opts?: ParseXmlOptions,
 ): { success: true; data: z.output<S> } | { success: false; error: unknown } => {
   let data: unknown;
   try {
@@ -1001,7 +1085,11 @@ export const safeParseXml = <S extends z.ZodType>(
  * failure (and plain Errors for structural problems). Use safeParseXml for a
  * result-object variant.
  */
-export const parseXml = <S extends z.ZodType>(schema: S, xml: string, opts?: ParseXmlOptions): z.output<S> => {
+export const parseXml = <S extends z.ZodType>(
+  schema: S,
+  xml: string,
+  opts?: ParseXmlOptions,
+): z.output<S> => {
   const result = safeParseXml(schema, xml, opts);
   if (!result.success) {
     throw result.error;
@@ -1013,7 +1101,7 @@ export const parseXml = <S extends z.ZodType>(schema: S, xml: string, opts?: Par
 export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>): string => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
-    throw new Error('schema is not an XML root: no root qname registered in xmlRegistry');
+    throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
@@ -1021,7 +1109,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   };
 
   const typeSchema = peelOnce(schema);
-  let body = '';
+  let body = "";
   let attributes: string[] = [];
   let usesXsi = false;
   if (data === null || data === undefined) {
@@ -1035,7 +1123,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     const inner = writeObjectFields(typeSchema, data as Record<string, unknown>, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
-    body = inner.elements.join('');
+    body = inner.elements.join("");
   } else {
     body = serializeLeaf(typeSchema, data);
   }
@@ -1057,9 +1145,9 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     nsDecls.push('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');
   }
 
-  const attrs = [...nsDecls, ...attributes].join(' ');
+  const attrs = [...nsDecls, ...attributes].join(" ");
   if (data === null || data === undefined) {
-    const nilAttrs = [...nsDecls, 'xsi:nil="true"'].join(' ');
+    const nilAttrs = [...nsDecls, 'xsi:nil="true"'].join(" ");
     return `<${rootTag} ${nilAttrs}/>`;
   }
   const opening = attrs ? `<${rootTag} ${attrs}>` : `<${rootTag}>`;

@@ -25,7 +25,7 @@
     "test:quick": "vitest run --config vitest.quick.config.ts",
     "build": "tsc -p tsconfig.build.json",
     "test:watch": "vitest",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check src tests && tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run lint && npm test && npm run build",
     "pretest:corpus": "npm run build",
     "test:corpus": "vitest run --config vitest.corpus.config.ts"
@@ -69,6 +69,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "libxml2-wasm": "^0.7.1",

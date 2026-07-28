@@ -1,11 +1,11 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { safeParseXml } from '../src/index.js';
-import { findRootSchema, generateAndImport, readXmlFile } from './helpers.js';
+import fs from "node:fs";
+import path from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import { safeParseXml } from "../src/index.js";
+import { findRootSchema, generateAndImport, readXmlFile } from "./helpers.js";
 
-const NEGATIVE_DIR = path.resolve('testdata/curated/negative');
+const NEGATIVE_DIR = path.resolve("testdata/curated/negative");
 
 type NegativeExpectation =
   // Parsing must succeed with exactly this result (pinned so silent data loss
@@ -24,30 +24,44 @@ interface NegativeCase {
 
 const EXPECTED: Record<string, NegativeExpectation> = {
   // Bounded cardinality: maxOccurs=4 but XML has 5 items.
-  'invalid-max-occurs': { error: '<=4 items', zod: true },
+  "invalid-max-occurs": { error: "<=4 items", zod: true },
   // Bounded cardinality: minOccurs=2 but XML has 1 item.
-  'invalid-min-occurs': { error: '>=2 items', zod: true },
+  "invalid-min-occurs": { error: ">=2 items", zod: true },
   // A missing required element now fails the final schema validation.
-  'invalid-missing-required-element': { error: 'Invalid input: expected string', zod: true },
+  "invalid-missing-required-element": {
+    error: "Invalid input: expected string",
+    zod: true,
+  },
   // Root in a foreign namespace is rejected structurally.
-  'invalid-namespace': { error: "Root element '{urn:negative}strict' not found in XML payload", zod: false },
+  "invalid-namespace": {
+    error: "Root element '{urn:negative}strict' not found in XML payload",
+    zod: false,
+  },
   // xsi:nil="true" on the root: content of a nilled element is dropped.
-  'invalid-nil-with-content': { data: null },
+  "invalid-nil-with-content": { data: null },
   // Unknown elements are ignored.
-  'invalid-unexpected-element': { data: { required: 'req', repeated: [1, 2], '@must': 'abc' } },
+  "invalid-unexpected-element": {
+    data: { required: "req", repeated: [1, 2], "@must": "abc" },
+  },
   // Order is not enforced: fields are matched by name.
-  'invalid-wrong-element-order': { data: { first: 'wrong order', second: 42, third: true } },
+  "invalid-wrong-element-order": {
+    data: { first: "wrong order", second: 42, third: true },
+  },
 };
 
 function discoverNegativeCases(): NegativeCase[] {
   const cases: NegativeCase[] = [];
   for (const f of fs.readdirSync(NEGATIVE_DIR)) {
-    if (f.endsWith('.xml')) {
-      const name = f.replace(/\.xml$/, '');
+    if (f.endsWith(".xml")) {
+      const name = f.replace(/\.xml$/, "");
       if (!(name in EXPECTED)) {
         throw new Error(`no pinned expectation for negative fixture ${f} — add one to EXPECTED`);
       }
-      cases.push({ name, xmlFile: path.join(NEGATIVE_DIR, f), expected: EXPECTED[name] });
+      cases.push({
+        name,
+        xmlFile: path.join(NEGATIVE_DIR, f),
+        expected: EXPECTED[name],
+      });
     }
   }
   return cases;
@@ -55,10 +69,10 @@ function discoverNegativeCases(): NegativeCase[] {
 
 const negativeCases = discoverNegativeCases();
 
-describe('negative — invalid XML handling', () => {
-  const xsdPath = path.join(NEGATIVE_DIR, 'invalid.xsd');
+describe("negative — invalid XML handling", () => {
+  const xsdPath = path.join(NEGATIVE_DIR, "invalid.xsd");
   if (!fs.existsSync(xsdPath)) {
-    it('skip — no negative test XSD found', () => {});
+    it("skip — no negative test XSD found", () => {});
     return;
   }
 
@@ -69,7 +83,7 @@ describe('negative — invalid XML handling', () => {
 
   for (const c of negativeCases) {
     const expected = c.expected;
-    if ('error' in expected) {
+    if ("error" in expected) {
       it(`rejects ${c.name}`, () => {
         const xml = readXmlFile(c.xmlFile);
         const schema = findRootSchema(mod, xml);

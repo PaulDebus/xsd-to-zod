@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import type { QName } from './types.js';
+import { z } from "zod";
+import type { QName } from "./types.js";
 
 /**
  * Per-field XML knowledge, stored on the containing object schema (not on the
@@ -7,7 +7,7 @@ import type { QName } from './types.js';
  * different qnames, so field-level meta would conflict on shared schemas.
  */
 export type XmlFieldMeta = {
-  kind: 'element' | 'attribute' | 'text' | 'any' | 'anyAttribute';
+  kind: "element" | "attribute" | "text" | "any" | "anyAttribute";
   qname: QName;
   /**
    * Element default (coerced JS value, elements only). XSD applies an element
@@ -58,6 +58,12 @@ export type XmlMeta = {
  * and the CLI may hold a *different* copy of the library — without a shared
  * instance, registrations would land in a registry the runtime never reads.
  */
-const globalStore = globalThis as { __xsd_to_zod_xmlRegistry__?: z.core.$ZodRegistry<XmlMeta> };
+const globalStore = globalThis as {
+  __xsd_to_zod_xmlRegistry__?: z.core.$ZodRegistry<XmlMeta>;
+};
 
-export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> = (globalStore.__xsd_to_zod_xmlRegistry__ ??= z.registry<XmlMeta>());
+export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> =
+  globalStore.__xsd_to_zod_xmlRegistry__ ?? z.registry<XmlMeta>();
+if (!globalStore.__xsd_to_zod_xmlRegistry__) {
+  globalStore.__xsd_to_zod_xmlRegistry__ = xmlRegistry;
+}
