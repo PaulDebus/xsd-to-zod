@@ -133,7 +133,12 @@ const parseSimpleTypeDef = (
           )
         : toClark(XSD_NS, "string");
     }
-    return { name: qname, kind: "list", itemType, ...(description !== undefined && { description }) };
+    return {
+      name: qname,
+      kind: "list",
+      itemType,
+      ...(description !== undefined && { description }),
+    };
   }
 
   const unionChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === "union")?.[1];
@@ -157,7 +162,12 @@ const parseSimpleTypeDef = (
           ),
         );
     }
-    return { name: qname, kind: "union", memberTypes, ...(description !== undefined && { description }) };
+    return {
+      name: qname,
+      kind: "union",
+      memberTypes,
+      ...(description !== undefined && { description }),
+    };
   }
 
   const restriction = nodeChildren(node).find(
@@ -543,11 +553,9 @@ const collectFields = (
               choiceGroup,
               choiceBranch,
             ),
-            ...(child["@_default"] === undefined
-              ? {}
-              : { defaultValue: String(child["@_default"]) }),
-            ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
-            ...(description === undefined ? {} : { description }),
+            ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
+            ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
+            ...(description !== undefined && { description }),
           });
         } else {
           diagnostics.add(`unresolved element ref "${refQName}"`);
@@ -627,9 +635,9 @@ const collectFields = (
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
         ...(choiceGroup !== undefined && { choiceGroup }),
         ...(choiceBranch !== undefined && { choiceBranch }),
-        ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
-        ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
-        ...(description === undefined ? {} : { description }),
+        ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
+        ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
+        ...(description !== undefined && { description }),
       });
       continue;
     }
@@ -656,9 +664,9 @@ const collectFields = (
           kind: "attribute",
           qname: refQName,
           typeName: referenced?.typeName ?? toClark(XSD_NS, "string"),
-          ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
-          ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
-          ...(description === undefined ? {} : { description }),
+          ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
+          ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
+          ...(description !== undefined && { description }),
         });
         continue;
       }
@@ -694,9 +702,9 @@ const collectFields = (
           name,
         ),
         typeName: attrTypeName,
-        ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
-        ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
-        ...(attrDescription === undefined ? {} : { description: attrDescription }),
+        ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
+        ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
+        ...(attrDescription !== undefined && { description: attrDescription }),
       });
       continue;
     }
@@ -1388,8 +1396,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         cardinality: parseCardinality(child),
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
         ...(description !== undefined && { description }),
-        ...(child["@_default"] === undefined ? {} : { defaultValue: String(child["@_default"]) }),
-        ...(child["@_fixed"] === undefined ? {} : { fixedValue: String(child["@_fixed"]) }),
+        ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
+        ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
       };
       if (!rootElements.includes(qname)) {
         rootElements.push(qname);
