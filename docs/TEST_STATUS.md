@@ -109,14 +109,14 @@ Features tested include:
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Triage the pinned W3C known failures (largest buckets: `xs:anyType` content, `xs:any` wildcards, libxml2-rejected serializations, order-facet boundary precision, nested choice groups)
+- [ ] Triage the pinned W3C known failures (largest buckets: `xs:anyType` content, `xs:any` wildcards, libxml2-rejected serializations, lexical preservation for enum/pattern, nested choice groups)
 - [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 11,199 passing, 2,700 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by lexical preservation for enum/pattern, XSD regex translation, wildcards and substitution groups; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 11,200 passing, 2,699 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by lexical preservation for enum/pattern, XSD regex translation, wildcards and substitution groups; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---

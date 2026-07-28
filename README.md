@@ -100,7 +100,7 @@ const xml = serializeXml(orderSchema, data);
 ## Features
 
 - **XSD constructs**: `sequence`, `choice` (→ per-group refine checks), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`
-- **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
+- **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
 - **CLI**: directory input (recursive `.xsd` discovery), `--include-libraries` (auto-skip type-definition-only schemas), `--allow-missing-imports` (suppress unresolved ref warnings), `--silent`, and `bundle` subcommand for merging imports into one self-contained XSD
@@ -235,9 +235,9 @@ npm test
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
 | W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: substitution groups) |
-| W3C sun/ms/nist selection | 2,615 (2,417 ✅, 198 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
+| W3C sun/ms/nist selection | 2,615 (2,418 ✅, 197 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
 | W3C negative (invalid instances) | 1,528 (1,520 ✅, 8 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
-| W3C full corpus (main + weekly) | 13,899 (11,199 ✅, 2,700 ⚠️) | All XSD 1.0 test sets via `suite.xml`; pins dominated by lexical preservation, regex translation, wildcards and substitution groups |
+| W3C full corpus (main + weekly) | 13,899 (11,200 ✅, 2,699 ⚠️) | All XSD 1.0 test sets via `suite.xml`; pins dominated by lexical preservation, regex translation, wildcards and substitution groups |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
