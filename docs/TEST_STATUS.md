@@ -116,7 +116,7 @@ Features tested include:
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 9,845 passing, 4,050 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by safe-integer boundaries, lexical preservation for enum/pattern, and XSD regex translation; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 11,199 passing, 2,700 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by lexical preservation for enum/pattern, XSD regex translation, wildcards and substitution groups; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
