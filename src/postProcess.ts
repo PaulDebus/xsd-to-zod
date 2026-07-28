@@ -22,57 +22,113 @@ const run = (command: string, args: string[], cwd: string): void => {
 // Only spawn what the platform can execute: on Windows the extension-less
 // shim is a POSIX shell script and equally fails without a shell, so pick the
 // .cmd shim there (spawned with shell in run()).
+// Walks up from cwd so a tool installed at a monorepo root is still found
+// when the CLI runs in a package subdirectory.
 const binPath = (cwd: string, binName: string): string | undefined => {
-  const binDir = path.join(cwd, "node_modules", ".bin");
-  const candidates = process.platform === "win32" ? [`${binName}.cmd`] : [binName];
-  for (const candidate of candidates) {
-    const full = path.join(binDir, candidate);
+  const fileName = process.platform === "win32" ? `${binName}.cmd` : binName;
+  let dir = cwd;
+  for (;;) {
+    const full = path.join(dir, "node_modules", ".bin", fileName);
     if (fs.existsSync(full)) {
       return full;
     }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
   }
-  return undefined;
 };
 
-const hasConfig = (cwd: string, candidates: string[]): boolean =>
-  candidates.some((candidate) => fs.existsSync(path.join(cwd, candidate)));
+const runTool = (binName: string, args: string[], cwd: string): boolean => {
+  const bin = binPath(cwd, binName);
+  if (!bin) {
+    return false;
+  }
+  run(bin, args, cwd);
+  return true;
+};
 
-const PRETTIER_CONFIGS = [
-  ".prettierrc",
-  ".prettierrc.json",
-  ".prettierrc.js",
-  "prettier.config.js",
-];
 // ESLint v9 only honours flat config; legacy .eslintrc* files are ignored and
 // eslint still exits non-zero, so they must not count as "has config" (#74).
-const ESLINT_CONFIGS = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs"];
+const CONFIG_FILES: Record<"biome" | "prettier" | "eslint", string[]> = {
+  biome: ["biome.json", "biome.jsonc"],
+  prettier: [
+    ".prettierrc",
+    ".prettierrc.json",
+    ".prettierrc.yml",
+    ".prettierrc.yaml",
+    ".prettierrc.js",
+    ".prettierrc.mjs",
+    ".prettierrc.cjs",
+    "prettier.config.js",
+    "prettier.config.mjs",
+    "prettier.config.cjs",
+  ],
+  eslint: ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs"],
+};
 
+// Walks up from cwd for the same reason as binPath: configs usually live at
+// the project root, not necessarily where the CLI was invoked.
+const hasConfig = (cwd: string, tool: keyof typeof CONFIG_FILES): boolean => {
+  let dir = cwd;
+  for (;;) {
+    if (CONFIG_FILES[tool].some((name) => fs.existsSync(path.join(dir, name)))) {
+      return true;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return false;
+    }
+    dir = parent;
+  }
+};
+
+// Biome and Prettier exit non-zero on file types they do not support (e.g.
+// the bundled .xsd), so only JS/TS output is routed to them.
+const JS_TS_RE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+// Returns true when a formatter actually ran, so the CLI can warn that a
+// --format request produced no formatting instead of failing silently.
 export const runPostGenerationFormatting = (
   generatedFiles: string[],
   cwd = process.cwd(),
-): void => {
+): boolean => {
   if (generatedFiles.length === 0) {
-    return;
+    return false;
   }
 
-  const biome = binPath(cwd, "biome");
-  if (biome && fs.existsSync(path.join(cwd, "biome.json"))) {
-    run(biome, ["format", "--write", ...generatedFiles], cwd);
-    run(biome, ["lint", "--write", ...generatedFiles], cwd);
-    return;
-  }
+  const jsTsFiles = generatedFiles.filter((file) => JS_TS_RE.test(file));
 
-  const prettier = binPath(cwd, "prettier");
-  if (prettier && hasConfig(cwd, PRETTIER_CONFIGS)) {
-    run(prettier, ["--write", ...generatedFiles], cwd);
-    return;
+  const runBiome = (): boolean => {
+    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd)) {
+      return false;
+    }
+    runTool("biome", ["lint", "--write", ...jsTsFiles], cwd);
+    return true;
+  };
+  const runPrettier = (): boolean =>
+    jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
+
+  // A tool with a project config wins over one that would run on defaults, so
+  // the output matches the project's style. Biome and Prettier both format
+  // fine without a config — the binary alone is enough as a fallback; gating
+  // on a config file silently skipped formatting in default setups.
+  if (hasConfig(cwd, "biome") && runBiome()) {
+    return true;
+  }
+  if (hasConfig(cwd, "prettier") && runPrettier()) {
+    return true;
+  }
+  if (runBiome() || runPrettier()) {
+    return true;
   }
 
   // ESLint v9 exits non-zero without a config file — only run it when one
   // exists, so a config-less project doesn't crash the CLI after the output
   // files were already written (#74).
-  const eslint = binPath(cwd, "eslint");
-  if (eslint && hasConfig(cwd, ESLINT_CONFIGS)) {
-    run(eslint, ["--fix", ...generatedFiles], cwd);
+  if (hasConfig(cwd, "eslint")) {
+    return runTool("eslint", ["--fix", ...generatedFiles], cwd);
   }
+  return false;
 };
