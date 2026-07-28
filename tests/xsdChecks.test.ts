@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   countFractionDigits,
   countTotalDigits,
+  xsdDecimalCompare,
   xsdFractionDigits,
   xsdTotalDigits,
 } from "../src/xsdChecks.js";
@@ -55,5 +56,46 @@ describe("xsdTotalDigits / xsdFractionDigits refinements", () => {
     expect(xsdTotalDigits(1)(Infinity)).toBe(true);
     expect(xsdTotalDigits(1)(NaN)).toBe(true);
     expect(xsdFractionDigits(0)(-Infinity)).toBe(true);
+  });
+});
+
+describe("xsdDecimalCompare", () => {
+  it.each([
+    // Ordinary comparisons.
+    ["1.5", "1.4", 1],
+    ["1.5", "1.5", 0],
+    ["1.5", "1.6", -1],
+    ["-273.15", "-273.15", 0],
+    ["-1", "-2", 1],
+    ["0", "-0.0", 0],
+    ["-0", "0", 0],
+    // Lexical forms: leading/trailing zeros, missing int or fraction part.
+    [".5", "0.5", 0],
+    ["5.", "5.0", 0],
+    ["+007", "7", 0],
+    // The #136 case: boundary digits beyond double precision compare exactly.
+    ["1000000000000000000", "999999999999999999.488264", 1],
+    ["999999999999999999", "999999999999999999.488264", -1],
+    ["-1000000000000000000", "-999999999999999999.488264", -1],
+    ["1000000000000000000", "1000000000000000000.000001", -1],
+    // 53-bit edge: 2^53 vs 2^53 + 1 (indistinguishable as doubles).
+    ["9007199254740992", "9007199254740993", -1],
+    ["9007199254740992", "9007199254740992", 0],
+    // Signs and zeros.
+    ["1", "-999999999999999999999", 1],
+    ["-1", "999999999999999999999", -1],
+    ["0", "0.00000000000000000001", -1],
+    ["0.00000000000000000001", "0", 1],
+  ])("xsdDecimalCompare(%s, %s) === %s", (value, boundary, expected) => {
+    expect(Math.sign(xsdDecimalCompare(value, boundary))).toBe(expected);
+  });
+
+  it("rejects invalid lexicals through every comparison", () => {
+    for (const bad of ["1.2.3", "1e3", "abc", ""]) {
+      const cmp = xsdDecimalCompare(bad, "0");
+      for (const result of [cmp > 0, cmp >= 0, cmp < 0, cmp <= 0, cmp === 0]) {
+        expect(result, bad).toBe(false);
+      }
+    }
   });
 });

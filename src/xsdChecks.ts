@@ -40,3 +40,50 @@ export const xsdFractionDigits =
   (limit: number): ((value: number) => boolean) =>
   (value) =>
     !Number.isFinite(value) || countFractionDigits(value) <= limit;
+
+// ---------------------------------------------------------------------------
+// Exact order-facet comparison for xs:decimal (#136). Both the facet boundary
+// and the instance value can carry more significant digits than a double
+// holds, so generated schemas compare the original decimal lexicals — scaled
+// to integers and cross-multiplied in BigInt arithmetic — before the value is
+// coerced to a JS number.
+// ---------------------------------------------------------------------------
+
+const DECIMAL_LEXICAL = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
+
+const decimalParts = (lexical: string): { neg: boolean; digits: bigint; scale: number } => {
+  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  if (!m) {
+    throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
+  }
+  const intPart = m[2] ?? "0";
+  const frac = m[3] ?? m[4] ?? "";
+  const digits = BigInt(`${intPart}${frac}`);
+  return { neg: m[1] === "-", digits, scale: frac.length };
+};
+
+// Compare two XSD decimal lexicals: negative/zero/positive as value is less
+// than / equal to / greater than the boundary. Invalid lexicals compare to
+// NaN so every order-facet refinement rejects them.
+export const xsdDecimalCompare = (valueLexical: string, boundaryLexical: string): number => {
+  let value: { neg: boolean; digits: bigint; scale: number };
+  let boundary: { neg: boolean; digits: bigint; scale: number };
+  try {
+    value = decimalParts(valueLexical);
+    boundary = decimalParts(boundaryLexical);
+  } catch {
+    return Number.NaN;
+  }
+  // -0 and 0.0 are not negative.
+  const vNeg = value.neg && value.digits !== 0n;
+  const bNeg = boundary.neg && boundary.digits !== 0n;
+  if (vNeg !== bNeg) {
+    return vNeg ? -1 : 1;
+  }
+  // Align scales: value = vDigits / 10^vScale, boundary = bDigits / 10^bScale.
+  const vScaled = value.digits * 10n ** BigInt(boundary.scale);
+  const bScaled = boundary.digits * 10n ** BigInt(value.scale);
+  const cmp = vScaled > bScaled ? 1 : vScaled < bScaled ? -1 : 0;
+  // Guard the sign flip: -cmp would yield -0 for an exact match.
+  return vNeg && cmp !== 0 ? -cmp : cmp;
+};
