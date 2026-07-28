@@ -18,10 +18,11 @@ export const W3C_CORPUS_REASONS = {
   fileResolution: "harness: test-set file resolution (needs triage)",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
+  valueSpaceRoundTrip:
+    "runtime: instance double rounds across the exact decimal facet boundary; the serialized lexical fails re-parse (lexical preservation needed)",
   dateTimeNegativeZeroTz: "runtime: dateTime -00:00 timezone lexical handling (needs triage)",
   substitutionGroups: "unsupported: substitution groups",
   anyTypeContent: "unsupported: xs:anyType content (element without a type maps to xs:string)",
-  facetPrecision: "runtime: order-facet boundary precision lost via Number rounding",
   regexTranslation:
     "codegen: XSD regex syntax not translatable to JS RegExp (char class subtraction etc.)",
   enumOnCoercedLexical:
@@ -1411,46 +1412,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   [
     "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-boolean-pattern/NISTXML-SV-IV-atomic-boolean-pattern-1-5",
     W3C_CORPUS_REASONS.patternOnNonString,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-1/NISTXML-SV-IV-atomic-decimal-maxExclusive-2-5",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-2/NISTXML-SV-IV-atomic-decimal-maxExclusive-3-5",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-3/NISTXML-SV-IV-atomic-decimal-maxExclusive-4-5",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-4/NISTXML-SV-IV-atomic-decimal-maxExclusive-5-5",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive/NISTXML-SV-IV-atomic-decimal-maxExclusive-1-1",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive-1/NISTXML-SV-IV-atomic-decimal-minExclusive-2-1",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive-2/NISTXML-SV-IV-atomic-decimal-minExclusive-3-1",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive-3/NISTXML-SV-IV-atomic-decimal-minExclusive-4-1",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive-4/NISTXML-SV-IV-atomic-decimal-minExclusive-5-1",
-    W3C_CORPUS_REASONS.facetPrecision,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive/NISTXML-SV-IV-atomic-decimal-minExclusive-1-1",
-    W3C_CORPUS_REASONS.facetPrecision,
   ],
   [
     "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-pattern-2/NISTXML-SV-IV-atomic-decimal-pattern-3-4",
@@ -9379,6 +9340,42 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   [
     "nistMeta/NISTXMLSchemaDatatypes.testSet/list-unsignedLong-pattern/NISTXML-SV-IV-list-unsignedLong-pattern-1-5",
     W3C_CORPUS_REASONS.patternOnNonString,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-2/NISTXML-SV-IV-atomic-decimal-maxExclusive-3-5",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-3/NISTXML-SV-IV-atomic-decimal-maxExclusive-4-5",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxExclusive-4/NISTXML-SV-IV-atomic-decimal-maxExclusive-5-5",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxInclusive-3/NISTXML-SV-IV-atomic-decimal-maxInclusive-4-5",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-maxInclusive-4/NISTXML-SV-IV-atomic-decimal-maxInclusive-5-5",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive-2/NISTXML-SV-IV-atomic-decimal-minExclusive-3-1",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minExclusive/NISTXML-SV-IV-atomic-decimal-minExclusive-1-1",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minInclusive-1/NISTXML-SV-IV-atomic-decimal-minInclusive-2-1",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-decimal-minInclusive/NISTXML-SV-IV-atomic-decimal-minInclusive-1-1",
+    W3C_CORPUS_REASONS.valueSpaceRoundTrip,
   ],
   ["sunMeta/CType.testSet/basetd00101m1/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/basetd00101m2/Positive", W3C_CORPUS_REASONS.simpleContentShape],

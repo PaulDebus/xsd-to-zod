@@ -6,7 +6,6 @@
 // hand-maintained.
 export const REASONS = {
   undefinedValue: "parse: element value arrives as undefined (needs triage)",
-  facetPrecision: "runtime: order-facet boundary precision lost via Number rounding",
   anyTypeContent: "unsupported: xs:anyType content (element without a type maps to xs:string)",
   wildcard: "unsupported: xs:any wildcard content",
   strictWildcardHarness:
@@ -15,6 +14,8 @@ export const REASONS = {
   needsTriage: "needs triage",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
+  valueSpaceRoundTrip:
+    "runtime: instance double rounds across the exact decimal facet boundary; the serialized lexical fails re-parse (lexical preservation needed)",
   choiceValidation:
     "nested choice groups: inner choice is enforced even when its outer branch is not selected (needs occurrence-aware validation)",
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
@@ -182,46 +183,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ModelGroups/mgQ002/mgQ002.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgQ003/mgQ003.v", REASONS.choiceValidation],
   [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-1/NISTXML-SV-IV-atomic-decimal-maxExclusive-2-5",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-2/NISTXML-SV-IV-atomic-decimal-maxExclusive-3-5",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-3/NISTXML-SV-IV-atomic-decimal-maxExclusive-4-5",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-4/NISTXML-SV-IV-atomic-decimal-maxExclusive-5-5",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive/NISTXML-SV-IV-atomic-decimal-maxExclusive-1-1",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-1/NISTXML-SV-IV-atomic-decimal-minExclusive-2-1",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-2/NISTXML-SV-IV-atomic-decimal-minExclusive-3-1",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-3/NISTXML-SV-IV-atomic-decimal-minExclusive-4-1",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-4/NISTXML-SV-IV-atomic-decimal-minExclusive-5-1",
-    REASONS.facetPrecision,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive/NISTXML-SV-IV-atomic-decimal-minExclusive-1-1",
-    REASONS.facetPrecision,
-  ],
-  [
     "NISTXMLSchemaDatatypes/atomic-decimal-pattern-2/NISTXML-SV-IV-atomic-decimal-pattern-3-4",
     REASONS.patternOnNonString,
   ],
@@ -244,6 +205,42 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   [
     "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-5",
     REASONS.patternOnNonString,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-2/NISTXML-SV-IV-atomic-decimal-maxExclusive-3-5",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-3/NISTXML-SV-IV-atomic-decimal-maxExclusive-4-5",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-4/NISTXML-SV-IV-atomic-decimal-maxExclusive-5-5",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-maxInclusive-3/NISTXML-SV-IV-atomic-decimal-maxInclusive-4-5",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-maxInclusive-4/NISTXML-SV-IV-atomic-decimal-maxInclusive-5-5",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-2/NISTXML-SV-IV-atomic-decimal-minExclusive-3-1",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive/NISTXML-SV-IV-atomic-decimal-minExclusive-1-1",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-minInclusive-1/NISTXML-SV-IV-atomic-decimal-minInclusive-2-1",
+    REASONS.valueSpaceRoundTrip,
+  ],
+  [
+    "NISTXMLSchemaDatatypes/atomic-decimal-minInclusive/NISTXML-SV-IV-atomic-decimal-minInclusive-1-1",
+    REASONS.valueSpaceRoundTrip,
   ],
   ["Particles/particlesA006/particlesA006.v", REASONS.libxmlRejectsSerialized],
   ["Particles/particlesA007/particlesA007.v", REASONS.libxmlRejectsSerialized],
