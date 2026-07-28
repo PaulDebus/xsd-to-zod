@@ -592,8 +592,8 @@ describe("xsd-to-zod v1 pipeline", () => {
       expect(ageType).toBeDefined();
       expect(ageType.baseType).toBe("{http://www.w3.org/2001/XMLSchema}integer");
       expect(ageType.facets).toEqual([
-        { kind: "minInclusive", value: 0 },
-        { kind: "maxInclusive", value: 150 },
+        { kind: "minInclusive", value: "0" },
+        { kind: "maxInclusive", value: "150" },
       ]);
 
       // Local element inside a complexType
@@ -617,7 +617,7 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       // The generated zod code uses the constraints
       const generated = irToZod(ir);
-      expect(generated.schemas).toContain("z.number().int().min(0).max(150)");
+      expect(generated.schemas).toContain("z.bigint().min(0n).max(150n)");
       expect(generated.schemas).toContain("z.string().max(20)");
       expect(generated.schemas).toContain('z.enum(["active", "inactive"])');
     });
@@ -649,8 +649,8 @@ describe("xsd-to-zod v1 pipeline", () => {
 
     expect(parsed.orderId).toBe("ORD-001");
     expect(parsed.lineItem).toEqual([
-      { productId: "P-100", quantity: 2 },
-      { productId: "P-200", quantity: 5 },
+      { productId: "P-100", quantity: 2n },
+      { productId: "P-200", quantity: 5n },
     ]);
 
     const serialized = serializeXml(orderSchema, parsed);
@@ -780,8 +780,8 @@ describe("xsd-to-zod v1 pipeline", () => {
 
         const qty = asRestriction(ir.simpleTypes["{urn:facets}Quantity"]);
         expect(qty.facets).toEqual([
-          { kind: "minInclusive", value: 1 },
-          { kind: "maxInclusive", value: 100 },
+          { kind: "minInclusive", value: "1" },
+          { kind: "maxInclusive", value: "100" },
         ]);
 
         const nameType = asRestriction(ir.simpleTypes["{urn:facets}NameType"]);
@@ -817,7 +817,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const QuantitySchema = z.number().int().min(1).max(100).register(xmlRegistry, { qname: "{urn:facets}Quantity" });',
+          'const QuantitySchema = z.bigint().min(1n).max(100n).register(xmlRegistry, { qname: "{urn:facets}Quantity" });',
         );
       });
     });
@@ -834,8 +834,10 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("imports the digit-check helpers from xsd-to-zod when digit facets are used", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
+        // totalDigits on the integer-based LargeInt is an inline bigint
+        // digit-count refine; only fractionDigits still needs the helper.
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits } from 'xsd-to-zod';",
+          "import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';",
         );
       });
     });
@@ -858,11 +860,11 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits totalDigits as an xsdTotalDigits refine", () => {
+    it("emits totalDigits as a digit-count refine on the bigint value", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const LargeIntSchema = z.number().int().refine(xsdTotalDigits(5), { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });',
+          'const LargeIntSchema = z.bigint().refine((val) => String(val < 0n ? -val : val).length <= 5, { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });',
         );
       });
     });
@@ -891,7 +893,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         fs.writeFileSync(file, NUM_ENUM_XSD);
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const PrioritySchema = z.union([z.literal(1), z.literal(2), z.literal(3)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });',
+          'const PrioritySchema = z.union([z.literal(1n), z.literal(2n), z.literal(3n)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });',
         );
       });
     });
@@ -968,11 +970,11 @@ describe("xsd-to-zod v1 pipeline", () => {
         const parsed = parseXml(facetsSchema, xml) as Record<string, unknown>;
         expect(parsed.country).toBe("DE");
         expect(parsed.status).toBe("active");
-        expect(parsed.qty).toBe(42);
+        expect(parsed.qty).toBe(42n);
         expect(parsed.price).toBe(19.99);
         expect(parsed.temp).toBe(25.5);
         expect(parsed.code).toBe("ADM");
-        expect(parsed.big).toBe(12345);
+        expect(parsed.big).toBe(12345n);
         expect(parsed.name).toBe("Alice");
         expect(parsed.token).toBe("hello");
 
@@ -1025,7 +1027,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       it.each([
         ["pattern", "country", "12", "must match pattern"],
         ["enumeration", "status", "bogus", "Invalid option: expected one of"],
-        ["minInclusive", "qty", "0", "Too small: expected number to be >=1"],
+        ["minInclusive", "qty", "0", "Too small: expected bigint to be >=1"],
         ["fractionDigits", "price", "19.999", "expected at most 2 fraction digits"],
         ["totalDigits", "big", "123456", "expected at most 5 total digits"],
         ["minLength", "name", "A", "Too small: expected string to have >=2 characters"],
@@ -1153,8 +1155,8 @@ describe("xsd-to-zod v1 pipeline", () => {
         mod.listContainerSchema as z.ZodType,
         `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 5 6</namedNumbers></listContainer>`,
       ) as Record<string, unknown>;
-      expect(parsed.inlineNumbers).toEqual([1, 2, 3]);
-      expect(parsed.namedNumbers).toEqual([4, 5, 6]);
+      expect(parsed.inlineNumbers).toEqual([1n, 2n, 3n]);
+      expect(parsed.namedNumbers).toEqual([4n, 5n, 6n]);
     });
 
     it("enforces facets from named list item simpleType via the zod checks", async () => {
@@ -1164,7 +1166,7 @@ describe("xsd-to-zod v1 pipeline", () => {
           mod.listContainerSchema as z.ZodType,
           `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 99 6</namedNumbers></listContainer>`,
         ),
-      ).toThrow("Too big: expected number to be <=10");
+      ).toThrow("Too big: expected bigint to be <=10");
     });
 
     it("coerces inline union members and falls through on member mismatch (#29)", async () => {
@@ -1175,7 +1177,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         unionContainerSchema,
         `<unionContainer xmlns="urn:listunion"><val>42</val></unionContainer>`,
       ) as Record<string, unknown>;
-      expect(numericParsed.val).toBe(42);
+      expect(numericParsed.val).toBe(42n);
 
       const stringParsed = parseXml(
         unionContainerSchema,

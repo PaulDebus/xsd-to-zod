@@ -102,8 +102,8 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
       );
       const mod = await generateAndImport([file]);
       const schema = Object.values(mod)[0] as import("zod").z.ZodType;
-      expect(schema.safeParse(12345).success).toBe(true);
-      expect(schema.safeParse(123).success).toBe(false);
+      expect(schema.safeParse(12345n).success).toBe(true);
+      expect(schema.safeParse(123n).success).toBe(false);
     });
   });
 });

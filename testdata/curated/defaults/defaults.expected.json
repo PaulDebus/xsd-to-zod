@@ -1,6 +1,8 @@
 {
   "item": "gadget",
-  "quantity": 2,
+  "quantity": {
+    "$bigint": "2"
+  },
   "@currency": "EUR",
   "@version": "1.0"
 }

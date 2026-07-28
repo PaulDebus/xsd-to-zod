@@ -1,4 +1,6 @@
 {
   "mainData": "hello",
-  "libData": 42
+  "libData": {
+    "$bigint": "42"
+  }
 }

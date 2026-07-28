@@ -1,4 +1,6 @@
 {
   "foo": "hello",
-  "bar": 99
+  "bar": {
+    "$bigint": "99"
+  }
 }
