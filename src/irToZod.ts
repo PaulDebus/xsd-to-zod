@@ -1,11 +1,11 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
 import type { ComplexTypeDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
-import { XSD_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
+import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
-const NUMBER_PRIMITIVES = new Set([...XSD_INTEGER_TYPE_NAMES, "decimal", "float", "double"]);
+const NUMBER_PRIMITIVES = new Set([...XSD_SAFE_INTEGER_TYPE_NAMES, "decimal", "float", "double"]);
 
 // Builtins whose lexical space the zod tier can check (xsdLexicals.ts has the
 // validators): builtin local name → exported validator function. QName,
@@ -35,9 +35,7 @@ const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["ENTITIES", "xsdNCNames"],
 ]);
 
-// Value-space bounds for the bounded integer builtins. long/unsignedLong are
-// absent: their bounds exceed Number.MAX_SAFE_INTEGER, so a min/max on the
-// coerced JS number would be unsound — they stay z.number().int().
+// Value-space bounds for the bounded integer builtins that fit a JS number.
 const XSD_INTEGER_BOUNDS: ReadonlyMap<string, { min?: number; max?: number }> = new Map([
   ["byte", { min: -128, max: 127 }],
   ["short", { min: -32768, max: 32767 }],
@@ -45,10 +43,18 @@ const XSD_INTEGER_BOUNDS: ReadonlyMap<string, { min?: number; max?: number }> = 
   ["unsignedByte", { min: 0, max: 255 }],
   ["unsignedShort", { min: 0, max: 65535 }],
   ["unsignedInt", { min: 0, max: 4294967295 }],
-  ["nonNegativeInteger", { min: 0 }],
-  ["nonPositiveInteger", { max: 0 }],
-  ["negativeInteger", { max: -1 }],
-  ["positiveInteger", { min: 1 }],
+]);
+
+// Bounds for the bigint-mapped builtins, as bigint literal source. The
+// long/unsignedLong 64-bit bounds exceed MAX_SAFE_INTEGER, so they can only be
+// expressed soundly as bigint literals.
+const XSD_BIGINT_BOUNDS: ReadonlyMap<string, { min?: string; max?: string }> = new Map([
+  ["long", { min: "-9223372036854775808n", max: "9223372036854775807n" }],
+  ["unsignedLong", { min: "0n", max: "18446744073709551615n" }],
+  ["nonNegativeInteger", { min: "0n" }],
+  ["nonPositiveInteger", { max: "0n" }],
+  ["negativeInteger", { max: "-1n" }],
+  ["positiveInteger", { min: "1n" }],
 ]);
 
 // Resolve a (possibly user-defined) simple type to its builtin base kind, so
@@ -57,12 +63,15 @@ const resolvePrimitiveKind = (
   typeName: QName,
   ir: XsdIr,
   seen?: Set<string>,
-): "number" | "boolean" | "string" => {
+): "number" | "bigint" | "boolean" | "string" => {
   const parts = trySplitClark(typeName);
   if (!parts) {
     return "string";
   }
   if (parts.ns === XSD_NS) {
+    if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
+      return "bigint";
+    }
     if (NUMBER_PRIMITIVES.has(parts.local)) {
       return "number";
     }
@@ -129,9 +138,21 @@ const primitiveToZod = (
     return definedTypes.has(typeName) && ref !== undefined ? ref : "z.unknown()";
   }
 
-  if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
+  if (XSD_SAFE_INTEGER_TYPE_NAMES.has(parts.local)) {
     const bounds = XSD_INTEGER_BOUNDS.get(parts.local);
     let expr = "z.number().int()";
+    if (bounds?.min !== undefined) {
+      expr += `.min(${bounds.min})`;
+    }
+    if (bounds?.max !== undefined) {
+      expr += `.max(${bounds.max})`;
+    }
+    return expr;
+  }
+
+  if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
+    const bounds = XSD_BIGINT_BOUNDS.get(parts.local);
+    let expr = "z.bigint()";
     if (bounds?.min !== undefined) {
       expr += `.min(${bounds.min})`;
     }
@@ -171,12 +192,26 @@ const primitiveToZod = (
 
 const isStringType = (zodExpr: string): boolean => zodExpr.startsWith("z.string()");
 const isNumberType = (zodExpr: string): boolean => zodExpr.startsWith("z.number()");
+const isBigIntType = (zodExpr: string): boolean => zodExpr.startsWith("z.bigint()");
 
 // fixed/default values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the field's (resolved) primitive kind (#68, #87).
-const typedLiteral = (kind: "number" | "boolean" | "string", raw: string): string => {
+const typedLiteral = (kind: "number" | "bigint" | "boolean" | "string", raw: string): string => {
   if (kind === "number") {
     return String(Number(raw));
+  }
+  if (kind === "bigint") {
+    const trimmed = raw.trim();
+    // Enumeration on a list-of-integers type: the facet value is a list
+    // lexical, so emit an array literal (one bigint per item).
+    if (/\s/.test(trimmed)) {
+      return `[${trimmed
+        .split(/\s+/)
+        .map((tok) => `${BigInt(tok)}n`)
+        .join(", ")}]`;
+    }
+    // BigInt() normalizes the lexical ('+5', '007') and rejects non-integers.
+    return `${BigInt(trimmed)}n`;
   }
   if (kind === "boolean") {
     return raw === "true" || raw === "1" ? "true" : "false";
@@ -206,7 +241,7 @@ const withFacets = (
   base: string,
   facets: Facet[],
   usage: FacetUsage,
-  kind: "number" | "boolean" | "string",
+  kind: "number" | "bigint" | "boolean" | "string",
   builtinLocal?: string,
 ): string => {
   if (!facets.length) {
@@ -222,7 +257,7 @@ const withFacets = (
   if (enumFacets.length > 0 && otherFacets.length === 0) {
     if (isStringType(base)) {
       result = `z.enum([${enumLiterals.join(", ")}])`;
-    } else if (isNumberType(base) || base === "z.boolean()") {
+    } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
       result = `z.union([${enumLiterals.map((lit) => `z.literal(${lit})`).join(", ")}])`;
     } else {
       // Base is a reference to another type's schema — keep it and constrain.
@@ -282,15 +317,26 @@ const withFacets = (
         case "minExclusive":
         case "maxExclusive": {
           if (isNumberType(result)) {
+            const bound = String(Number(facet.value));
             result +=
               facet.kind === "minInclusive"
-                ? `.min(${facet.value})`
+                ? `.min(${bound})`
                 : facet.kind === "maxInclusive"
-                  ? `.max(${facet.value})`
+                  ? `.max(${bound})`
                   : facet.kind === "minExclusive"
-                    ? `.gt(${facet.value})`
-                    : `.lt(${facet.value})`;
-          } else if (kind === "number") {
+                    ? `.gt(${bound})`
+                    : `.lt(${bound})`;
+          } else if (isBigIntType(result)) {
+            const bound = typedLiteral("bigint", facet.value);
+            result +=
+              facet.kind === "minInclusive"
+                ? `.min(${bound})`
+                : facet.kind === "maxInclusive"
+                  ? `.max(${bound})`
+                  : facet.kind === "minExclusive"
+                    ? `.gt(${bound})`
+                    : `.lt(${bound})`;
+          } else if (kind === "number" || kind === "bigint") {
             // Numeric user-type reference: compare via refine, which any
             // schema supports (#114).
             const op =
@@ -301,7 +347,9 @@ const withFacets = (
                   : facet.kind === "minExclusive"
                     ? ">"
                     : "<";
-            result += `.refine((val) => val ${op} ${facet.value}, { message: 'value out of range' })`;
+            const bound =
+              kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
+            result += `.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
           } else {
             // Order facets on non-numeric kinds (dates, durations) are
             // skipped: the coerced/string value cannot be compared soundly —
@@ -311,12 +359,23 @@ const withFacets = (
           break;
         }
         case "totalDigits":
-          usage.totalDigits = true;
-          result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
+          if (kind === "bigint") {
+            // BigInt's string form is canonical (no leading zeros), so the
+            // digit count of the absolute value is exact at any precision.
+            result += `.refine((val) => String(val < 0n ? -val : val).length <= ${facet.value}, { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
+          } else {
+            usage.totalDigits = true;
+            result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
+          }
           break;
         case "fractionDigits":
-          usage.fractionDigits = true;
-          result += `.refine(xsdFractionDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} fraction digits`)} })`;
+          if (kind === "bigint") {
+            // Vacuous for integers: the fraction digit count is always 0.
+            result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
+          } else {
+            usage.fractionDigits = true;
+            result += `.refine(xsdFractionDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} fraction digits`)} })`;
+          }
           break;
       }
     }
@@ -576,7 +635,10 @@ const tsTypeOfTypeName = (
     return "unknown";
   }
   if (parts.ns === XSD_NS) {
-    if (XSD_INTEGER_TYPE_NAMES.has(parts.local)) {
+    if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
+      return "bigint";
+    }
+    if (XSD_SAFE_INTEGER_TYPE_NAMES.has(parts.local)) {
       return "number";
     }
     switch (parts.local) {

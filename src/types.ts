@@ -28,10 +28,13 @@ export type Facet =
   | { kind: "length"; value: number }
   | { kind: "minLength"; value: number }
   | { kind: "maxLength"; value: number }
-  | { kind: "minInclusive"; value: number }
-  | { kind: "maxInclusive"; value: number }
-  | { kind: "minExclusive"; value: number }
-  | { kind: "maxExclusive"; value: number }
+  // Order facets keep the raw XSD lexical: the bound can exceed
+  // Number.MAX_SAFE_INTEGER, and codegen picks the JS representation
+  // (number vs bigint literal) per resolved base type.
+  | { kind: "minInclusive"; value: string }
+  | { kind: "maxInclusive"; value: string }
+  | { kind: "minExclusive"; value: string }
+  | { kind: "maxExclusive"; value: string }
   | { kind: "totalDigits"; value: number }
   | { kind: "fractionDigits"; value: number }
   | { kind: "whiteSpace"; value: "preserve" | "replace" | "collapse" };

@@ -321,6 +321,14 @@ const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
   return coerceNumberValue(trimmed);
 };
 
+const coerceBigInt = (raw: string): bigint => {
+  const trimmed = raw.trim();
+  if (!INTEGER_LEXICAL.test(trimmed)) {
+    throw new Error(`Invalid xs:integer lexical: ${JSON.stringify(trimmed)}`);
+  }
+  return BigInt(trimmed);
+};
+
 const coerceBoolean = (raw: string): boolean => {
   const trimmed = raw.trim();
   if (!BOOLEAN_LEXICALS.has(trimmed)) {
@@ -344,6 +352,8 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
   switch (def.type) {
     case "number":
       return coerceNumber(String(raw), def as z.core.$ZodNumberDef);
+    case "bigint":
+      return coerceBigInt(String(raw));
     case "boolean":
       return coerceBoolean(String(raw));
     case "string":
@@ -352,6 +362,9 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
       const value = (def as z.core.$ZodLiteralDef<z.core.util.Literal>).values[0];
       if (typeof value === "number") {
         return coerceNumberValue(String(raw).trim());
+      }
+      if (typeof value === "bigint") {
+        return coerceBigInt(String(raw));
       }
       if (typeof value === "boolean") {
         return coerceBoolean(String(raw));
