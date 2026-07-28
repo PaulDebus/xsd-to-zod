@@ -40,6 +40,9 @@ const asArray = <T>(value: T | T[] | undefined): T[] => {
   return Array.isArray(value) ? value : [value];
 };
 
+const optProp = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
+  value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
+
 const NUMBER_FACETS = new Set([
   "length",
   "minLength",
@@ -137,7 +140,7 @@ const parseSimpleTypeDef = (
       name: qname,
       kind: "list",
       itemType,
-      ...(description !== undefined && { description }),
+      ...optProp("description", description),
     };
   }
 
@@ -166,7 +169,7 @@ const parseSimpleTypeDef = (
       name: qname,
       kind: "union",
       memberTypes,
-      ...(description !== undefined && { description }),
+      ...optProp("description", description),
     };
   }
 
@@ -184,7 +187,7 @@ const parseSimpleTypeDef = (
     kind: "restriction",
     baseType,
     ...(facets.length > 0 ? { facets } : {}),
-    ...(description !== undefined && { description }),
+    ...optProp("description", description),
   };
 };
 
@@ -492,8 +495,8 @@ const buildRefField = (
   qname,
   typeName,
   nillable,
-  ...(choiceGroup !== undefined && { choiceGroup }),
-  ...(choiceBranch !== undefined && { choiceBranch }),
+  ...optProp("choiceGroup", choiceGroup),
+  ...optProp("choiceBranch", choiceBranch),
 });
 
 type CollectFieldsScope = {
@@ -555,7 +558,7 @@ const collectFields = (
             ),
             ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
             ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
-            ...(description !== undefined && { description }),
+            ...optProp("description", description),
           });
         } else {
           diagnostics.add(`unresolved element ref "${refQName}"`);
@@ -633,11 +636,11 @@ const collectFields = (
         ),
         typeName,
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
-        ...(choiceGroup !== undefined && { choiceGroup }),
-        ...(choiceBranch !== undefined && { choiceBranch }),
+        ...optProp("choiceGroup", choiceGroup),
+        ...optProp("choiceBranch", choiceBranch),
         ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
         ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
-        ...(description !== undefined && { description }),
+        ...optProp("description", description),
       });
       continue;
     }
@@ -666,7 +669,7 @@ const collectFields = (
           typeName: referenced?.typeName ?? toClark(XSD_NS, "string"),
           ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
           ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
-          ...(description !== undefined && { description }),
+          ...optProp("description", description),
         });
         continue;
       }
@@ -704,7 +707,7 @@ const collectFields = (
         typeName: attrTypeName,
         ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
         ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
-        ...(attrDescription !== undefined && { description: attrDescription }),
+        ...optProp("description", attrDescription),
       });
       continue;
     }
@@ -722,9 +725,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        ...(choiceGroup !== undefined && { choiceGroup }),
+        ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-        ...(choiceBranch !== undefined && { choiceBranch }),
+        ...optProp("choiceBranch", choiceBranch),
       });
       continue;
     }
@@ -782,9 +785,9 @@ const collectFields = (
             ownerNs: groupEntry.ownerNs,
             fields,
             wildcards,
-            ...(choiceGroup !== undefined && { choiceGroup }),
+            ...optProp("choiceGroup", choiceGroup),
             inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-            ...(choiceBranch !== undefined && { choiceBranch }),
+            ...optProp("choiceBranch", choiceBranch),
           },
         );
       } else {
@@ -812,9 +815,9 @@ const collectFields = (
             ownerNs: attrEntry.ownerNs,
             fields,
             wildcards,
-            ...(choiceGroup !== undefined && { choiceGroup }),
+            ...optProp("choiceGroup", choiceGroup),
             inheritedCardinality,
-            ...(choiceBranch !== undefined && { choiceBranch }),
+            ...optProp("choiceBranch", choiceBranch),
           },
         );
       } else {
@@ -870,9 +873,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        ...(choiceGroup !== undefined && { choiceGroup }),
+        ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality,
-        ...(choiceBranch !== undefined && { choiceBranch }),
+        ...optProp("choiceBranch", choiceBranch),
       });
       continue;
     }
@@ -889,9 +892,9 @@ const collectFields = (
         ownerNs,
         fields,
         wildcards,
-        ...(choiceGroup !== undefined && { choiceGroup }),
+        ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality,
-        ...(choiceBranch !== undefined && { choiceBranch }),
+        ...optProp("choiceBranch", choiceBranch),
       });
     }
   }
@@ -1071,7 +1074,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           if (!pending.has(depKey)) {
             pending.set(depKey, {
               file: resolved,
-              ...(ns !== undefined && { inheritedTargetNs: ns }),
+              ...optProp("inheritedTargetNs", ns),
             });
           }
         }
@@ -1246,7 +1249,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         const attrDescription = extractDocumentation(child);
         attributes[qname] = {
           typeName,
-          ...(attrDescription !== undefined && { description: attrDescription }),
+          ...optProp("description", attrDescription),
         };
       }
     }
@@ -1395,7 +1398,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         typeName,
         cardinality: parseCardinality(child),
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
-        ...(description !== undefined && { description }),
+        ...optProp("description", description),
         ...(child["@_default"] !== undefined && { defaultValue: String(child["@_default"]) }),
         ...(child["@_fixed"] !== undefined && { fixedValue: String(child["@_fixed"]) }),
       };
@@ -1433,8 +1436,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       complexTypes[qname] = {
         name: qname,
         fields,
-        ...(baseType !== undefined && { baseType }),
-        ...(description !== undefined && { description }),
+        ...optProp("baseType", baseType),
+        ...optProp("description", description),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
         ...(wildcards.length > 0 ? { wildcards } : {}),
       };
@@ -1481,10 +1484,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           complexTypes[override.qname] = {
             name: override.qname,
             fields: [...original.fields, ...fields],
-            ...(original.baseType !== undefined && { baseType: original.baseType }),
-            ...((description ?? original.description) !== undefined && {
-              description: description ?? original.description,
-            }),
+            ...optProp("baseType", original.baseType),
+            ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
           };
@@ -1492,8 +1493,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
           complexTypes[override.qname] = {
             name: override.qname,
             fields,
-            ...(effectiveBaseType !== undefined && { baseType: effectiveBaseType }),
-            ...(description !== undefined && { description }),
+            ...optProp("baseType", effectiveBaseType),
+            ...optProp("description", description),
             ...choiceGroupMeta,
             ...(wildcards.length > 0 ? { wildcards } : {}),
           };
@@ -1502,8 +1503,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         complexTypes[override.qname] = {
           name: override.qname,
           fields,
-          ...(effectiveBaseType !== undefined && { baseType: effectiveBaseType }),
-          ...(description !== undefined && { description }),
+          ...optProp("baseType", effectiveBaseType),
+          ...optProp("description", description),
           ...choiceGroupMeta,
           ...(wildcards.length > 0 ? { wildcards } : {}),
         };
@@ -1572,7 +1573,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     complexTypes[typeName] = {
       name: typeName,
       fields,
-      ...(baseType !== undefined && { baseType }),
+      ...optProp("baseType", baseType),
       ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
       ...(wildcards.length > 0 ? { wildcards } : {}),
     };
