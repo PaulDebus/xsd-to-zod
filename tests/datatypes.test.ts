@@ -260,9 +260,10 @@ describe("builtin lexical codegen", () => {
   </xs:element>
 </xs:schema>`);
     expect(code).toContain('"b": z.number().int().min(-128).max(127)');
-    expect(code).toContain('"n": z.number().int().min(0)');
-    // long bounds exceed MAX_SAFE_INTEGER — no unsound min/max on the coerced number.
-    expect(code).toContain('"l": z.number().int()}');
+    // Arbitrary-precision and 64-bit integers map to bigint; long's bounds
+    // exceed MAX_SAFE_INTEGER, so they are expressed as bigint literals.
+    expect(code).toContain('"n": z.bigint().min(0n)');
+    expect(code).toContain('"l": z.bigint().min(-9223372036854775808n).max(9223372036854775807n)');
   });
 
   it("keeps token/normalizedString/anyURI as plain strings (vacuous lexical space)", () => {
@@ -341,5 +342,87 @@ describe("parseXml lexical validation", () => {
     ]) {
       expect(safeParseXml(root, xml).success, `expected rejection: ${xml}`).toBe(false);
     }
+  });
+});
+
+describe("bigint integer types", () => {
+  const XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="i" type="xs:integer"/>
+        <xs:element name="l" type="xs:long"/>
+        <xs:element name="ul" type="xs:unsignedLong"/>
+        <xs:element name="n" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+  const importRoot = async (): Promise<z.ZodType> => {
+    let root: z.ZodType | undefined;
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD);
+      const mod = await generateAndImport([file]);
+      root = Object.values(mod).find(
+        (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
+      );
+    });
+    if (root === undefined) {
+      throw new Error("no root schema generated");
+    }
+    return root;
+  };
+
+  const doc = (i: string, l: string, ul: string, n: string) =>
+    `<root><i>${i}</i><l>${l}</l><ul>${ul}</ul><n>${n}</n></root>`;
+
+  it("parses values beyond MAX_SAFE_INTEGER without precision loss", async () => {
+    const root = await importRoot();
+    const parsed = parseXml(
+      root,
+      doc("123456789012345678901234567890", "9223372036854775807", "18446744073709551615", "42"),
+    ) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      i: 123456789012345678901234567890n,
+      l: 9223372036854775807n,
+      ul: 18446744073709551615n,
+      n: 42,
+    });
+    // Round-trip: the canonical lexical survives serialization intact.
+    const serialized = serializeXml(root, parsed);
+    expect(serialized).toContain("<i>123456789012345678901234567890</i>");
+    expect(parseXml(root, serialized)).toEqual(parsed);
+  });
+
+  it("enforces the 64-bit long/unsignedLong bounds exactly", async () => {
+    const root = await importRoot();
+    expect(
+      safeParseXml(root, doc("0", "-9223372036854775808", "0", "0")).success,
+      "long min is valid",
+    ).toBe(true);
+    for (const xml of [
+      doc("0", "9223372036854775808", "0", "0"),
+      doc("0", "-9223372036854775809", "0", "0"),
+      doc("0", "0", "18446744073709551616", "0"),
+      doc("0", "0", "-1", "0"),
+    ]) {
+      expect(safeParseXml(root, xml).success, `expected rejection: ${xml}`).toBe(false);
+    }
+  });
+
+  it("rejects non-integer lexicals for bigint types", async () => {
+    const root = await importRoot();
+    for (const bad of ["1.5", "1e3", "NaN", "INF", ""]) {
+      expect(safeParseXml(root, doc(bad, "0", "0", "0")).success, bad).toBe(false);
+    }
+  });
+
+  it("accepts signed lexicals and normalizes to the numeric value", async () => {
+    const root = await importRoot();
+    const parsed = parseXml(root, doc("+007", "-0", "0", "+5")) as Record<string, unknown>;
+    expect(parsed).toEqual({ i: 7n, l: 0n, ul: 0n, n: 5 });
   });
 });

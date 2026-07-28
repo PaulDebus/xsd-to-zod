@@ -47,13 +47,13 @@ const NUMBER_FACETS = new Set([
   "length",
   "minLength",
   "maxLength",
-  "minInclusive",
-  "maxInclusive",
-  "minExclusive",
-  "maxExclusive",
   "totalDigits",
   "fractionDigits",
 ]);
+
+// Order-facet values stay raw lexicals so bounds beyond MAX_SAFE_INTEGER keep
+// their precision into codegen (see Facet in types.ts).
+const LEXICAL_FACETS = new Set(["minInclusive", "maxInclusive", "minExclusive", "maxExclusive"]);
 
 const parseFacets = (restrictionNode: AnyNode): Facet[] => {
   const facets: Facet[] = [];
@@ -70,6 +70,14 @@ const parseFacets = (restrictionNode: AnyNode): Facet[] => {
         facets.push({
           kind: localTag as Facet["kind"],
           value: Number(val),
+        } as Facet);
+      }
+    } else if (LEXICAL_FACETS.has(localTag)) {
+      const val = child["@_value"];
+      if (val !== undefined) {
+        facets.push({
+          kind: localTag as Facet["kind"],
+          value: String(val).trim(),
         } as Facet);
       }
     } else if (localTag === "pattern") {
