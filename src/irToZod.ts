@@ -232,7 +232,7 @@ const toFieldKey = (field: IrField): string => {
 const withDescription = (expr: string, description: string | undefined): string =>
   description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
 
-type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
+type FacetUsage = { totalDigits: boolean; fractionDigits: boolean; decimalCompare: boolean };
 
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the resolved primitive kind — same rule as
@@ -250,11 +250,49 @@ const withFacets = (
 
   const enumFacets = facets.filter((f) => f.kind === "enumeration");
   const whiteSpace = facets.find((f) => f.kind === "whiteSpace");
-  const otherFacets = facets.filter((f) => f.kind !== "enumeration" && f.kind !== "whiteSpace");
   const enumLiterals = enumFacets.map((f) => typedLiteral(kind, f.value));
 
+  // Order facets on xs:decimal compare the original lexicals, not the coerced
+  // double: both the boundary and the instance value can carry more
+  // significant digits than a double holds (#136). The schema therefore
+  // validates the decimal lexical and its bounds as a string, then transforms
+  // to the JS number the runtime produces.
+  const ORDER_FACET_KINDS = new Set([
+    "minInclusive",
+    "maxInclusive",
+    "minExclusive",
+    "maxExclusive",
+  ]);
+  const decimalOrderFacets =
+    builtinLocal === "decimal" && kind === "number"
+      ? facets.filter((f) => ORDER_FACET_KINDS.has(f.kind))
+      : [];
+  const otherFacets = facets.filter(
+    (f) => f.kind !== "enumeration" && f.kind !== "whiteSpace" && !decimalOrderFacets.includes(f),
+  );
+
   let result = base;
-  if (enumFacets.length > 0 && otherFacets.length === 0) {
+  if (decimalOrderFacets.length > 0) {
+    usage.decimalCompare = true;
+    const DECIMAL_LEXICAL_SOURCE = "^[+-]?(\\d+(\\.\\d*)?|\\.\\d+)$";
+    const orderRefines = decimalOrderFacets.map((f) => {
+      const op =
+        f.kind === "minInclusive"
+          ? ">="
+          : f.kind === "maxInclusive"
+            ? "<="
+            : f.kind === "minExclusive"
+              ? ">"
+              : "<";
+      return `.refine((val) => xsdDecimalCompare(val, ${JSON.stringify(f.value)}) ${op} 0, { message: 'value out of range' })`;
+    });
+    result =
+      `z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, ` +
+      `z.string().regex(new RegExp(${JSON.stringify(DECIMAL_LEXICAL_SOURCE)}), { message: 'invalid xs:decimal lexical' })` +
+      `${orderRefines.join("")}.transform(Number))`;
+  }
+
+  if (enumFacets.length > 0 && otherFacets.length === 0 && decimalOrderFacets.length === 0) {
     if (isStringType(base)) {
       result = `z.enum([${enumLiterals.join(", ")}])`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
@@ -758,7 +796,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     ...Object.keys(ir.simpleTypes),
     ...Object.keys(ir.complexTypes),
   ]);
-  const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
+  const usage: FacetUsage = { totalDigits: false, fractionDigits: false, decimalCompare: false };
   const usedHelpers = new Set<string>();
 
   // Unique identifiers for the generated module, shared across value and type
@@ -918,6 +956,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const xsdImports = [
     usage.totalDigits ? "xsdTotalDigits" : undefined,
     usage.fractionDigits ? "xsdFractionDigits" : undefined,
+    usage.decimalCompare ? "xsdDecimalCompare" : undefined,
     ...[...usedHelpers].sort(),
   ].filter((name): name is string => name !== undefined);
   schemaLines[importLineIndex] =

@@ -34,6 +34,7 @@ export { xmlRegistry } from "./xmlMeta.js";
 export {
   countFractionDigits,
   countTotalDigits,
+  xsdDecimalCompare,
   xsdFractionDigits,
   xsdTotalDigits,
 } from "./xsdChecks.js";

@@ -426,3 +426,53 @@ describe("bigint integer types", () => {
     expect(parsed).toEqual({ i: 7n, l: 0n, ul: 0n, n: 5 });
   });
 });
+
+describe("decimal order-facet precision", () => {
+  // The boundary's significant digits exceed double precision: comparing in
+  // doubles would move the boundary to the rounded edge (#136).
+  const XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="v">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minExclusive value="999999999999999999.488264"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+  const importRoot = async (): Promise<z.ZodType> => {
+    let root: z.ZodType | undefined;
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD);
+      const mod = await generateAndImport([file]);
+      root = mod.rootSchema as z.ZodType;
+    });
+    if (root === undefined) {
+      throw new Error("no root schema generated");
+    }
+    return root;
+  };
+
+  it("compares the instance against the exact boundary, not the rounded one", async () => {
+    const root = await importRoot();
+    // Number("999999999999999999.488264") === 1e18, so a double comparison
+    // rejects both of these valid instances at the rounded edge.
+    for (const lexical of ["1000000000000000000", "1000000000000000000.000001"]) {
+      const result = safeParseXml(root, `<root><v>${lexical}</v></root>`);
+      expect(result.success, lexical).toBe(true);
+    }
+    // Below the true boundary: rejected exactly, even though the instance's
+    // own double coercion would round it onto the boundary's side.
+    expect(safeParseXml(root, "<root><v>999999999999999999</v></root>").success).toBe(false);
+    // xs:decimal lexicals have no exponent.
+    expect(safeParseXml(root, "<root><v>1e3</v></root>").success).toBe(false);
+  });
+});

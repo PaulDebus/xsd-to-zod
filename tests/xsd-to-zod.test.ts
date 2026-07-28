@@ -822,11 +822,11 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits fractionDigits refine + min for Price", () => {
+    it("emits fractionDigits refine + decimal-exact min for Price", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const PriceSchema = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).min(0).register(xmlRegistry, { qname: "{urn:facets}Price" });',
+          'const PriceSchema = z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, z.string().regex(new RegExp("^[+-]?(\\\\d+(\\\\.\\\\d*)?|\\\\.\\\\d+)$"), { message: \'invalid xs:decimal lexical\' }).refine((val) => xsdDecimalCompare(val, "0") >= 0, { message: \'value out of range\' }).transform(Number)).refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).register(xmlRegistry, { qname: "{urn:facets}Price" });',
         );
       });
     });
@@ -836,17 +836,18 @@ describe("xsd-to-zod v1 pipeline", () => {
         const generated = irToZod(parseXsd([file]));
         // totalDigits on the integer-based LargeInt is an inline bigint
         // digit-count refine; only fractionDigits still needs the helper.
+        // Decimal order facets compare exactly via xsdDecimalCompare (#136).
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';",
+          "import { xmlRegistry, xsdFractionDigits, xsdDecimalCompare } from 'xsd-to-zod';",
         );
       });
     });
 
-    it("emits gt/lt for Temperature", () => {
+    it("emits decimal-exact gt/lt refines for Temperature", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const TemperatureSchema = z.number().gt(-273.15).lt(10000).register(xmlRegistry, { qname: "{urn:facets}Temperature" });',
+          'const TemperatureSchema = z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, z.string().regex(new RegExp("^[+-]?(\\\\d+(\\\\.\\\\d*)?|\\\\.\\\\d+)$"), { message: \'invalid xs:decimal lexical\' }).refine((val) => xsdDecimalCompare(val, "-273.15") > 0, { message: \'value out of range\' }).refine((val) => xsdDecimalCompare(val, "10000") < 0, { message: \'value out of range\' }).transform(Number)).register(xmlRegistry, { qname: "{urn:facets}Temperature" });',
         );
       });
     });
