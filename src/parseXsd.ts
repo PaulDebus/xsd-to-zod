@@ -1,7 +1,7 @@
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
 import { Xsd2ZodError } from "./errors.js";
-import { splitQName, syntheticChildName, toClark } from "./qname.js";
+import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
 import { createOutputBuilder } from "./runtime.js";
 import type {
@@ -38,6 +38,14 @@ const asArray = <T>(value: T | T[] | undefined): T[] => {
     return [];
   }
   return Array.isArray(value) ? value : [value];
+};
+
+const sanitizeTsIdentifier = (name: string): string => {
+  let sanitized = name.replace(/[^a-zA-Z0-9_$]/g, "_");
+  if (/^\d/.test(sanitized)) {
+    sanitized = "_" + sanitized;
+  }
+  return sanitized || "_";
 };
 
 const optProp = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
@@ -220,6 +228,7 @@ type SyntheticTypeContext = {
   targetNs: string;
   counter: { value: number };
   simpleTypes: Record<string, SimpleTypeDef>;
+  complexTypes: Record<string, ComplexTypeDef>;
 };
 
 // Register an inline xs:simpleType under a synthetic name. nameHint (an
@@ -231,12 +240,25 @@ const synthesizeInlineSimpleType = (
   ctx: SyntheticTypeContext,
   nameHint: string | undefined,
   diagnostics: Set<string>,
+  descriptive = false,
 ): QName => {
-  const local =
-    nameHint === undefined
-      ? `anonymous_SimpleType${++ctx.counter.value}`
-      : `anonymous_${nameHint}_SimpleType`;
-  const syntheticName = toClark(ctx.targetNs, local);
+  let local: string;
+  if (nameHint === undefined) {
+    local = `anonymous_SimpleType${++ctx.counter.value}`;
+  } else if (descriptive) {
+    local = `${sanitizeTsIdentifier(nameHint)}_SimpleType`;
+  } else {
+    local = `anonymous_${sanitizeTsIdentifier(nameHint)}_SimpleType`;
+  }
+  let candidate = local;
+  let collisionIdx = 2;
+  while (
+    ctx.simpleTypes[toClark(ctx.targetNs, candidate)] ||
+    ctx.complexTypes[toClark(ctx.targetNs, candidate)]
+  ) {
+    candidate = `${local}_${collisionIdx++}`;
+  }
+  const syntheticName = toClark(ctx.targetNs, candidate);
   return resolveInlineSimpleType(inlineSimple, nsMap, ctx.simpleTypes, syntheticName, diagnostics);
 };
 
@@ -514,6 +536,7 @@ type CollectFieldsScope = {
   choiceGroup?: string;
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
+  parentTypeName?: string;
 };
 
 const collectFields = (
@@ -521,7 +544,7 @@ const collectFields = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): void => {
-  const { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch } = scope;
+  const { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch, parentTypeName } = scope;
   const {
     nsMap,
     formDefaults,
@@ -603,11 +626,22 @@ const collectFields = (
           ([key]) => getNodeTagLocalName(key) === "simpleType",
         )?.[1];
         if (inlineComplex) {
-          syntheticTypes.counter.value++;
-          const syntheticName = toClark(
-            syntheticTypes.targetNs,
-            `anonymous_Type${syntheticTypes.counter.value}`,
-          );
+          let local: string;
+          if (parentTypeName) {
+            local = `${sanitizeTsIdentifier(parentTypeName)}_${sanitizeTsIdentifier(name)}_Type`;
+          } else {
+            syntheticTypes.counter.value++;
+            local = `anonymous_Type${syntheticTypes.counter.value}`;
+          }
+          let candidate = local;
+          let collisionIdx = 2;
+          while (
+            complexTypes[toClark(syntheticTypes.targetNs, candidate)] ||
+            syntheticTypes.simpleTypes[toClark(syntheticTypes.targetNs, candidate)]
+          ) {
+            candidate = `${local}_${collisionIdx++}`;
+          }
+          const syntheticName = toClark(syntheticTypes.targetNs, candidate);
           complexTypes[syntheticName] = { name: syntheticName, fields: [] };
           deferredSyntheticTypes.push({
             typeName: syntheticName,
@@ -618,12 +652,16 @@ const collectFields = (
           });
           typeName = syntheticName;
         } else if (inlineSimple) {
+          const hint = parentTypeName
+            ? `${sanitizeTsIdentifier(parentTypeName)}_${sanitizeTsIdentifier(name)}`
+            : undefined;
           typeName = synthesizeInlineSimpleType(
             inlineSimple,
             nsMap,
             syntheticTypes,
-            undefined,
+            hint,
             diagnostics,
+            parentTypeName !== undefined,
           );
         } else {
           // An element with no type declaration is xs:anyType — open content.
@@ -690,12 +728,16 @@ const collectFields = (
           ([key]) => getNodeTagLocalName(key) === "simpleType",
         )?.[1];
         if (inlineSimple) {
+          const hint = parentTypeName
+            ? `${sanitizeTsIdentifier(parentTypeName)}_${sanitizeTsIdentifier(name)}`
+            : undefined;
           attrTypeName = synthesizeInlineSimpleType(
             inlineSimple,
             nsMap,
             syntheticTypes,
-            undefined,
+            hint,
             diagnostics,
+            parentTypeName !== undefined,
           );
         } else {
           attrTypeName = resolveTypeQName(undefined, nsMap, diagnostics);
@@ -736,6 +778,7 @@ const collectFields = (
         ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
         ...optProp("choiceBranch", choiceBranch),
+        ...optProp("parentTypeName", parentTypeName),
       });
       continue;
     }
@@ -769,6 +812,7 @@ const collectFields = (
           choiceGroup: groupId,
           inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
           choiceBranch: branchId,
+          ...optProp("parentTypeName", parentTypeName),
         });
       }
       continue;
@@ -796,6 +840,7 @@ const collectFields = (
             ...optProp("choiceGroup", choiceGroup),
             inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
             ...optProp("choiceBranch", choiceBranch),
+            parentTypeName: parentTypeName ?? clarkToLocal(refQName),
           },
         );
       } else {
@@ -826,6 +871,7 @@ const collectFields = (
             ...optProp("choiceGroup", choiceGroup),
             inheritedCardinality,
             ...optProp("choiceBranch", choiceBranch),
+            parentTypeName: parentTypeName ?? clarkToLocal(refQName),
           },
         );
       } else {
@@ -884,6 +930,7 @@ const collectFields = (
         ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality,
         ...optProp("choiceBranch", choiceBranch),
+        ...optProp("parentTypeName", parentTypeName),
       });
       continue;
     }
@@ -903,6 +950,7 @@ const collectFields = (
         ...optProp("choiceGroup", choiceGroup),
         inheritedCardinality,
         ...optProp("choiceBranch", choiceBranch),
+        ...optProp("parentTypeName", parentTypeName),
       });
     }
   }
@@ -995,7 +1043,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     choiceCounter,
     choiceGroupCardinality: new Map(),
     complexTypes,
-    syntheticTypes: { targetNs, counter: syntheticTypeCounter, simpleTypes },
+    syntheticTypes: { targetNs, counter: syntheticTypeCounter, simpleTypes, complexTypes },
     groups,
     attributeGroups,
     deferredSyntheticTypes,
@@ -1248,6 +1296,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
                   targetNs: effectiveNs,
                   counter: syntheticTypeCounter,
                   simpleTypes,
+                  complexTypes,
                 },
                 name,
                 unresolvedRefs,
@@ -1387,6 +1436,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
               targetNs: effectiveNs,
               counter: syntheticTypeCounter,
               simpleTypes,
+              complexTypes,
             },
             name,
             unresolvedRefs,
@@ -1437,6 +1487,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         fields,
         wildcards,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+        parentTypeName: clarkToLocal(qname),
       });
       const baseType = extractExtensionBase(child, resolveNsMap, unresolvedRefs);
       const description = extractDocumentation(child);
@@ -1463,6 +1514,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
         fields,
         wildcards,
         inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+        parentTypeName: clarkToLocal(override.qname),
       });
       const complexContent = nodeChildren(override.node).find(
         ([key]) => getNodeTagLocalName(key) === "complexContent",
@@ -1576,6 +1628,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       fields,
       wildcards,
       inheritedCardinality: { minOccurs: 1, maxOccurs: 1 },
+      parentTypeName: clarkToLocal(typeName),
     });
     const baseType = extractExtensionBase(container, nsMap, unresolvedRefs);
     complexTypes[typeName] = {
