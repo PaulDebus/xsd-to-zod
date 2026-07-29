@@ -725,6 +725,18 @@ const tsTypeOfTypeName = (
   return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen);
 };
 
+// Escape `*/` and format a description as a JSDoc block.
+// Single-line → `/** text */`, multi-line → `/**\n * line1\n * line2\n */`.
+const formatJsDoc = (text: string, indent = 0): string => {
+  const safe = text.replace(/\*\//g, "*\\/");
+  const spaces = " ".repeat(indent);
+  const lines = safe.split("\n");
+  if (lines.length === 1) {
+    return `${spaces}/** ${safe} */`;
+  }
+  return `${spaces}/**\n${lines.map((l) => `${spaces} * ${l}`).join("\n")}\n${spaces} */`;
+};
+
 // One interface property line for a field, mirroring withCardinality:
 // optionality from minOccurs/choice, [] from maxOccurs, null from nillable,
 // literal types for fixed values. Attribute defaults make the zod output
@@ -750,7 +762,11 @@ const tsFieldLine = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined;
   const optional = (field.minOccurs === 0 || forceOptional) && !hasAttributeDefault;
-  return `  ${JSON.stringify(toFieldKey(field))}${optional ? "?" : ""}: ${type};`;
+  const prop = `  ${JSON.stringify(toFieldKey(field))}${optional ? "?" : ""}: ${type};`;
+  if (!field.description) {
+    return prop;
+  }
+  return `${formatJsDoc(field.description, 2)}\n${prop}`;
 };
 
 /**
@@ -863,8 +879,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         complexType.wildcards && complexType.wildcards.length > 0
           ? "\n  [key: string]: unknown;"
           : "";
+      const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
       schemaLines.push(
-        `export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+        `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
       );
     }
   }

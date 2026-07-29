@@ -4,9 +4,12 @@ exports[`golden generated output (#84) > matches the golden output for annotatio
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';
+/** An invoice line item */
 export interface InvoiceType {
+  /** Line total */
   "amount": number;
   "note"?: string;
+  /** ISO 4217 currency code */
   "@currency": string;
 }
 const AmountTypeSchema = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).describe("Monetary amount with two fraction digits").register(xmlRegistry, { qname: "{urn:curated}AmountType" });
