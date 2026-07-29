@@ -1,6 +1,7 @@
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
 import { Xsd2ZodError } from "./errors.js";
+import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
 import { createOutputBuilder } from "./runtime.js";
@@ -40,13 +41,7 @@ const asArray = <T>(value: T | T[] | undefined): T[] => {
   return Array.isArray(value) ? value : [value];
 };
 
-const sanitizeTsIdentifier = (name: string): string => {
-  let sanitized = name.replace(/[^a-zA-Z0-9_$]/g, "_");
-  if (/^\d/.test(sanitized)) {
-    sanitized = "_" + sanitized;
-  }
-  return sanitized || "_";
-};
+const sanitizeTsIdentifier = sanitizeIdentifier;
 
 const optProp = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
   value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
