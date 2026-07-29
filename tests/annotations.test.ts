@@ -66,6 +66,27 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     });
   });
 
+  it("emits JSDoc comments on interfaces and their properties", () => {
+    const { schemas } = irToZod(parseXsd([FIXTURE]));
+
+    // Interface-level JSDoc from complexType description.
+    expect(schemas).toContain("/** An invoice line item */\nexport interface InvoiceType");
+    // Property-level JSDoc from field descriptions.
+    expect(schemas).toContain('  /** Line total */\n  "amount": number;');
+    expect(schemas).toContain('  /** ISO 4217 currency code */\n  "@currency": string;');
+  });
+
+  it("formats multi-line documentation as multi-line JSDoc", () => {
+    withTempDir((dir) => {
+      const file = path.join(dir, "refs.xsd");
+      fs.writeFileSync(file, REFS_XSD);
+      const { schemas } = irToZod(parseXsd([file]));
+      expect(schemas).toContain(
+        '  /**\n   * Line total\n   * Zeilensumme\n   */\n  "amount": number;',
+      );
+    });
+  });
+
   it("emits .describe() for types, elements, attributes and fields", () => {
     const { schemas } = irToZod(parseXsd([FIXTURE]));
 
