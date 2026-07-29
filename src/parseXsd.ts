@@ -539,7 +539,15 @@ const collectFields = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): void => {
-  const { ownerNs, fields, wildcards, choiceGroup, inheritedCardinality, choiceBranch, parentTypeName } = scope;
+  const {
+    ownerNs,
+    fields,
+    wildcards,
+    choiceGroup,
+    inheritedCardinality,
+    choiceBranch,
+    parentTypeName,
+  } = scope;
   const {
     nsMap,
     formDefaults,
@@ -1678,12 +1686,34 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     nextStack.add(typeName);
     return [...resolveMergedWildcards(type.baseType, nextStack), ...(type.wildcards ?? [])];
   };
+  // Choice group cardinality inherits down the extension chain, like fields.
+  const resolveMergedChoiceGroups = (
+    typeName: string,
+    stack: Set<string>,
+  ): Record<string, Cardinality> | undefined => {
+    const type = complexTypes[typeName];
+    if (!type) {
+      return undefined;
+    }
+    if (!type.baseType || !complexTypes[type.baseType] || stack.has(typeName)) {
+      return type.choiceGroups;
+    }
+    const nextStack = new Set(stack);
+    nextStack.add(typeName);
+    const baseGroups = resolveMergedChoiceGroups(type.baseType, nextStack);
+    if (baseGroups && type.choiceGroups) {
+      return { ...baseGroups, ...type.choiceGroups };
+    }
+    return type.choiceGroups ?? baseGroups;
+  };
 
   for (const [name, type] of Object.entries(complexTypes)) {
     const mergedWildcards = resolveMergedWildcards(name, new Set());
+    const mergedChoiceGroups = resolveMergedChoiceGroups(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
       fields: resolveMergedFields(name, new Set()),
+      ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
     };
   }
