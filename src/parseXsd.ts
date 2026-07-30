@@ -441,6 +441,60 @@ const expandRedefineSelfRefs = (
   return rebuild(structuredClone(node));
 };
 
+// A simple type may not take part in a derivation cycle: a union may not have
+// itself as a member and a restriction/list may not derive from itself, even
+// transitively. Such schemas are invalid XSD, and keeping the edge would make
+// codegen emit a const that references itself before initialization, crashing
+// at module load. Break every cycle with a diagnostic: drop the union member
+// that closes it, or — when the closing edge is a restriction base or a list
+// item type — drop the offending type; references to a dropped type fall back
+// to z.unknown() at codegen.
+const dropCircularSimpleTypeRefs = (
+  simpleTypes: Record<string, SimpleTypeDef>,
+  diagnostics: Set<string>,
+): void => {
+  const onStack = new Set<string>();
+  const done = new Set<string>();
+  const dropped = new Set<string>();
+  const visit = (name: string): void => {
+    if (done.has(name)) {
+      return;
+    }
+    const type = simpleTypes[name];
+    if (type === undefined) {
+      done.add(name);
+      return;
+    }
+    onStack.add(name);
+    if (type.kind === "union") {
+      type.memberTypes = type.memberTypes.filter((member) => {
+        if (onStack.has(member)) {
+          diagnostics.add(`circular union member "${member}" dropped from union "${name}"`);
+          return false;
+        }
+        visit(member);
+        return !dropped.has(member);
+      });
+    } else {
+      const dep = type.kind === "list" ? type.itemType : type.baseType;
+      if (onStack.has(dep)) {
+        diagnostics.add(
+          `circular ${type.kind} "${name}" dropped (derives from itself through "${dep}")`,
+        );
+        delete simpleTypes[name];
+        dropped.add(name);
+      } else {
+        visit(dep);
+      }
+    }
+    onStack.delete(name);
+    done.add(name);
+  };
+  for (const name of Object.keys(simpleTypes)) {
+    visit(name);
+  }
+};
+
 // Human-readable text from xs:annotation/xs:documentation children, emitted as
 // .describe() in the generated schemas (#25). A documentation node parses to a
 // plain string when it has no attributes, or an object with #text when it has
@@ -1717,6 +1771,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
     };
   }
+
+  dropCircularSimpleTypeRefs(simpleTypes, unresolvedRefs);
 
   return {
     targetNamespaces: [...targetNamespaces],
