@@ -49,7 +49,6 @@ const KNOWN_ANOMALIES = new Map<string, string>([
     "suntest/identitytestsuitetest001/test.2.n",
     "identity constraints unsupported — both tiers accept",
   ],
-  ["SimpleType/ste110/ste110.i", "circular union self-reference (codegen: undefined union member)"],
   [
     "Element/elemZ016/elemZ016.i",
     "both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)",
