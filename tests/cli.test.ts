@@ -222,7 +222,9 @@ describe("CLI e2e", () => {
       );
       const r = await runCli([xsdFile, "-o", dir]);
       expect(r.code).toBe(0);
-      expect(r.stderr).toContain('warning: unresolved element ref "{urn:test}missing"');
+      expect(r.stderr).toContain(
+        'warning: [unresolved-element-ref] unresolved element ref "{urn:test}missing"',
+      );
     });
   });
 
