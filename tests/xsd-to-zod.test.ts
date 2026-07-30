@@ -311,7 +311,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         [declares, uses],
       ]) {
         const ir = parseXsd(order);
-        expect(ir.unresolvedRefs).toEqual([]);
+        expect(ir.diagnostics).toEqual([]);
 
         const holder = ir.complexTypes["{urn:uses}Holder"];
         expect(holder).toBeDefined();
@@ -376,13 +376,33 @@ describe("xsd-to-zod v1 pipeline", () => {
         "{}weird",
       ]);
 
-      expect(ir.unresolvedRefs).toEqual(
+      expect(ir.diagnostics).toEqual(
         expect.arrayContaining([
-          'unresolved element ref "{urn:broken}missing"',
-          'unresolved group ref "{urn:broken}missingGroup"',
-          'unresolved attribute ref "{urn:broken}missingAttr"',
-          'unresolved attributeGroup ref "{urn:broken}missingAG"',
-          'unknown namespace prefix "zzz" in QName "zzz:thing"',
+          {
+            kind: "unresolved-element-ref",
+            message: 'unresolved element ref "{urn:broken}missing"',
+            ref: "{urn:broken}missing",
+          },
+          {
+            kind: "unresolved-group-ref",
+            message: 'unresolved group ref "{urn:broken}missingGroup"',
+            ref: "{urn:broken}missingGroup",
+          },
+          {
+            kind: "unresolved-attribute-ref",
+            message: 'unresolved attribute ref "{urn:broken}missingAttr"',
+            ref: "{urn:broken}missingAttr",
+          },
+          {
+            kind: "unresolved-attribute-group-ref",
+            message: 'unresolved attributeGroup ref "{urn:broken}missingAG"',
+            ref: "{urn:broken}missingAG",
+          },
+          {
+            kind: "unknown-namespace-prefix",
+            message: 'unknown namespace prefix "zzz" in QName "zzz:thing"',
+            ref: "zzz:thing",
+          },
         ]),
       );
     });

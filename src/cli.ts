@@ -27,9 +27,9 @@ const errorMessage = (e: unknown): string => {
   return e instanceof Error ? e.message : String(e);
 };
 
-const warnUnresolvedRefs = (ir: XsdIr): void => {
-  for (const ref of ir.unresolvedRefs) {
-    console.error(`warning: ${ref}`);
+const warnDiagnostics = (ir: XsdIr): void => {
+  for (const diagnostic of ir.diagnostics) {
+    console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}`);
   }
 };
 
@@ -267,7 +267,7 @@ const program = new Command()
     });
 
     if (!allowMissingImports) {
-      warnUnresolvedRefs(ir);
+      warnDiagnostics(ir);
     }
 
     const { schemas } = irToZod(ir);
@@ -322,7 +322,7 @@ program
     }
 
     const ir = parseXsd([xsdFile]);
-    warnUnresolvedRefs(ir);
+    warnDiagnostics(ir);
     const { schemas } = irToZod(ir, { js: true });
     const mod = await importGeneratedModule(schemas);
 

@@ -57,8 +57,12 @@ describe("circular simple-type references (#138)", () => {
   it("drops the circular union member with a diagnostic", async () => {
     await withTempDirAsync(async (dir) => {
       const ir = parseXsd([writeSchema(dir, MUTUAL_UNION_XSD)]);
-      expect(ir.unresolvedRefs).toEqual([
-        'circular union member "{}st" dropped from union "{}st2"',
+      expect(ir.diagnostics).toEqual([
+        {
+          kind: "circular-union-member",
+          message: 'circular union member "{}st" dropped from union "{}st2"',
+          ref: "{}st",
+        },
       ]);
       const st2 = ir.simpleTypes["{}st2"];
       expect(st2?.kind === "union" && st2.memberTypes).toEqual([]);
@@ -84,7 +88,13 @@ describe("circular simple-type references (#138)", () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, SELF_LOOP_XSD);
       const ir = parseXsd([file]);
-      expect(ir.unresolvedRefs).toEqual(['circular union member "{}st" dropped from union "{}st"']);
+      expect(ir.diagnostics).toEqual([
+        {
+          kind: "circular-union-member",
+          message: 'circular union member "{}st" dropped from union "{}st"',
+          ref: "{}st",
+        },
+      ]);
       // The emptied union rejects every value, but the module still loads.
       const mod = await generateAndImport([file]);
       const root = mod["rootSchema"] as import("zod").z.ZodType;
@@ -97,8 +107,12 @@ describe("circular simple-type references (#138)", () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, LIST_CYCLE_XSD);
       const ir = parseXsd([file]);
-      expect(ir.unresolvedRefs).toEqual([
-        'circular list "{}lst" dropped (derives from itself through "{}st")',
+      expect(ir.diagnostics).toEqual([
+        {
+          kind: "circular-derivation",
+          message: 'circular list "{}lst" dropped (derives from itself through "{}st")',
+          ref: "{}lst",
+        },
       ]);
       expect(ir.simpleTypes["{}lst"]).toBeUndefined();
       const st = ir.simpleTypes["{}st"];
@@ -115,8 +129,12 @@ describe("circular simple-type references (#138)", () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, RESTRICTION_CYCLE_XSD);
       const ir = parseXsd([file]);
-      expect(ir.unresolvedRefs).toEqual([
-        'circular restriction "{}r" dropped (derives from itself through "{}st")',
+      expect(ir.diagnostics).toEqual([
+        {
+          kind: "circular-derivation",
+          message: 'circular restriction "{}r" dropped (derives from itself through "{}st")',
+          ref: "{}r",
+        },
       ]);
       expect(ir.simpleTypes["{}r"]).toBeUndefined();
       const mod = await generateAndImport([file]);

@@ -21,6 +21,8 @@ export {
 export type {
   Cardinality,
   ComplexTypeDef,
+  Diagnostic,
+  DiagnosticKind,
   ElementDef,
   Facet,
   FieldKind,

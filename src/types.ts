@@ -75,10 +75,35 @@ export type ElementDef = {
   fixedValue?: string;
 };
 
+export type DiagnosticKind =
+  /** xs:import/xs:include/xs:redefine schemaLocation pointing at a remote URL — skipped, never read as a file. */
+  | "remote-schema-location"
+  /** A QName used a prefix not bound in the file's namespace map. */
+  | "unknown-namespace-prefix"
+  /** ref= pointing at a component that was never parsed (e.g. from an unresolvable import). */
+  | "unresolved-element-ref"
+  | "unresolved-attribute-ref"
+  | "unresolved-group-ref"
+  | "unresolved-attribute-group-ref"
+  /** xs:redefine of a component in terms of itself without an original definition. */
+  | "circular-redefinition"
+  /** Union member dropped because it closed a derivation cycle. */
+  | "circular-union-member"
+  /** Restriction/list type dropped because it derives from itself. */
+  | "circular-derivation";
+
+export type Diagnostic = {
+  kind: DiagnosticKind;
+  /** Human-readable description (what the old string-based unresolvedRefs carried). */
+  message: string;
+  /** The raw reference or location the diagnostic is about, when applicable. */
+  ref?: string;
+};
+
 export type XsdIr = {
   targetNamespaces: string[];
-  /** References and namespace prefixes that could not be resolved (fields are kept or skipped as before; this list makes the omissions visible). */
-  unresolvedRefs: string[];
+  /** References and locations that could not be resolved (fields are kept or skipped as before; this list makes the omissions visible). */
+  diagnostics: Diagnostic[];
   simpleTypes: Record<string, SimpleTypeDef>;
   complexTypes: Record<string, ComplexTypeDef>;
   elements: Record<string, ElementDef>;
