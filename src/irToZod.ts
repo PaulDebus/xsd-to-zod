@@ -466,91 +466,6 @@ const sortSimpleTypes = (ir: XsdIr): SimpleTypeDef[] => {
   return sorted;
 };
 
-// Find strongly-connected components (SCCs) in the directed graph formed by
-// union memberTypes references. Cycles through this graph cause the generated
-// module to reference an undefined const at load time (#138).
-const findUnionSccs = (ir: XsdIr): Set<QName>[] => {
-  const index = new Map<QName, number>();
-  const lowlink = new Map<QName, number>();
-  const onStack = new Set<QName>();
-  const stack: QName[] = [];
-  const sccs: Set<QName>[] = [];
-  let idx = 0;
-
-  const strongconnect = (name: QName): void => {
-    index.set(name, idx);
-    lowlink.set(name, idx);
-    idx++;
-    stack.push(name);
-    onStack.add(name);
-
-    const type = ir.simpleTypes[name];
-    if (type?.kind === "union") {
-      for (const mt of type.memberTypes) {
-        const mtType = ir.simpleTypes[mt];
-        if (mtType?.kind !== "union") continue;
-        if (!index.has(mt)) {
-          strongconnect(mt);
-          lowlink.set(name, Math.min(lowlink.get(name)!, lowlink.get(mt)!));
-        } else if (onStack.has(mt)) {
-          lowlink.set(name, Math.min(lowlink.get(name)!, index.get(mt)!));
-        }
-      }
-    }
-
-    if (lowlink.get(name) === index.get(name)) {
-      const scc = new Set<QName>();
-      while (true) {
-        const w = stack.pop()!;
-        onStack.delete(w);
-        scc.add(w);
-        if (w === name) break;
-      }
-      // Only keep SCCs that contain a cycle (size > 1 or self-loop)
-      const selfLoop =
-        scc.size === 1 && ir.simpleTypes[name]?.kind === "union" &&
-        ir.simpleTypes[name]!.memberTypes.includes(name);
-      if (scc.size > 1 || selfLoop) {
-        sccs.push(scc);
-      }
-    }
-  };
-
-  for (const type of Object.values(ir.simpleTypes)) {
-    if (type.kind === "union" && !index.has(type.name)) {
-      strongconnect(type.name);
-    }
-  }
-
-  return sccs;
-};
-
-// For an SCC of union types, compute the set of member types that are OUTSIDE
-// the SCC (the "exit members"). These are the leaf types whose schemas can be
-// emitted without creating a circular reference.
-const sccExitMembers = (ir: XsdIr, scc: Set<QName>): QName[] => {
-  const exits = new Set<QName>();
-  const visited = new Set<QName>();
-  const dfs = (name: QName): void => {
-    if (visited.has(name)) return;
-    visited.add(name);
-    const type = ir.simpleTypes[name];
-    if (type?.kind === "union") {
-      for (const mt of type.memberTypes) {
-        if (scc.has(mt)) {
-          dfs(mt);
-        } else {
-          exits.add(mt);
-        }
-      }
-    }
-  };
-  for (const name of scc) {
-    dfs(name);
-  }
-  return [...exits];
-};
-
 const withCardinality = (
   schema: string,
   field: IrField,
@@ -971,14 +886,6 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     }
   }
 
-  const unionSccs = findUnionSccs(ir);
-  const sccFor = new Map<QName, Set<QName>>();
-  for (const scc of unionSccs) {
-    for (const name of scc) {
-      sccFor.set(name, scc);
-    }
-  }
-
   for (const simpleType of sortedSimpleTypes) {
     claimTypeName(simpleType.name);
     let expr: string;
@@ -986,12 +893,10 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, constName, usedHelpers);
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
-      const scc = sccFor.get(simpleType.name);
-      const members = scc !== undefined ? sccExitMembers(ir, scc) : simpleType.memberTypes;
-      const memberExprs = members.map((mt) =>
+      const memberExprs = simpleType.memberTypes.map((mt) =>
         primitiveToZod(mt, definedTypes, constName, usedHelpers),
       );
-      expr = members.length > 0 ? `z.union([${memberExprs.join(", ")}])` : `z.never()`;
+      expr = `z.union([${memberExprs.join(", ")}])`;
     } else {
       const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, constName, usedHelpers);
       expr = simpleType.facets
