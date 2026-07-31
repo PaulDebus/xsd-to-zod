@@ -970,8 +970,15 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         `fixedValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.fixedValue)}`,
       );
     }
+    // JSDoc on the export so IDE hover shows the docs: the element's own
+    // annotation wins, otherwise fall back to the annotated type.
+    const description =
+      rootDef.description ??
+      ir.complexTypes[rootDef.typeName]?.description ??
+      ir.simpleTypes[rootDef.typeName]?.description;
+    const jsDoc = description ? `${formatJsDoc(description, 0)}\n` : "";
     schemaLines.push(
-      `export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, rootMeta.join(", "))};`,
+      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, rootMeta.join(", "))};`,
     );
   }
 

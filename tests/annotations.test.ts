@@ -74,6 +74,26 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     // Property-level JSDoc from field descriptions.
     expect(schemas).toContain('  /** Line total */\n  "amount": number;');
     expect(schemas).toContain('  /** ISO 4217 currency code */\n  "@currency": string;');
+    // Exported root const JSDoc from the element description.
+    expect(schemas).toContain("/** Root invoice element */\nexport const invoiceSchema");
+  });
+
+  it("falls back to the type description for root const JSDoc", () => {
+    withTempDir((dir) => {
+      const file = path.join(dir, "root-fallback.xsd");
+      fs.writeFileSync(
+        file,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:annotation><xs:documentation>Type docs</xs:documentation></xs:annotation>
+    <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:element name="Root" type="T"/>
+</xs:schema>`,
+      );
+      const { schemas } = irToZod(parseXsd([file]));
+      expect(schemas).toContain("/** Type docs */\nexport const RootSchema");
+    });
   });
 
   it("formats multi-line documentation as multi-line JSDoc", () => {
