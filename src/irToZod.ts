@@ -762,6 +762,11 @@ const tsFieldLine = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined;
   const optional = (field.minOccurs === 0 || forceOptional) && !hasAttributeDefault;
+  // `.optional()` yields `T | undefined` at runtime; the interface must say so
+  // too or `z.ZodType<Iface>` assignments fail under exactOptionalPropertyTypes.
+  if (optional) {
+    type += " | undefined";
+  }
   const prop = `  ${JSON.stringify(toFieldKey(field))}${optional ? "?" : ""}: ${type};`;
   if (!field.description) {
     return prop;
