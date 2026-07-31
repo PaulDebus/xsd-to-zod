@@ -61,7 +61,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["CType/basetd00101m1/Positive", REASONS.simpleContentShape],
   ["CType/basetd00101m2/Positive", REASONS.simpleContentShape],
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
-  ["DataTypes/anyURI_a002_1337/anyURI_a002_1337.v", REASONS.fileResolution],
   ["DataTypes/boolean018_1874/boolean018_1874.v", REASONS.needsTriage],
   ["DataTypes/byte_pattern001_1682/byte_pattern001_1682.v", REASONS.patternOnNonString],
   [
@@ -281,8 +280,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Particles/particlesZ005/particlesZ005.v", REASONS.needsTriage],
   ["Particles/particlesZ012/particlesZ012.v", REASONS.needsTriage],
   ["Particles/particlesZ034_a1/particlesZ034_a1.v", REASONS.libxmlRejectsSerialized],
-  ["Schema/schD7/schD7.v", REASONS.fileResolution],
-  ["Schema/schG8/schG8.v", REASONS.fileResolution],
   ["SimpleType/stE050/stE050.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE055/stE055.v", REASONS.needsTriage],
   ["SimpleType/stE065/stE065.v", REASONS.libxmlRejectsSerialized],
