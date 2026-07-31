@@ -13,7 +13,7 @@ const localName = (field: IrField): string => field.qname.split("}").pop() ?? fi
 describe("issue #94: circular simpleContent bases", () => {
   it("chain-walk terminates on redefine of circular simpleContent types", () => {
     const ir = parseXsd([path.join(FIXTURES, "cycle-redefine.xsd")]);
-    const typeA = ir.complexTypes["{urn:cycle}A" as QName];
+    const typeA = ir.complexTypes["{urn:cycle}A" as QName]!;
     expect(typeA).toBeDefined();
     const attrs = new Set(typeA.fields.filter((f) => f.kind === "attribute").map(localName));
     expect(attrs).toEqual(new Set(["a1", "b1", "a2"]));
@@ -23,7 +23,7 @@ describe("issue #94: circular simpleContent bases", () => {
 
 describe("issue #94: cross-file group/attributeGroup refs", () => {
   const ir = parseXsd([path.join(FIXTURES, "group-main.xsd")]);
-  const main = ir.complexTypes["{urn:main}Main" as QName];
+  const main = ir.complexTypes["{urn:main}Main" as QName]!;
 
   it("member type QNames resolve with the defining file’s nsMap", () => {
     const amount = main.fields.find((f) => f.kind === "element" && localName(f) === "amount");
@@ -40,7 +40,7 @@ describe("issue #94: cross-file group/attributeGroup refs", () => {
 
 describe("issue #94: unprefixed type refs vs default xmlns", () => {
   const ir = parseXsd([path.join(FIXTURES, "default-ns.xsd")]);
-  const main = ir.complexTypes["{urn:dns}Main" as QName];
+  const main = ir.complexTypes["{urn:dns}Main" as QName]!;
 
   it("unprefixed local element type resolves to the declared default namespace", () => {
     const qty = main.fields.find((f) => localName(f) === "qty");
@@ -54,7 +54,7 @@ describe("issue #94: unprefixed type refs vs default xmlns", () => {
   it("unprefixed inline simpleType restriction base resolves to the declared default namespace", () => {
     const code = main.fields.find((f) => localName(f) === "code");
     expect(code).toBeDefined();
-    const synthetic = ir.simpleTypes[code?.typeName];
+    const synthetic = ir.simpleTypes[code!.typeName];
     expect(synthetic).toBeDefined();
     expect(asRestriction(synthetic!).baseType).toBe(`{${XSD_NS}}int`);
   });

@@ -452,8 +452,8 @@ describe("decimal order-facet precision", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
-      const mod = await generateAndImport([file]);
-      root = mod.rootSchema as z.ZodType;
+      const { rootSchema } = await generateAndImport([file]);
+      root = rootSchema as z.ZodType;
     });
     if (root === undefined) {
       throw new Error("no root schema generated");

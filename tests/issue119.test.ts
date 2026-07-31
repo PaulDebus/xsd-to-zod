@@ -63,7 +63,7 @@ const parse = (): ReturnType<typeof parseXsd> => {
 describe("xs:redefine self-references", () => {
   it("attributeGroup self-ref expands the original instead of overflowing the stack", () => {
     const ir = parse();
-    const doc = ir.complexTypes[ir.elements["{}doc"].typeName];
+    const doc = ir.complexTypes[ir.elements["{}doc"]!.typeName]!;
     const attrNames = doc.fields.filter((f) => f.kind === "attribute").map((f) => f.qname);
     expect(attrNames).toContain("{}attFix");
     expect(attrNames).toContain("{}foo");
@@ -71,7 +71,7 @@ describe("xs:redefine self-references", () => {
 
   it("group self-ref expands the original members", () => {
     const ir = parse();
-    const doc = ir.complexTypes[ir.elements["{}doc"].typeName];
+    const doc = ir.complexTypes[ir.elements["{}doc"]!.typeName]!;
     const elemNames = doc.fields.filter((f) => f.kind === "element").map((f) => f.qname);
     expect(elemNames).toContain("{}orig");
     expect(elemNames).toContain("{}added");
@@ -79,7 +79,7 @@ describe("xs:redefine self-references", () => {
 
   it("simpleType self-base restriction derives from the preserved original", () => {
     const ir = parse();
-    const yn = ir.simpleTypes["{}yn"];
+    const yn = ir.simpleTypes["{}yn"]!;
     expect(yn.kind).toBe("restriction");
     if (yn.kind !== "restriction") {
       throw new Error("expected restriction");

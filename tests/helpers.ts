@@ -121,6 +121,9 @@ export function extractRootInfo(xml: string): RootInfo {
     throw new Error("Cannot find root element in XML");
   }
   const [, qname, attrText] = match;
+  if (qname === undefined || attrText === undefined) {
+    throw new Error("Cannot find root element in XML");
+  }
   const colonIdx = qname.indexOf(":");
   const prefix = colonIdx >= 0 ? qname.slice(0, colonIdx) : "";
   const local = colonIdx >= 0 ? qname.slice(colonIdx + 1) : qname;
