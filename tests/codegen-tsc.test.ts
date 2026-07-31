@@ -16,42 +16,47 @@ import { discoverCuratedCases } from "./helpers.js";
 describe("generated code typechecks", () => {
   const cases = discoverCuratedCases();
 
-  it(`tsc --noEmit passes for all ${cases.length} curated cases`, () => {
-    const baseDir = path.resolve(".xsd-to-zod-tests");
-    fs.mkdirSync(baseDir, { recursive: true });
-    const dir = fs.mkdtempSync(path.join(baseDir, "tsc-smoke-"));
-    try {
-      const files: string[] = [];
-      for (const c of cases) {
-        const { schemas } = irToZod(parseXsd(c.xsdFiles));
-        const file = path.join(dir, `${c.name.replaceAll("/", "--")}.zod.ts`);
-        fs.writeFileSync(file, schemas);
-        files.push(file);
+  it.each([{ extraFlags: [] }, { extraFlags: ["--exactOptionalPropertyTypes"] }])(
+    `tsc --noEmit $extraFlags passes for all ${cases.length} curated cases`,
+    ({ extraFlags }) => {
+      const baseDir = path.resolve(".xsd-to-zod-tests");
+      fs.mkdirSync(baseDir, { recursive: true });
+      const dir = fs.mkdtempSync(path.join(baseDir, "tsc-smoke-"));
+      try {
+        const files: string[] = [];
+        for (const c of cases) {
+          const { schemas } = irToZod(parseXsd(c.xsdFiles));
+          const file = path.join(dir, `${c.name.replaceAll("/", "--")}.zod.ts`);
+          fs.writeFileSync(file, schemas);
+          files.push(file);
+        }
+
+        const tsc = path.resolve("node_modules/.bin/tsc");
+        const result = spawnSync(
+          tsc,
+          [
+            "--noEmit",
+            "--ignoreConfig",
+            "--strict",
+            "--skipLibCheck",
+            "--target",
+            "es2022",
+            "--module",
+            "nodenext",
+            "--moduleResolution",
+            "nodenext",
+            ...extraFlags,
+            ...files,
+          ],
+          { encoding: "utf8" },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
       }
-
-      const tsc = path.resolve("node_modules/.bin/tsc");
-      const result = spawnSync(
-        tsc,
-        [
-          "--noEmit",
-          "--ignoreConfig",
-          "--strict",
-          "--skipLibCheck",
-          "--target",
-          "es2022",
-          "--module",
-          "nodenext",
-          "--moduleResolution",
-          "nodenext",
-          ...files,
-        ],
-        { encoding: "utf8" },
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }, 120_000);
+    },
+    120_000,
+  );
 });

@@ -8,7 +8,7 @@ import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';
 export interface InvoiceType {
   /** Line total */
   "amount": number;
-  "note"?: string;
+  "note"?: string | undefined;
   /** ISO 4217 currency code */
   "@currency": string;
 }
@@ -24,8 +24,8 @@ import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface ProductType {
   "@id": string;
-  "@color"?: string;
-  "@size"?: bigint;
+  "@color"?: string | undefined;
+  "@size"?: bigint | undefined;
 }
 export interface AddressType {
   "street": string;
@@ -57,13 +57,13 @@ import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface ConfigType {
   "host": string;
-  "port"?: bigint[];
-  "timeout"?: bigint;
+  "port"?: bigint[] | undefined;
+  "timeout"?: bigint | undefined;
 }
 export interface OptionalType {
   "name": string;
-  "nickname"?: string;
-  "age"?: bigint;
+  "nickname"?: string | undefined;
+  "age"?: bigint | undefined;
 }
 export interface RequiredType {
   "mustExist": string;
@@ -109,12 +109,12 @@ exports[`golden generated output (#84) > matches the golden output for content-m
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface anonymous_OptionalBag_Type {
-  "A"?: string[];
-  "B"?: string[];
+  "A"?: string[] | undefined;
+  "B"?: string[] | undefined;
 }
 export interface anonymous_Bag_Type {
-  "A"?: string[];
-  "B"?: string[];
+  "A"?: string[] | undefined;
+  "B"?: string[] | undefined;
 }
 export interface AllType {
   "a": string;
@@ -122,8 +122,8 @@ export interface AllType {
   "c": string;
 }
 export interface ContactType {
-  "email"?: string;
-  "phone"?: string;
+  "email"?: string | undefined;
+  "phone"?: string | undefined;
 }
 export interface LineItemType {
   "productId": string;
@@ -170,11 +170,11 @@ import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface PersonType {
   "name": string;
-  "manager"?: PersonType;
+  "manager"?: PersonType | undefined;
 }
 export interface TeamType {
   "lead": PersonType;
-  "members"?: PersonType[];
+  "members"?: PersonType[] | undefined;
 }
 const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({"name": z.string(), "manager": PersonTypeSchema.optional()})).register(xmlRegistry, { qname: "{urn:curated}PersonType", fields: { "name": { kind: "element", qname: "{urn:curated}name" }, "manager": { kind: "element", qname: "{urn:curated}manager" } } });
 const TeamTypeSchema: z.ZodType<TeamType> = z.lazy(() => z.object({"lead": PersonTypeSchema, "members": z.array(PersonTypeSchema).optional()})).register(xmlRegistry, { qname: "{urn:curated}TeamType", fields: { "lead": { kind: "element", qname: "{urn:curated}lead" }, "members": { kind: "element", qname: "{urn:curated}members" } } });
@@ -191,7 +191,7 @@ export interface OrderType {
   "item": string;
   "quantity": bigint;
   "@currency": string;
-  "@version"?: "1.0";
+  "@version"?: "1.0" | undefined;
 }
 const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({"item": z.string(), "quantity": z.bigint(), "@currency": z.string().optional().default("EUR"), "@version": z.literal("1.0").optional()})).register(xmlRegistry, { qname: "{urn:defaults}OrderType", fields: { "item": { kind: "element", qname: "{urn:defaults}item" }, "quantity": { kind: "element", qname: "{urn:defaults}quantity", defaultValue: 1n }, "@currency": { kind: "attribute", qname: "{}currency" }, "@version": { kind: "attribute", qname: "{}version" } } });
 export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, { root: "{urn:defaults}order" });
@@ -204,8 +204,8 @@ import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface DocType {
   "title": string;
-  "body"?: string;
-  "@label"?: string;
+  "body"?: string | undefined;
+  "@label"?: string | undefined;
 }
 const DocTypeSchema: z.ZodType<DocType> = z.lazy(() => z.object({"title": z.string(), "body": z.string().optional(), "@label": z.string().optional()})).register(xmlRegistry, { qname: "{urn:curated}DocType", fields: { "title": { kind: "element", qname: "{urn:curated}title" }, "body": { kind: "element", qname: "{urn:curated}body" }, "@label": { kind: "attribute", qname: "{}label" } } });
 export const docSchema = z.lazy(() => DocTypeSchema).register(xmlRegistry, { root: "{urn:curated}doc" });
@@ -218,7 +218,7 @@ import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 export interface CType {
   "_text": string;
-  "@lang"?: string;
+  "@lang"?: string | undefined;
 }
 export interface AType {
   "aField": string;
