@@ -14,6 +14,7 @@ export interface InvoiceType {
 }
 const AmountTypeSchema = z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).describe("Monetary amount with two fraction digits").register(xmlRegistry, { qname: "{urn:curated}AmountType" });
 const InvoiceTypeSchema: z.ZodType<InvoiceType> = z.lazy(() => z.object({"amount": AmountTypeSchema.describe("Line total"), "note": z.string().optional(), "@currency": z.string().describe("ISO 4217 currency code")})).describe("An invoice line item").register(xmlRegistry, { qname: "{urn:curated}InvoiceType", fields: { "amount": { kind: "element", qname: "{urn:curated}amount" }, "note": { kind: "element", qname: "{urn:curated}note" }, "@currency": { kind: "attribute", qname: "{}currency" } } });
+/** Root invoice element */
 export const invoiceSchema = z.lazy(() => InvoiceTypeSchema).describe("Root invoice element").register(xmlRegistry, { root: "{urn:curated}invoice" });
 "
 `;
