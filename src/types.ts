@@ -78,6 +78,8 @@ export type ElementDef = {
 export type DiagnosticKind =
   /** xs:import/xs:include/xs:redefine schemaLocation pointing at a remote URL — skipped, never read as a file. */
   | "remote-schema-location"
+  /** xs:import/xs:include/xs:redefine schemaLocation pointing at a local file that could not be read — skipped. */
+  | "unresolved-import"
   /** A QName used a prefix not bound in the file's namespace map. */
   | "unknown-namespace-prefix"
   /** ref= pointing at a component that was never parsed (e.g. from an unresolvable import). */
