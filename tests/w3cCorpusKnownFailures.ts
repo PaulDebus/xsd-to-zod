@@ -83,10 +83,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/DataTypes_w3c.xml/QName_enumeration004_1371/QName_enumeration004_1371.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  [
-    "msMeta/DataTypes_w3c.xml/anyURI_a002_1337/anyURI_a002_1337.v",
-    W3C_CORPUS_REASONS.fileResolution,
-  ],
   ["msMeta/DataTypes_w3c.xml/boolean018_1874/boolean018_1874.v", W3C_CORPUS_REASONS.needsTriage],
   [
     "msMeta/DataTypes_w3c.xml/byte_pattern001_1682/byte_pattern001_1682.v",
@@ -717,8 +713,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Regex_w3c.xml/reZ005v/reZ005v.v", W3C_CORPUS_REASONS.patternOnNonString],
   ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.patternOnNonString],
   ["msMeta/Regex_w3c.xml/reZ006v/reZ006v.v", W3C_CORPUS_REASONS.patternOnNonString],
-  ["msMeta/Schema_w3c.xml/schD7/schD7.v", W3C_CORPUS_REASONS.fileResolution],
-  ["msMeta/Schema_w3c.xml/schG8/schG8.v", W3C_CORPUS_REASONS.fileResolution],
   ["msMeta/SimpleType_w3c.xml/stE050/stE050.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE055/stE055.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/SimpleType_w3c.xml/stE065/stE065.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
