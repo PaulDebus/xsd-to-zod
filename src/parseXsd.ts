@@ -595,6 +595,10 @@ type FieldCollectionContext = {
   attributes: Record<string, GlobalAttributeDecl>;
   diagnostics: Diagnostic[];
   allowMissingImports: boolean;
+  /** Tracks group refs currently being expanded to prevent infinite recursion. */
+  groupStack: Set<string>;
+  /** Tracks attributeGroup refs currently being expanded to prevent infinite recursion. */
+  attrGroupStack: Set<string>;
 };
 
 // Shared shape for ref-based element fields.  The resolved-ref and
@@ -930,8 +934,12 @@ const collectFields = (
         continue;
       }
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
+      if (ctx.groupStack.has(refQName)) {
+        continue;
+      }
       const groupEntry = groups[refQName];
       if (groupEntry) {
+        ctx.groupStack.add(refQName);
         collectFields(
           groupEntry.node,
           {
@@ -949,6 +957,7 @@ const collectFields = (
             parentTypeName: parentTypeName ?? clarkToLocal(refQName),
           },
         );
+        ctx.groupStack.delete(refQName);
       } else {
         report(diagnostics, "unresolved-group-ref", `unresolved group ref "${refQName}"`, refQName);
       }
@@ -961,8 +970,12 @@ const collectFields = (
         continue;
       }
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
+      if (ctx.attrGroupStack.has(refQName)) {
+        continue;
+      }
       const attrEntry = attributeGroups[refQName];
       if (attrEntry) {
+        ctx.attrGroupStack.add(refQName);
         collectFields(
           attrEntry.node,
           {
@@ -980,6 +993,7 @@ const collectFields = (
             parentTypeName: parentTypeName ?? clarkToLocal(refQName),
           },
         );
+        ctx.attrGroupStack.delete(refQName);
       } else {
         report(
           diagnostics,
@@ -1164,6 +1178,8 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     attributes,
     diagnostics: diagnostics,
     allowMissingImports: opts?.allowMissingImports ?? false,
+    groupStack: new Set(),
+    attrGroupStack: new Set(),
   });
 
   // Build import/include graph for topological sorting

@@ -88,3 +88,35 @@ describe("xs:redefine self-references", () => {
     expect(ir.simpleTypes["{}yn-redefined"]).toBeDefined();
   });
 });
+
+// XSD 1.1 allows circular attributeGroup definitions (direct self-reference,
+// not through xs:redefine). The expansion must break the cycle so fields from
+// the non-self-referencing part are still collected.
+const CIRCULAR_ATTR_GROUP = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="T" type="test"/>
+  <xs:complexType name="test">
+    <xs:attributeGroup ref="test"/>
+  </xs:complexType>
+  <xs:attributeGroup name="test">
+    <xs:attributeGroup ref="test"/>
+    <xs:attribute name="foo" type="xs:int"/>
+    <xs:attribute name="bar"/>
+  </xs:attributeGroup>
+</xs:schema>`;
+
+describe("circular attributeGroup self-reference (XSD 1.1)", () => {
+  it("does not overflow the stack on a direct attributeGroup self-ref", () => {
+    let ir: ReturnType<typeof parseXsd> | undefined;
+    withTempDir((dir) => {
+      const main = path.join(dir, "main.xsd");
+      fs.writeFileSync(main, CIRCULAR_ATTR_GROUP);
+      ir = parseXsd([main]);
+    });
+    expect(ir!.diagnostics).toHaveLength(0);
+    const testType = ir!.complexTypes["{}test"]!;
+    const attrNames = testType.fields.filter((f) => f.kind === "attribute").map((f) => f.qname);
+    expect(attrNames).toContain("{}foo");
+    expect(attrNames).toContain("{}bar");
+  });
+});
