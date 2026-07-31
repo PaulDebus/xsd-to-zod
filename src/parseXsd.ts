@@ -22,14 +22,22 @@ import type {
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
 // Append a diagnostic, deduped by kind+message+ref so a repeated hit of the
-// same problem reports once (the previous Set<string> had the same effect).
+// same problem reports once.
+const diagnosticKeys = new WeakMap<Diagnostic[], Set<string>>();
 const report = (
   diagnostics: Diagnostic[],
   kind: DiagnosticKind,
   message: string,
   ref?: string,
 ): void => {
-  if (!diagnostics.some((d) => d.kind === kind && d.message === message && d.ref === ref)) {
+  const key = `${kind}|${message}|${ref ?? ""}`;
+  let seen = diagnosticKeys.get(diagnostics);
+  if (!seen) {
+    seen = new Set<string>();
+    diagnosticKeys.set(diagnostics, seen);
+  }
+  if (!seen.has(key)) {
+    seen.add(key);
     diagnostics.push({ kind, message, ...optProp("ref", ref) });
   }
 };
@@ -1072,6 +1080,8 @@ type DeferredInlineType = {
 type QueueEntry = {
   file: string;
   inheritedTargetNs?: string;
+  /** True when this file was passed directly by the user; errors reading entry points should still throw. */
+  entryPoint?: boolean;
 };
 
 type RedefineOverride = {
@@ -1093,6 +1103,7 @@ export type ParseXsdOptions = {
 export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   const queue: QueueEntry[] = files.map((file) => ({
     file: path.resolve(file),
+    entryPoint: true,
   }));
 
   const simpleTypes: Record<string, SimpleTypeDef> = {};
@@ -1187,7 +1198,25 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
       }
       scanned.add(entryKey);
 
-      const { schemaNode, nsMap, targetNs, formDefaults } = readSchema(entry.file);
+      let schemaNode: AnyNode;
+      let nsMap: Record<string, string>;
+      let targetNs: string;
+      let formDefaults: SchemaFormDefaults;
+      try {
+        const result = readSchema(entry.file);
+        ({ schemaNode, nsMap, targetNs, formDefaults } = result);
+      } catch (err) {
+        if (entry.entryPoint) {
+          throw err;
+        }
+        report(
+          diagnostics,
+          "unresolved-import",
+          `unable to read schema "${entry.file}"`,
+          entry.file,
+        );
+        continue;
+      }
       allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
 
       for (const [tag, child] of nodeChildren(schemaNode)) {

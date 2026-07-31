@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseXsd, safeParseXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
-// Regression tests for the circular simple-type fix (#138): a union whose
+// Regression tests for the circular simple-type fix: a union whose
 // memberTypes reference the union itself, or a restriction/list whose
 // derivation closes a cycle, is invalid XSD. The edge closing each cycle is
 // dropped with a diagnostic, so the generated module neither crashes at load
@@ -53,7 +53,7 @@ const writeSchema = (dir: string, xsd: string): string => {
   return file;
 };
 
-describe("circular simple-type references (#138)", () => {
+describe("circular simple-type references", () => {
   it("drops the circular union member with a diagnostic", async () => {
     await withTempDirAsync(async (dir) => {
       const ir = parseXsd([writeSchema(dir, MUTUAL_UNION_XSD)]);
