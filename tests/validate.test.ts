@@ -25,8 +25,8 @@ describe("validateXml (conformance tier)", () => {
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.issues.length).toBeGreaterThan(0);
-      expect(result.issues[0].message).toContain("count");
-      expect(result.issues[0].line).toBe(2);
+      expect(result.issues[0]!.message).toContain("count");
+      expect(result.issues[0]!.line).toBe(2);
     }
   });
 

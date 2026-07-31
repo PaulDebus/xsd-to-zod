@@ -36,13 +36,13 @@ describe("xs:annotation/xs:documentation (#25)", () => {
   it("extracts documentation into the IR", () => {
     const ir = parseXsd([FIXTURE]);
 
-    expect(ir.simpleTypes["{urn:curated}AmountType"].description).toBe(
+    expect(ir.simpleTypes["{urn:curated}AmountType"]!.description).toBe(
       "Monetary amount with two fraction digits",
     );
-    expect(ir.complexTypes["{urn:curated}InvoiceType"].description).toBe("An invoice line item");
-    expect(ir.elements["{urn:curated}invoice"].description).toBe("Root invoice element");
+    expect(ir.complexTypes["{urn:curated}InvoiceType"]!.description).toBe("An invoice line item");
+    expect(ir.elements["{urn:curated}invoice"]!.description).toBe("Root invoice element");
 
-    const fields = ir.complexTypes["{urn:curated}InvoiceType"].fields;
+    const fields = ir.complexTypes["{urn:curated}InvoiceType"]!.fields;
     expect(
       fields.find((f) => f.kind === "element" && f.qname === "{urn:curated}amount")?.description,
     ).toBe("Line total");
@@ -57,7 +57,7 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     withTempDir((dir) => {
       const file = path.join(dir, "refs.xsd");
       fs.writeFileSync(file, REFS_XSD);
-      const fields = parseXsd([file]).complexTypes["{urn:test}InvoiceType"].fields;
+      const fields = parseXsd([file]).complexTypes["{urn:test}InvoiceType"]!.fields;
 
       expect(fields.find((f) => f.kind === "attribute")?.description).toBe(
         "ISO 4217 currency code",

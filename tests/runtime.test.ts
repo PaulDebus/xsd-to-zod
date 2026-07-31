@@ -42,7 +42,7 @@ beforeAll(async () => {
     schemasCode = irToZod(parseXsd([file])).schemas;
   });
   const mod = await importGeneratedSchemas(schemasCode);
-  rootSchema = mod.docSchema as z.ZodType;
+  rootSchema = mod["docSchema"] as z.ZodType;
 });
 
 describe("validation modes", () => {
@@ -73,7 +73,7 @@ describe("entities in character data (#64)", () => {
     const parsed = parseXml(
       doc("<text>a &lt; b &amp; c &gt; d &#65;&#x42;</text><count>1</count><flag>true</flag>"),
     );
-    expect(parsed.text).toBe("a < b & c > d AB");
+    expect(parsed["text"]).toBe("a < b & c > d AB");
   });
 
   it("decodes entities in attribute values", () => {
@@ -83,20 +83,20 @@ describe("entities in character data (#64)", () => {
         'version="&#49;"',
       ),
     );
-    expect(parsed.version).toBeUndefined();
+    expect(parsed["version"]).toBeUndefined();
     expect(parsed["@version"]).toBe(1);
   });
 
   it("does not double-decode &amp;lt;", () => {
     const parsed = parseXml(doc("<text>&amp;lt;</text><count>1</count><flag>1</flag>"));
-    expect(parsed.text).toBe("&lt;");
+    expect(parsed["text"]).toBe("&lt;");
   });
 
   it("keeps CDATA content verbatim, including entity-looking text", () => {
     const parsed = parseXml(
       doc("<text><![CDATA[a &lt; b &amp; <tag>]]></text><count>1</count><flag>0</flag>"),
     );
-    expect(parsed.text).toBe("a &lt; b &amp; <tag>");
+    expect(parsed["text"]).toBe("a &lt; b &amp; <tag>");
   });
 
   it("round-trips serialized entity text", () => {
@@ -107,7 +107,7 @@ describe("entities in character data (#64)", () => {
 
   it("skips leading comments and processing instructions", () => {
     const xml = `<?xml version="1.0"?>\n<!-- a comment -->\n<?pi data?>\n${doc("<text>x</text><count>1</count><flag>1</flag>")}`;
-    expect(parseXml(xml).text).toBe("x");
+    expect(parseXml(xml)["text"]).toBe("x");
   });
 });
 
@@ -116,12 +116,12 @@ describe("type coercion (#65)", () => {
     const parsed = parseXml(doc("<text>x</text><count>1</count><flag>0</flag>"));
     expect(parsed["@version"]).toBe(7);
     expect(parsed["@active"]).toBe(true);
-    expect(parsed.flag).toBe(false);
+    expect(parsed["flag"]).toBe(false);
   });
 
   it("preserves numeric-looking xs:string lexicals", () => {
     const parsed = parseXml(doc("<text>3.50</text><count>1</count><flag>1</flag>"));
-    expect(parsed.text).toBe("3.50");
+    expect(parsed["text"]).toBe("3.50");
   });
 
   it("rejects invalid xs:int lexicals instead of producing NaN", () => {
@@ -148,10 +148,10 @@ describe("type coercion (#65)", () => {
     const negInf = parseXml(
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>"),
     );
-    expect(negInf.measure).toBe(-Infinity);
+    expect(negInf["measure"]).toBe(-Infinity);
     expect(serializeXml(negInf)).toContain(">-INF</ns0:measure>");
     const nan = parseXml(doc("<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>"));
-    expect(nan.measure).toBeNaN();
+    expect(nan["measure"]).toBeNaN();
     expect(serializeXml(nan)).toContain(">NaN</ns0:measure>");
   });
 
@@ -159,7 +159,7 @@ describe("type coercion (#65)", () => {
     const parsed = parseXml(
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-0</measure>"),
     );
-    expect(Object.is(parsed.measure, -0)).toBe(true);
+    expect(Object.is(parsed["measure"], -0)).toBe(true);
     expect(serializeXml(parsed)).toContain(">-0</ns0:measure>");
   });
 

@@ -96,21 +96,21 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       const orderType = ir.complexTypes["{urn:test}OrderType"];
       expect(orderType).toBeDefined();
-      expect(orderType.fields.find((field) => field.qname === "{urn:test}sku")?.minOccurs).toBe(0);
-      expect(orderType.fields.find((field) => field.qname === "{}item")?.kind).toBe("attribute");
+      expect(orderType!.fields.find((field) => field.qname === "{urn:test}sku")?.minOccurs).toBe(0);
+      expect(orderType!.fields.find((field) => field.qname === "{}item")?.kind).toBe("attribute");
 
       const mod = await importGeneratedSchemas(generated.schemas);
-      const orderSchema = mod.orderSchema as z.ZodType;
+      const orderSchema = mod["orderSchema"] as z.ZodType;
       expect(xmlRegistry.get(orderSchema)?.root).toBe("{urn:test}order");
 
       const xml = `<order xmlns="urn:test" item="shadow"><item>one</item><sku>A1</sku><approved>1</approved><note xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></order>`;
       const parsed = parseXml(orderSchema, xml) as Record<string, unknown>;
 
       expect(parsed["@item"]).toBe("shadow");
-      expect(parsed.item).toEqual(["one"]);
-      expect(parsed.sku).toBe("A1");
-      expect(parsed.approved).toBe(true);
-      expect(parsed.note).toBeNull();
+      expect(parsed["item"]).toEqual(["one"]);
+      expect(parsed["sku"]).toBe("A1");
+      expect(parsed["approved"]).toBe(true);
+      expect(parsed["note"]).toBeNull();
 
       const serialized = serializeXml(orderSchema, parsed);
       expect(serialized).toContain('xsi:nil="true"');
@@ -137,7 +137,7 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="pick" type="t:PickType"/>
 </xs:schema>`;
     const mod = await importFromXsd(xsd);
-    const pickSchema = mod.pickSchema as z.ZodType;
+    const pickSchema = mod["pickSchema"] as z.ZodType;
 
     // Only the single branch present: valid (the [] of the absent repeated
     // branch must not count as a second selected branch).
@@ -145,8 +145,8 @@ describe("xsd-to-zod v1 pipeline", () => {
       pickSchema,
       '<pick xmlns="urn:test"><code>C1</code></pick>',
     ) as Record<string, unknown>;
-    expect(codeOnly.code).toBe("C1");
-    expect(codeOnly.tag).toEqual([]);
+    expect(codeOnly["code"]).toBe("C1");
+    expect(codeOnly["tag"]).toEqual([]);
 
     // The repeated branch selected with values: valid.
     expect(parseXml(pickSchema, '<pick xmlns="urn:test"><tag>a</tag><tag>b</tag></pick>')).toEqual({
@@ -166,13 +166,13 @@ describe("xsd-to-zod v1 pipeline", () => {
 
   it("does not treat non-xsi nil as xsi:nil and matches root namespace", async () => {
     const mod = await importFromXsd(XSD);
-    const orderSchema = mod.orderSchema as z.ZodType;
+    const orderSchema = mod["orderSchema"] as z.ZodType;
     const parsed = parseXml(
       orderSchema,
       '<order xmlns="urn:test"><note nil="true">kept</note><approved>0</approved></order>',
     ) as Record<string, unknown>;
-    expect(parsed.note).toBe("kept");
-    expect(parsed.approved).toBe(false);
+    expect(parsed["note"]).toBe("kept");
+    expect(parsed["approved"]).toBe(false);
 
     expect(() =>
       parseXml(orderSchema, '<order xmlns="urn:other"><note>bad</note></order>'),
@@ -182,11 +182,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   it("supports simpleContent with attributes and text value", async () => {
     const mod = await importFromXsd(XSD);
     const parsed = parseXml(
-      mod.priceSchema as z.ZodType,
+      mod["priceSchema"] as z.ZodType,
       '<price xmlns="urn:test" currency="USD">42</price>',
     ) as Record<string, unknown>;
 
-    expect(parsed._text).toBe(42);
+    expect(parsed["_text"]).toBe(42);
     expect(parsed["@currency"]).toBe("USD");
   });
 
@@ -247,8 +247,8 @@ describe("xsd-to-zod v1 pipeline", () => {
       // Top-level element with inline type extending a named base
       const docType = ir.complexTypes["{urn:inline-ext}anonymous_doc_Type"];
       expect(docType).toBeDefined();
-      expect(docType.baseType).toBe("{urn:inline-ext}Base");
-      expect(docType.fields.map((f) => f.qname)).toEqual([
+      expect(docType!.baseType).toBe("{urn:inline-ext}Base");
+      expect(docType!.fields.map((f) => f.qname)).toEqual([
         "{urn:inline-ext}id",
         "{}version",
         "{urn:inline-ext}title",
@@ -256,12 +256,12 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       // Nested inline type (deferredSyntheticTypes path)
       const wrapper = ir.complexTypes["{urn:inline-ext}Wrapper"];
-      const itemField = wrapper.fields.find((f) => f.qname === "{urn:inline-ext}item");
+      const itemField = wrapper!.fields.find((f) => f.qname === "{urn:inline-ext}item");
       expect(itemField).toBeDefined();
-      const itemType = ir.complexTypes[itemField?.typeName];
+      const itemType = ir.complexTypes[itemField!.typeName];
       expect(itemType).toBeDefined();
-      expect(itemType.baseType).toBe("{urn:inline-ext}Base");
-      expect(itemType.fields.map((f) => f.qname)).toEqual([
+      expect(itemType!.baseType).toBe("{urn:inline-ext}Base");
+      expect(itemType!.fields.map((f) => f.qname)).toEqual([
         "{urn:inline-ext}id",
         "{}version",
         "{urn:inline-ext}extra",
@@ -316,21 +316,21 @@ describe("xsd-to-zod v1 pipeline", () => {
         const holder = ir.complexTypes["{urn:uses}Holder"];
         expect(holder).toBeDefined();
 
-        const shared = holder.fields.find((f) => f.qname === "{urn:declares}shared");
+        const shared = holder!.fields.find((f) => f.qname === "{urn:declares}shared");
         expect(shared).toBeDefined();
         expect(shared?.typeName).toBe("{http://www.w3.org/2001/XMLSchema}string");
 
-        const grouped = holder.fields.find((f) => f.qname.endsWith("}grouped"));
+        const grouped = holder!.fields.find((f) => f.qname.endsWith("}grouped"));
         expect(grouped).toBeDefined();
         expect(grouped?.typeName).toBe("{http://www.w3.org/2001/XMLSchema}boolean");
 
         // Attribute refs resolve their type from the referenced global
         // declaration instead of hardcoded xs:string.
-        const code = holder.fields.find((f) => f.qname === "{urn:declares}code");
+        const code = holder!.fields.find((f) => f.qname === "{urn:declares}code");
         expect(code).toBeDefined();
         expect(code?.typeName).toBe("{http://www.w3.org/2001/XMLSchema}int");
 
-        const agAttr = holder.fields.find((f) => f.qname.endsWith("}agAttr"));
+        const agAttr = holder!.fields.find((f) => f.qname.endsWith("}agAttr"));
         expect(agAttr).toBeDefined();
         expect(agAttr?.kind).toBe("attribute");
       }
@@ -360,7 +360,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       // Without allowMissingImports: unresolved element ref is dropped (old behaviour).
       const ir = parseXsd([file]);
       const holder = ir.complexTypes["{urn:broken}Holder"];
-      expect(holder.fields.map((f) => f.qname)).toEqual([
+      expect(holder!.fields.map((f) => f.qname)).toEqual([
         "{urn:broken}own",
         "{urn:broken}missingAttr",
         "{}weird",
@@ -369,7 +369,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       // With allowMissingImports: unresolved element ref becomes a fallback field.
       const irWithFlag = parseXsd([file], { allowMissingImports: true });
       const holderWithFlag = irWithFlag.complexTypes["{urn:broken}Holder"];
-      expect(holderWithFlag.fields.map((f) => f.qname)).toEqual([
+      expect(holderWithFlag!.fields.map((f) => f.qname)).toEqual([
         "{urn:broken}missing",
         "{urn:broken}own",
         "{urn:broken}missingAttr",
@@ -449,8 +449,11 @@ describe("xsd-to-zod v1 pipeline", () => {
       const ir = parseXsd([path.join(dir, "redefine.xsd")]);
       const consumer = ir.complexTypes["{urn:redefine-group}Consumer"];
       expect(consumer).toBeDefined();
-      expect(consumer.fields.map((f) => f.qname)).toEqual(["{urn:redefine-group}new", "{}newAttr"]);
-      const newAttr = consumer.fields.find((f) => f.qname === "{}newAttr");
+      expect(consumer!.fields.map((f) => f.qname)).toEqual([
+        "{urn:redefine-group}new",
+        "{}newAttr",
+      ]);
+      const newAttr = consumer!.fields.find((f) => f.qname === "{}newAttr");
       expect(newAttr?.typeName).toBe("{http://www.w3.org/2001/XMLSchema}int");
     });
   });
@@ -607,8 +610,8 @@ describe("xsd-to-zod v1 pipeline", () => {
       // Top-level element: inline simpleType becomes a named simple type, not xs:string
       const age = ir.elements["{urn:inline-simple}age"];
       expect(age).toBeDefined();
-      expect(age.typeName).not.toBe("{http://www.w3.org/2001/XMLSchema}string");
-      const ageType = asRestriction(ir.simpleTypes[age.typeName]);
+      expect(age!.typeName).not.toBe("{http://www.w3.org/2001/XMLSchema}string");
+      const ageType = asRestriction(ir.simpleTypes[age!.typeName]!);
       expect(ageType).toBeDefined();
       expect(ageType.baseType).toBe("{http://www.w3.org/2001/XMLSchema}integer");
       expect(ageType.facets).toEqual([
@@ -618,17 +621,17 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       // Local element inside a complexType
       const person = ir.complexTypes["{urn:inline-simple}Person"];
-      const nickname = person.fields.find((f) => f.qname === "{urn:inline-simple}nickname");
+      const nickname = person!.fields.find((f) => f.qname === "{urn:inline-simple}nickname");
       expect(nickname).toBeDefined();
-      const nicknameType = asRestriction(ir.simpleTypes[nickname?.typeName]);
+      const nicknameType = asRestriction(ir.simpleTypes[nickname!.typeName]!);
       expect(nicknameType).toBeDefined();
       expect(nicknameType.baseType).toBe("{http://www.w3.org/2001/XMLSchema}string");
       expect(nicknameType.facets).toEqual([{ kind: "maxLength", value: 20 }]);
 
       // Attribute
-      const status = person.fields.find((f) => f.qname === "{}status");
+      const status = person!.fields.find((f) => f.qname === "{}status");
       expect(status).toBeDefined();
-      const statusType = asRestriction(ir.simpleTypes[status?.typeName]);
+      const statusType = asRestriction(ir.simpleTypes[status!.typeName]!);
       expect(statusType).toBeDefined();
       expect(statusType.facets).toEqual([
         { kind: "enumeration", value: "active" },
@@ -662,13 +665,13 @@ describe("xsd-to-zod v1 pipeline", () => {
 </xs:schema>`;
 
     const mod = await importFromXsd(NESTED_XSD);
-    const orderSchema = mod.orderSchema as z.ZodType;
+    const orderSchema = mod["orderSchema"] as z.ZodType;
 
     const xml = `<order xmlns="urn:nested-test"><orderId>ORD-001</orderId><lineItem><productId>P-100</productId><quantity>2</quantity></lineItem><lineItem><productId>P-200</productId><quantity>5</quantity></lineItem></order>`;
     const parsed = parseXml(orderSchema, xml) as Record<string, unknown>;
 
-    expect(parsed.orderId).toBe("ORD-001");
-    expect(parsed.lineItem).toEqual([
+    expect(parsed["orderId"]).toBe("ORD-001");
+    expect(parsed["lineItem"]).toEqual([
       { productId: "P-100", quantity: 2n },
       { productId: "P-200", quantity: 5n },
     ]);
@@ -784,33 +787,33 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("stores facets in IR", () => {
       runFacetTest((_dir, file) => {
         const ir = parseXsd([file]);
-        const countryCode = asRestriction(ir.simpleTypes["{urn:facets}CountryCode"]);
+        const countryCode = asRestriction(ir.simpleTypes["{urn:facets}CountryCode"]!);
         expect(countryCode).toBeDefined();
         expect(countryCode.facets).toEqual([
           { kind: "pattern", value: "[A-Z]{2}" },
           { kind: "length", value: 2 },
         ]);
 
-        const statusCode = asRestriction(ir.simpleTypes["{urn:facets}StatusCode"]);
+        const statusCode = asRestriction(ir.simpleTypes["{urn:facets}StatusCode"]!);
         expect(statusCode.facets).toEqual([
           { kind: "enumeration", value: "active" },
           { kind: "enumeration", value: "inactive" },
           { kind: "enumeration", value: "pending" },
         ]);
 
-        const qty = asRestriction(ir.simpleTypes["{urn:facets}Quantity"]);
+        const qty = asRestriction(ir.simpleTypes["{urn:facets}Quantity"]!);
         expect(qty.facets).toEqual([
           { kind: "minInclusive", value: "1" },
           { kind: "maxInclusive", value: "100" },
         ]);
 
-        const nameType = asRestriction(ir.simpleTypes["{urn:facets}NameType"]);
+        const nameType = asRestriction(ir.simpleTypes["{urn:facets}NameType"]!);
         expect(nameType.facets).toEqual([
           { kind: "minLength", value: 2 },
           { kind: "maxLength", value: 50 },
         ]);
 
-        const tokenType = asRestriction(ir.simpleTypes["{urn:facets}TokenType"]);
+        const tokenType = asRestriction(ir.simpleTypes["{urn:facets}TokenType"]!);
         expect(tokenType.facets).toEqual([{ kind: "whiteSpace", value: "collapse" }]);
       });
     });
@@ -956,7 +959,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         );
 
         const mod = await importGeneratedSchemas(generated.schemas);
-        const cfgSchema = mod.cfgSchema as z.ZodType;
+        const cfgSchema = mod["cfgSchema"] as z.ZodType;
 
         // Absent elements stay absent — the default is not substituted.
         expect(parseXml(cfgSchema, '<cfg xmlns="urn:typedDefaults"/>')).toEqual({});
@@ -985,19 +988,19 @@ describe("xsd-to-zod v1 pipeline", () => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, FACET_XSD);
         const mod = await generateAndImport([file]);
-        const facetsSchema = mod.facetsSchema as z.ZodType;
+        const facetsSchema = mod["facetsSchema"] as z.ZodType;
 
         const xml = `<facets xmlns="urn:facets"><country>DE</country><status>active</status><qty>42</qty><price>19.99</price><temp>25.5</temp><code>ADM</code><big>12345</big><name>Alice</name><token>hello</token></facets>`;
         const parsed = parseXml(facetsSchema, xml) as Record<string, unknown>;
-        expect(parsed.country).toBe("DE");
-        expect(parsed.status).toBe("active");
-        expect(parsed.qty).toBe(42n);
-        expect(parsed.price).toBe(19.99);
-        expect(parsed.temp).toBe(25.5);
-        expect(parsed.code).toBe("ADM");
-        expect(parsed.big).toBe(12345n);
-        expect(parsed.name).toBe("Alice");
-        expect(parsed.token).toBe("hello");
+        expect(parsed["country"]).toBe("DE");
+        expect(parsed["status"]).toBe("active");
+        expect(parsed["qty"]).toBe(42n);
+        expect(parsed["price"]).toBe(19.99);
+        expect(parsed["temp"]).toBe(25.5);
+        expect(parsed["code"]).toBe("ADM");
+        expect(parsed["big"]).toBe(12345n);
+        expect(parsed["name"]).toBe("Alice");
+        expect(parsed["token"]).toBe("hello");
 
         const serialized = serializeXml(facetsSchema, parsed);
         const reparsed = parseXml(facetsSchema, serialized);
@@ -1008,7 +1011,7 @@ describe("xsd-to-zod v1 pipeline", () => {
           facetsSchema,
           xml.replace("<token>hello</token>", "<token>  hello   world </token>"),
         ) as Record<string, unknown>;
-        expect(withWhitespace.token).toBe("hello world");
+        expect(withWhitespace["token"]).toBe("hello world");
       });
     });
 
@@ -1020,7 +1023,7 @@ describe("xsd-to-zod v1 pipeline", () => {
           const file = path.join(dir, "schema.xsd");
           fs.writeFileSync(file, FACET_XSD);
           const mod = await generateAndImport([file]);
-          facetsSchema = mod.facetsSchema as z.ZodType;
+          facetsSchema = mod["facetsSchema"] as z.ZodType;
         });
       });
 
@@ -1173,18 +1176,18 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("coerces inline list item simpleType to its base XSD primitive (#29)", async () => {
       const mod = await importFromXsd(LIST_INLINE_XSD);
       const parsed = parseXml(
-        mod.listContainerSchema as z.ZodType,
+        mod["listContainerSchema"] as z.ZodType,
         `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 5 6</namedNumbers></listContainer>`,
       ) as Record<string, unknown>;
-      expect(parsed.inlineNumbers).toEqual([1n, 2n, 3n]);
-      expect(parsed.namedNumbers).toEqual([4n, 5n, 6n]);
+      expect(parsed["inlineNumbers"]).toEqual([1n, 2n, 3n]);
+      expect(parsed["namedNumbers"]).toEqual([4n, 5n, 6n]);
     });
 
     it("enforces facets from named list item simpleType via the zod checks", async () => {
       const mod = await importFromXsd(LIST_INLINE_XSD);
       expect(() =>
         parseXml(
-          mod.listContainerSchema as z.ZodType,
+          mod["listContainerSchema"] as z.ZodType,
           `<listContainer xmlns="urn:listunion"><inlineNumbers>1 2 3</inlineNumbers><namedNumbers>4 99 6</namedNumbers></listContainer>`,
         ),
       ).toThrow("Too big: expected bigint to be <=10");
@@ -1192,19 +1195,19 @@ describe("xsd-to-zod v1 pipeline", () => {
 
     it("coerces inline union members and falls through on member mismatch (#29)", async () => {
       const mod = await importFromXsd(UNION_INLINE_XSD);
-      const unionContainerSchema = mod.unionContainerSchema as z.ZodType;
+      const unionContainerSchema = mod["unionContainerSchema"] as z.ZodType;
 
       const numericParsed = parseXml(
         unionContainerSchema,
         `<unionContainer xmlns="urn:listunion"><val>42</val></unionContainer>`,
       ) as Record<string, unknown>;
-      expect(numericParsed.val).toBe(42n);
+      expect(numericParsed["val"]).toBe(42n);
 
       const stringParsed = parseXml(
         unionContainerSchema,
         `<unionContainer xmlns="urn:listunion"><val>hello</val></unionContainer>`,
       ) as Record<string, unknown>;
-      expect(stringParsed.val).toBe("hello");
+      expect(stringParsed["val"]).toBe("hello");
     });
 
     it("handles xs:list attributes and xs:union text fields", async () => {
@@ -1226,20 +1229,20 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="container" type="t:Container"/>
 </xs:schema>`;
       const mod = await importFromXsd(ATTR_UNION_XSD);
-      const containerSchema = mod.containerSchema as z.ZodType;
+      const containerSchema = mod["containerSchema"] as z.ZodType;
 
       const parsed = parseXml(
         containerSchema,
         `<container xmlns="urn:listunion" tags="a b c">42</container>`,
       ) as Record<string, unknown>;
-      expect(parsed._text).toBe(42);
+      expect(parsed["_text"]).toBe(42);
       expect(parsed["@tags"]).toEqual(["a", "b", "c"]);
 
       const stringParsed = parseXml(
         containerSchema,
         `<container xmlns="urn:listunion" tags="x y">hello</container>`,
       ) as Record<string, unknown>;
-      expect(stringParsed._text).toBe("hello");
+      expect(stringParsed["_text"]).toBe("hello");
       expect(stringParsed["@tags"]).toEqual(["x", "y"]);
 
       const serialized = serializeXml(containerSchema, parsed);
@@ -1282,7 +1285,7 @@ describe("xsd-to-zod v1 pipeline", () => {
 
         const swapType = ir.simpleTypes["{urn:redefine-swap}SwapType"];
         expect(swapType).toBeDefined();
-        expect(swapType.kind).toBe("union");
+        expect(swapType!.kind).toBe("union");
       });
     });
   });
@@ -1326,11 +1329,11 @@ describe("xsd-to-zod v1 pipeline", () => {
         fs.writeFileSync(file, CYCLE_XSD);
 
         const ir = parseXsd([file]);
-        expect(ir.complexTypes["{urn:cycle}A"].fields.map((f) => f.qname)).toEqual([
+        expect(ir.complexTypes["{urn:cycle}A"]!.fields.map((f) => f.qname)).toEqual([
           "{urn:cycle}bField",
           "{urn:cycle}aField",
         ]);
-        expect(ir.complexTypes["{urn:cycle}B"].fields.map((f) => f.qname)).toEqual([
+        expect(ir.complexTypes["{urn:cycle}B"]!.fields.map((f) => f.qname)).toEqual([
           "{urn:cycle}aField",
           "{urn:cycle}bField",
         ]);
@@ -1359,8 +1362,8 @@ describe("xsd-to-zod v1 pipeline", () => {
         fs.writeFileSync(file, ALIAS_XSD);
 
         const ir = parseXsd([file]);
-        const baseAttr = ir.complexTypes["{urn:alias}Base"].fields.find((f) => f.qname === "{}a");
-        const derivedAttr = ir.complexTypes["{urn:alias}Derived"].fields.find(
+        const baseAttr = ir.complexTypes["{urn:alias}Base"]!.fields.find((f) => f.qname === "{}a");
+        const derivedAttr = ir.complexTypes["{urn:alias}Derived"]!.fields.find(
           (f) => f.qname === "{}a",
         );
         expect(derivedAttr).toBeDefined();

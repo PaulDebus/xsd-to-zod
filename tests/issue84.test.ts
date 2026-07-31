@@ -59,8 +59,7 @@ describe("enum facet coercion (#84)", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, NUM_ENUM_XSD);
-      const mod = await generateAndImport([file]);
-      const ratioSchema = mod.ratioSchema as z.ZodType;
+      const { ratioSchema } = (await generateAndImport([file])) as { ratioSchema: z.ZodType };
       expect(parseXml(ratioSchema, '<ratio xmlns="urn:num-enum">1.0</ratio>')).toBe(1);
       expect(parseXml(ratioSchema, '<ratio xmlns="urn:num-enum">2.50</ratio>')).toBe(2.5);
       expect(() => parseXml(ratioSchema, '<ratio xmlns="urn:num-enum">3.0</ratio>')).toThrow();

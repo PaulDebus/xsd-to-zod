@@ -54,13 +54,14 @@ function discoverNegativeCases(): NegativeCase[] {
   for (const f of fs.readdirSync(NEGATIVE_DIR)) {
     if (f.endsWith(".xml")) {
       const name = f.replace(/\.xml$/, "");
-      if (!(name in EXPECTED)) {
+      const expected = EXPECTED[name];
+      if (expected === undefined) {
         throw new Error(`no pinned expectation for negative fixture ${f} — add one to EXPECTED`);
       }
       cases.push({
         name,
         xmlFile: path.join(NEGATIVE_DIR, f),
-        expected: EXPECTED[name],
+        expected,
       });
     }
   }
