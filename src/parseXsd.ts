@@ -21,8 +21,8 @@ import type {
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
-// Append a diagnostic, deduped by kind+message+ref so a repeated hit of the
-// same problem reports once.
+// Append a diagnostic, deduped by kind+message (the message already embeds
+// the ref) so a repeated hit of the same problem reports once.
 const diagnosticKeys = new WeakMap<Diagnostic[], Set<string>>();
 const report = (
   diagnostics: Diagnostic[],
@@ -30,7 +30,7 @@ const report = (
   message: string,
   ref?: string,
 ): void => {
-  const key = `${kind}|${message}|${ref ?? ""}`;
+  const key = `${kind}|${message}`;
   let seen = diagnosticKeys.get(diagnostics);
   if (!seen) {
     seen = new Set<string>();
@@ -688,7 +688,12 @@ const collectFields = (
             ...optProp("description", description),
           });
         } else {
-          report(diagnostics, "unresolved-element-ref", `unresolved element ref "${refQName}"`, refQName);
+          report(
+            diagnostics,
+            "unresolved-element-ref",
+            `unresolved element ref "${refQName}"`,
+            refQName,
+          );
           if (allowMissingImports) {
             const effectiveCardinality = combineCardinality(
               inheritedCardinality,
@@ -798,7 +803,12 @@ const collectFields = (
         const refQName = resolveTypeQName(ref, nsMap, diagnostics);
         const referenced = attributes[refQName];
         if (!referenced) {
-          report(diagnostics, "unresolved-attribute-ref", `unresolved attribute ref "${refQName}"`, refQName);
+          report(
+            diagnostics,
+            "unresolved-attribute-ref",
+            `unresolved attribute ref "${refQName}"`,
+            refQName,
+          );
         }
         const description = extractDocumentation(child) ?? referenced?.description;
         fields.push({
@@ -971,7 +981,12 @@ const collectFields = (
           },
         );
       } else {
-        report(diagnostics, "unresolved-attribute-group-ref", `unresolved attributeGroup ref "${refQName}"`, refQName);
+        report(
+          diagnostics,
+          "unresolved-attribute-group-ref",
+          `unresolved attributeGroup ref "${refQName}"`,
+          refQName,
+        );
       }
       continue;
     }
