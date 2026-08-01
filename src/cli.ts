@@ -200,6 +200,155 @@ type BundleOptions = {
   format?: boolean;
 };
 
+// ---------------------------------------------------------------------------
+// Command implementations
+// ---------------------------------------------------------------------------
+
+const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<void> => {
+  const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
+  const files = expandDirectories(filesOrDirs);
+
+  if (files.length === 0) {
+    throw new Error("no .xsd files found in the given directories");
+  }
+
+  if (filesOrDirs.length > 1 && !name) {
+    throw new Error("--name/-n is required when processing multiple XSD files");
+  }
+
+  const resolvedName =
+    name ??
+    filesOrDirs[0]
+      ?.replace(/\.xsd$/i, "")
+      .split(/[\\/]/)
+      .filter(Boolean)
+      .pop();
+  if (!resolvedName || resolvedName === ".") {
+    throw new Error("cannot derive an output name from the input; pass --name/-n");
+  }
+
+  if (resolvedName === ".." || resolvedName !== basename(resolvedName)) {
+    throw new Error("--name/-n must be a plain file name without path separators");
+  }
+
+  // All-or-nothing: compile everything in memory first, then write on
+  // success only. If parseXsd or irToZod throws, no files are written.
+
+  const nonLibraryFiles = includeLibraries ? files : files.filter((file) => !isLibrary(file));
+
+  if (nonLibraryFiles.length === 0) {
+    if (!silent) {
+      console.log(
+        "Skipped: no root elements (type-definition library). Use --include-libraries to include.",
+      );
+    }
+    return;
+  }
+
+  const ir = parseXsd(nonLibraryFiles, {
+    ...(allowMissingImports !== undefined && { allowMissingImports }),
+  });
+
+  if (!allowMissingImports) {
+    warnDiagnostics(ir);
+  }
+
+  const { schemas } = irToZod(ir);
+
+  const outDir = resolve(out);
+  if (!existsSync(outDir)) {
+    mkdirSync(outDir, { recursive: true });
+  }
+
+  const zodFile = join(outDir, `${resolvedName}.zod.ts`);
+  writeFileSync(zodFile, schemas, "utf8");
+
+  if (format && !runPostGenerationFormatting([zodFile])) {
+    console.error(
+      "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
+    );
+  }
+
+  if (!silent) {
+    console.log(`Wrote ${zodFile}`);
+  }
+};
+
+const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> => {
+  const { xsd: xsdFile, root, engine } = opts;
+
+  if (!existsSync(xmlFile)) {
+    throw new Error(`xml file not found: ${xmlFile}`);
+  }
+
+  if (!existsSync(xsdFile)) {
+    throw new Error(`xsd file not found: ${xsdFile}`);
+  }
+
+  if (engine === "libxml2") {
+    const { formatIssues, validateXml } = await import("./validate.js");
+    const validation = await validateXml(readXmlFile(xmlFile), readXmlFile(xsdFile), {
+      url: resolve(xsdFile),
+    });
+    if (!validation.valid) {
+      throw new Error(`Validation failed:\n${formatIssues(validation.issues).join("\n")}`);
+    }
+    console.log("Validation passed");
+    return;
+  }
+
+  const ir = parseXsd([xsdFile]);
+  warnDiagnostics(ir);
+  const { schemas } = irToZod(ir, { js: true });
+  const mod = await importGeneratedModule(schemas);
+
+  const roots: { schema: z.ZodType; root: string }[] = [];
+  for (const value of Object.values(mod)) {
+    if (isZodSchema(value)) {
+      const rootQname = xmlRegistry.get(value)?.root;
+      if (rootQname) {
+        roots.push({ schema: value, root: rootQname });
+      }
+    }
+  }
+
+  const selected = root
+    ? roots.find((candidate) => candidate.root === root)
+    : roots.length === 1
+      ? roots[0]
+      : undefined;
+
+  if (!selected) {
+    if (roots.length === 0) {
+      throw new Error("no root elements found in schema");
+    } else if (root) {
+      throw new Error(
+        `root element ${root} not found; available roots: ${roots.map((r) => r.root).join(", ")}`,
+      );
+    } else {
+      throw new Error(
+        `multiple root elements found, use --root to specify one: ${roots.map((r) => r.root).join(", ")}`,
+      );
+    }
+  }
+
+  const xml = readXmlFile(xmlFile);
+
+  const parsed = safeParseXml(selected.schema, xml);
+  if (!parsed.success) {
+    const detail =
+      parsed.error instanceof z.ZodError
+        ? z.prettifyError(parsed.error)
+        : parsed.error instanceof Error
+          ? parsed.error.message
+          : String(parsed.error);
+    throw new Error(`Validation failed: ${detail}`);
+  }
+
+  console.log("Validation passed");
+  console.log(JSON.stringify(parsed.data, null, 2));
+};
+
 const program = new Command()
   .name("xsd-to-zod")
   .exitOverride()
@@ -221,75 +370,7 @@ const program = new Command()
     "Suppress warnings for unresolved XSD references; unresolved element refs map to z.unknown() instead of being dropped",
   )
   .option("--silent", "Suppress informational output (warnings are still shown)")
-  .action(async (filesOrDirs: string[], opts: GenerateOptions) => {
-    const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
-    const files = expandDirectories(filesOrDirs);
-
-    if (files.length === 0) {
-      throw new Error("no .xsd files found in the given directories");
-    }
-
-    if (filesOrDirs.length > 1 && !name) {
-      throw new Error("--name/-n is required when processing multiple XSD files");
-    }
-
-    const resolvedName =
-      name ??
-      filesOrDirs[0]
-        ?.replace(/\.xsd$/i, "")
-        .split(/[\\/]/)
-        .filter(Boolean)
-        .pop();
-    if (!resolvedName || resolvedName === ".") {
-      throw new Error("cannot derive an output name from the input; pass --name/-n");
-    }
-
-    if (resolvedName === ".." || resolvedName !== basename(resolvedName)) {
-      throw new Error("--name/-n must be a plain file name without path separators");
-    }
-
-    // All-or-nothing: compile everything in memory first, then write on
-    // success only. If parseXsd or irToZod throws, no files are written.
-
-    const nonLibraryFiles = includeLibraries ? files : files.filter((file) => !isLibrary(file));
-
-    if (nonLibraryFiles.length === 0) {
-      if (!silent) {
-        console.log(
-          "Skipped: no root elements (type-definition library). Use --include-libraries to include.",
-        );
-      }
-      return;
-    }
-
-    const ir = parseXsd(nonLibraryFiles, {
-      ...(allowMissingImports !== undefined && { allowMissingImports }),
-    });
-
-    if (!allowMissingImports) {
-      warnDiagnostics(ir);
-    }
-
-    const { schemas } = irToZod(ir);
-
-    const outDir = resolve(out);
-    if (!existsSync(outDir)) {
-      mkdirSync(outDir, { recursive: true });
-    }
-
-    const zodFile = join(outDir, `${resolvedName}.zod.ts`);
-    writeFileSync(zodFile, schemas, "utf8");
-
-    if (format && !runPostGenerationFormatting([zodFile])) {
-      console.error(
-        "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
-      );
-    }
-
-    if (!silent) {
-      console.log(`Wrote ${zodFile}`);
-    }
-  });
+  .action(generate);
 
 program
   .command("validate")
@@ -298,80 +379,7 @@ program
   .requiredOption("-x, --xsd <file>", "XSD schema file")
   .option("-r, --root <name>", "Root element QName (auto-detected when unambiguous)")
   .option("-e, --engine <engine>", "Validation engine: zod (default) or libxml2", "zod")
-  .action(async (xmlFile: string, opts: ValidateOptions) => {
-    const { xsd: xsdFile, root, engine } = opts;
-
-    if (!existsSync(xmlFile)) {
-      throw new Error(`xml file not found: ${xmlFile}`);
-    }
-
-    if (!existsSync(xsdFile)) {
-      throw new Error(`xsd file not found: ${xsdFile}`);
-    }
-
-    if (engine === "libxml2") {
-      const { formatIssues, validateXml } = await import("./validate.js");
-      const validation = await validateXml(readXmlFile(xmlFile), readXmlFile(xsdFile), {
-        url: resolve(xsdFile),
-      });
-      if (!validation.valid) {
-        throw new Error(`Validation failed:\n${formatIssues(validation.issues).join("\n")}`);
-      }
-      console.log("Validation passed");
-      return;
-    }
-
-    const ir = parseXsd([xsdFile]);
-    warnDiagnostics(ir);
-    const { schemas } = irToZod(ir, { js: true });
-    const mod = await importGeneratedModule(schemas);
-
-    const roots: { schema: z.ZodType; root: string }[] = [];
-    for (const value of Object.values(mod)) {
-      if (isZodSchema(value)) {
-        const rootQname = xmlRegistry.get(value)?.root;
-        if (rootQname) {
-          roots.push({ schema: value, root: rootQname });
-        }
-      }
-    }
-
-    const selected = root
-      ? roots.find((candidate) => candidate.root === root)
-      : roots.length === 1
-        ? roots[0]
-        : undefined;
-
-    if (!selected) {
-      if (roots.length === 0) {
-        throw new Error("no root elements found in schema");
-      } else if (root) {
-        throw new Error(
-          `root element ${root} not found; available roots: ${roots.map((r) => r.root).join(", ")}`,
-        );
-      } else {
-        throw new Error(
-          `multiple root elements found, use --root to specify one: ${roots.map((r) => r.root).join(", ")}`,
-        );
-      }
-    }
-
-    const xml = readXmlFile(xmlFile);
-
-    const parsed = safeParseXml(selected.schema, xml);
-    if (!parsed.success) {
-      const detail =
-        parsed.error instanceof z.ZodError
-          ? z.prettifyError(parsed.error)
-          : parsed.error instanceof Error
-            ? parsed.error.message
-            : String(parsed.error);
-      throw new Error(`Validation failed: ${detail}`);
-    }
-
-    console.log("Validation passed");
-    console.log(JSON.stringify(parsed.data, null, 2));
-  });
+  .action(validate);
 
 program
   .command("bundle")

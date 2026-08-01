@@ -35,6 +35,22 @@ const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["ENTITIES", "xsdNCNames"],
 ]);
 
+// Primitive builtins that map to a constant zod expression; anything absent
+// falls back to z.string().
+const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
+  // Open content: the runtime walks/serializes it generically (open shape);
+  // zod stays permissive for this lax tier.
+  ["anyType", "z.unknown()"],
+  ["string", "z.string()"],
+  ["token", "z.string()"],
+  ["boolean", "z.boolean()"],
+  ["decimal", "z.number()"],
+  // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
+  // z.number() rejects non-finite numbers at the base-type level (#116).
+  ["float", "z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])"],
+  ["double", "z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])"],
+]);
+
 // Value-space bounds for the bounded integer builtins that fit a JS number.
 const XSD_INTEGER_BOUNDS: ReadonlyMap<string, { min?: number; max?: number }> = new Map([
   ["byte", { min: -128, max: 127 }],
@@ -168,26 +184,7 @@ const primitiveToZod = (
     return `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
   }
 
-  switch (parts.local) {
-    case "anyType":
-      // Open content: the runtime walks/serializes it generically (open shape);
-      // zod stays permissive for this lax tier.
-      return "z.unknown()";
-    case "string":
-    case "token":
-      return "z.string()";
-    case "boolean":
-      return "z.boolean()";
-    case "decimal":
-      return "z.number()";
-    case "float":
-    case "double":
-      // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
-      // z.number() rejects non-finite numbers at the base-type level (#116).
-      return "z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])";
-    default:
-      return "z.string()";
-  }
+  return XSD_PRIMITIVE_EMITTERS.get(parts.local) ?? "z.string()";
 };
 
 const isStringType = (zodExpr: string): boolean => zodExpr.startsWith("z.string()");
