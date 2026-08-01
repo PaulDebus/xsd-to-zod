@@ -550,6 +550,70 @@ const readObject = (
   return result;
 };
 
+// Visitor gate for walkChildren: return false to skip the entry. The wildcard
+// sweep excludes declared fields this way; openWalk accepts everything.
+type ChildAccept = {
+  attribute?: (namespace: string, local: string) => boolean;
+  element?: (namespace: string, local: string, prefix: string) => boolean;
+};
+
+// Shared walk over a parsed node's content entries, into the normalized open
+// shape: character data and xmlns declarations are skipped, attributes resolve
+// to '@'-prefixed clark keys, elements to clark keys with the namespace
+// resolved per item (repeated siblings may redeclare prefixes, #67), and
+// repeated child keys accumulate into arrays. Returns whether anything was
+// written.
+const walkChildren = (
+  target: Record<string, unknown>,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+  accept: ChildAccept = {},
+): boolean => {
+  const context = withNamespaceContext(namespaceContext, node);
+  let wrote = false;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "#text" || key === "#cdata" || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
+      continue;
+    }
+    if (key.startsWith("@_")) {
+      const { prefix, local } = splitQName(key.slice(2));
+      const namespace = prefix ? (context[prefix] ?? "") : "";
+      // xsi:* attributes are processor directives (nil/type/schemaLocation),
+      // not content; their QName values could not be re-serialized without
+      // declaring the value's prefix.
+      if (namespace === XSI_NS || accept.attribute?.(namespace, local) === false) {
+        continue;
+      }
+      target[`@${namespace ? `{${namespace}}` : ""}${local}`] =
+        value === undefined ? value : String(value);
+      wrote = true;
+      continue;
+    }
+    const { prefix, local } = splitQName(key);
+    for (const item of toArray(value)) {
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
+      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
+      if (accept.element?.(namespace, local, prefix) === false) {
+        continue;
+      }
+      const childKey = `{${namespace}}${local}`;
+      const childValue = itemNode ? openWalk(itemNode, context) : item;
+      const existing = target[childKey];
+      if (existing === undefined) {
+        target[childKey] = childValue;
+      } else if (Array.isArray(existing)) {
+        existing.push(childValue);
+      } else {
+        target[childKey] = [existing, childValue];
+      }
+      wrote = true;
+    }
+  }
+  return wrote;
+};
+
 // xs:any / xs:anyAttribute (lax tier): unmatched child elements/attributes are
 // captured in the normalized open shape (see openWalk). Namespace constraints
 // and processContents are deliberately unenforced — the libxml2 tier is the
@@ -565,54 +629,18 @@ const sweepWildcards = (
   const knownAttributes = new Set(
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
   );
-  const context = withNamespaceContext(namespaceContext, node);
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "#text" || key === "#cdata" || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
-      continue;
-    }
-    if (key.startsWith("@_")) {
-      if (!wildcards.anyAttribute) {
-        continue;
-      }
-      const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? "") : "";
-      // xsi:* directives are processor metadata, not content (see openWalk).
-      if (namespace === XSI_NS || knownAttributes.has(`{${namespace}}${local}`)) {
-        continue;
-      }
-      result[`@${namespace ? `{${namespace}}` : ""}${local}`] =
-        value === undefined ? value : String(value);
-      continue;
-    }
-    if (!wildcards.any) {
-      continue;
-    }
-    const { prefix, local } = splitQName(key);
-    for (const item of toArray(value)) {
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-      // Unqualified fields also match unprefixed elements in the inherited
-      // default namespace (same leniency as findElementValues) — not extras.
-      if (
-        knownElements.has(`{${namespace}}${local}`) ||
-        (knownElements.has(`{}${local}`) && !prefix)
-      ) {
-        continue;
-      }
-      const childKey = `{${namespace}}${local}`;
-      const childValue = itemNode ? openWalk(itemNode, context) : item;
-      const existing = result[childKey];
-      if (existing === undefined) {
-        result[childKey] = childValue;
-      } else if (Array.isArray(existing)) {
-        existing.push(childValue);
-      } else {
-        result[childKey] = [existing, childValue];
-      }
-    }
-  }
+  // Unqualified fields also match unprefixed elements in the inherited default
+  // namespace (same leniency as findElementValues) — not extras.
+  walkChildren(result, node, namespaceContext, {
+    attribute: wildcards.anyAttribute
+      ? (namespace, local) => !knownAttributes.has(`{${namespace}}${local}`)
+      : () => false,
+    element: wildcards.any
+      ? (namespace, local, prefix) =>
+          !knownElements.has(`{${namespace}}${local}`) &&
+          (prefix !== "" || !knownElements.has(`{}${local}`))
+      : () => false,
+  });
 };
 
 // Present-but-empty element: XSD applies default/fixed here (#66).
@@ -776,47 +804,8 @@ const openWalk = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
 ): unknown => {
-  const context = withNamespaceContext(namespaceContext, node);
   const out: Record<string, unknown> = {};
-  let hasStructure = false;
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "#text" || key === "#cdata" || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
-      continue;
-    }
-    if (key.startsWith("@_")) {
-      const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? "") : "";
-      // xsi:* attributes are processor directives (nil/type/schemaLocation),
-      // not content; the typed walker drops them too, and their QName values
-      // could not be re-serialized without declaring the value's prefix.
-      if (namespace === XSI_NS) {
-        continue;
-      }
-      out[`@${namespace ? `{${namespace}}` : ""}${local}`] =
-        value === undefined ? value : String(value);
-      hasStructure = true;
-      continue;
-    }
-    const { prefix, local } = splitQName(key);
-    for (const item of toArray(value)) {
-      hasStructure = true;
-      // Namespace per item — repeated siblings may redeclare prefixes (#67).
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-      const childKey = `{${namespace}}${local}`;
-      const childValue = itemNode ? openWalk(itemNode, context) : item;
-      const existing = out[childKey];
-      if (existing === undefined) {
-        out[childKey] = childValue;
-      } else if (Array.isArray(existing)) {
-        existing.push(childValue);
-      } else {
-        out[childKey] = [existing, childValue];
-      }
-    }
-  }
+  const hasStructure = walkChildren(out, node, namespaceContext);
   const text = textOf(node);
   if (!hasStructure) {
     // An empty open element is empty-string content, not xsi:nil.
@@ -881,19 +870,32 @@ const openSerialize = (
       continue;
     }
     const tag = elementName(key, ctx.prefixMap);
-    for (const item of Array.isArray(entry) ? entry : [entry]) {
-      if (item === null) {
-        usesXsi = true;
-        elements.push(`<${tag} xsi:nil="true"/>`);
-        continue;
-      }
-      const inner = openSerialize(item, ctx);
-      usesXsi = usesXsi || inner.usesXsi;
-      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
-      elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
-    }
+    usesXsi = pushOpenChildren(elements, tag, entry, ctx) || usesXsi;
   }
   return { attributes, body: elements.join(""), usesXsi };
+};
+
+// Emit one open-shape child element entry: arrays repeat the tag, null is nil.
+// Returns whether xsi:nil was used.
+const pushOpenChildren = (
+  elements: string[],
+  tag: string,
+  value: unknown,
+  ctx: SerializeCtx,
+): boolean => {
+  let usesXsi = false;
+  for (const item of Array.isArray(value) ? value : [value]) {
+    if (item === null) {
+      usesXsi = true;
+      elements.push(`<${tag} xsi:nil="true"/>`);
+      continue;
+    }
+    const inner = openSerialize(item, ctx);
+    usesXsi = usesXsi || inner.usesXsi;
+    const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+    elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
+  }
+  return usesXsi;
 };
 
 const serializePrimitive = (value: unknown): string => {
@@ -1039,18 +1041,7 @@ const writeObjectFields = (
       if (!hasAny) {
         continue;
       }
-      const tag = elementName(key, ctx.prefixMap);
-      for (const item of Array.isArray(value) ? value : [value]) {
-        if (item === null) {
-          usesXsi = true;
-          elements.push(`<${tag} xsi:nil="true"/>`);
-          continue;
-        }
-        const inner = openSerialize(item, ctx);
-        usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
-        elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
-      }
+      usesXsi = pushOpenChildren(elements, elementName(key, ctx.prefixMap), value, ctx) || usesXsi;
     }
   }
 
