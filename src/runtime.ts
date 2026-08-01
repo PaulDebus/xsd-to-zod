@@ -51,8 +51,9 @@ const toArray = <T>(value: T | T[] | undefined): T[] =>
   value === undefined ? [] : Array.isArray(value) ? value : [value];
 
 // Text content of a parsed node: character data plus verbatim CDATA sections.
-// Interleaved order between text and CDATA is not preserved (mixed content is
-// unsupported); the common cases (text-only, CDATA-only) are exact.
+// The builder concatenates an element's text segments, so their interleaving
+// with child elements (mixed content) is not preserved; the common cases
+// (text-only, CDATA-only) are exact.
 const textOf = (node: Record<string, unknown>): unknown => {
   const text = node["#text"];
   const cdata = node["#cdata"];
@@ -739,6 +740,12 @@ const readField = (
 
   if (fieldMeta.kind === "text") {
     const text = textOf(node);
+    // Mixed content makes `_text` optional: absent character data means an
+    // absent field. simpleContent's required `_text` still reads a
+    // present-but-empty element as empty-string content.
+    if (text === undefined && defAs<z.core.$ZodOptionalDef>(fieldSchema._zod.def, "optional")) {
+      return { present: false, value: undefined };
+    }
     // A present element without character data has empty-string content: valid
     // for string-allowing types, and numeric coercion of '' still rejects.
     return {
@@ -982,6 +989,9 @@ const writeObjectFields = (
     }
 
     if (fieldMeta.kind === "text") {
+      if (value === undefined) {
+        continue;
+      }
       elements.push(serializeLeaf(field.itemSchema, value));
       continue;
     }

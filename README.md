@@ -99,7 +99,7 @@ const xml = serializeXml(orderSchema, data);
 
 ## Features
 
-- **XSD constructs**: `sequence`, `choice` (→ per-group refine checks), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`
+- **XSD constructs**: `sequence`, `choice` (→ per-group refine checks), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, mixed content (`mixed="true"` → optional `_text` field next to the child elements)
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
@@ -255,12 +255,12 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 
 Not supported by the generator (the conformance tier validates them anyway):
 
-- Mixed content models
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
 - Substitution groups
 
 Zod-tier specifics worth knowing:
 
+- Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip
 - `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped, not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)

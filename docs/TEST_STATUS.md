@@ -125,7 +125,6 @@ Features tested include:
 
 These features exist in the test corpus but are skipped because the tool doesn't support them yet:
 
-- Mixed content models
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
 - Substitution groups
 - Attribute groups

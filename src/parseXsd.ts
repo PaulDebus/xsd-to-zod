@@ -1052,6 +1052,41 @@ const collectComplexContent: FieldHandler = (child, ctx, scope) => {
   collectFields(derivation, ctx, nestedScope(scope, scope.inheritedCardinality));
 };
 
+// XSD §3.4.2: a complex type is mixed when its <complexContent> carries
+// mixed="true", or — without complexContent — the <complexType> itself does;
+// the default is false. Mixed content allows character data interleaved with
+// the child elements.
+const isMixedComplexType = (node: AnyNode): boolean => {
+  const complexContent = nodeChildren(node).find(
+    ([key]) => getNodeTagLocalName(key) === "complexContent",
+  )?.[1];
+  const mixed = complexContent?.["@_mixed"] ?? node["@_mixed"];
+  return mixed === true || mixed === "true";
+};
+
+// Mixed content surfaces as an optional `_text` field of xs:string — the same
+// shape simpleContent uses. The XML parser concatenates an element's character
+// data segments, so their interleaving with child elements is not preserved.
+const prependMixedTextField = (fields: IrField[], ownerNs: string): void => {
+  if (fields.some((f) => f.kind === "text")) {
+    return;
+  }
+  fields.unshift({
+    minOccurs: 0,
+    maxOccurs: 1,
+    kind: "text",
+    qname: toClark(ownerNs, "_text"),
+    typeName: toClark(XSD_NS, "string"),
+  });
+};
+
+// Merging a mixed type's fields with a base/override that is mixed itself
+// would carry `_text` twice; keep the first occurrence.
+const dedupeTextFields = (fields: IrField[]): IrField[] => {
+  const firstText = fields.findIndex((f) => f.kind === "text");
+  return firstText === -1 ? fields : fields.filter((f, i) => f.kind !== "text" || i === firstText);
+};
+
 const FIELD_HANDLERS: Record<string, FieldHandler> = {
   element: collectElement,
   attribute: collectAttribute,
@@ -1653,6 +1688,9 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
       });
       const baseType = extractExtensionBase(child, resolveNsMap, state.diagnostics);
       const description = extractDocumentation(child);
+      if (isMixedComplexType(child)) {
+        prependMixedTextField(fields, effectiveNs);
+      }
 
       state.complexTypes[qname] = {
         name: qname,
@@ -1701,6 +1739,9 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
       const description = extractDocumentation(override.node);
       const choiceGroupMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
       const effectiveBaseType = baseType === override.qname ? undefined : baseType;
+      if (isMixedComplexType(override.node)) {
+        prependMixedTextField(fields, override.targetNs);
+      }
       if (baseType === override.qname && derivationKind === "extension") {
         const original = state.complexTypes[override.qname];
         if (original) {
@@ -1711,7 +1752,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           const mergedWildcards = [...(original.wildcards ?? []), ...wildcards];
           state.complexTypes[override.qname] = {
             name: override.qname,
-            fields: [...original.fields, ...fields],
+            fields: dedupeTextFields([...original.fields, ...fields]),
             ...optProp("baseType", original.baseType),
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
@@ -1799,6 +1840,9 @@ const processDeferredType = (
     parentTypeName: clarkToLocal(typeName),
   });
   const baseType = extractExtensionBase(container, nsMap, state.diagnostics);
+  if (isMixedComplexType(container)) {
+    prependMixedTextField(fields, ownerNs);
+  }
   state.complexTypes[typeName] = {
     name: typeName,
     fields,
@@ -1885,7 +1929,7 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     const mergedChoiceGroups = resolveMergedChoiceGroups(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
-      fields: resolveMergedFields(name, new Set()),
+      fields: dedupeTextFields(resolveMergedFields(name, new Set())),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
     };
