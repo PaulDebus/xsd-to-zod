@@ -126,6 +126,11 @@ export interface ContactType {
   "email"?: string | undefined;
   "phone"?: string | undefined;
 }
+export interface ParagraphType {
+  "_text"?: string | undefined;
+  "bold"?: string[] | undefined;
+  "italic"?: string[] | undefined;
+}
 export interface LineItemType {
   "productId": string;
   "quantity": bigint;
@@ -153,6 +158,7 @@ const b0 = has(val["email"]);
 const b1 = has(val["phone"]);
 return [b0, b1].filter(Boolean).length === 1;
 }, { message: "choice requires exactly one of: email, phone" })).register(xmlRegistry, { qname: "{urn:curated}ContactType", fields: { "email": { kind: "element", qname: "{urn:curated}email" }, "phone": { kind: "element", qname: "{urn:curated}phone" } } });
+const ParagraphTypeSchema: z.ZodType<ParagraphType> = z.lazy(() => z.object({"_text": z.string().optional(), "bold": z.array(z.string()).optional(), "italic": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}ParagraphType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" }, "bold": { kind: "element", qname: "{urn:curated}bold" }, "italic": { kind: "element", qname: "{urn:curated}italic" } } });
 const LineItemTypeSchema: z.ZodType<LineItemType> = z.lazy(() => z.object({"productId": z.string(), "quantity": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}LineItemType", fields: { "productId": { kind: "element", qname: "{urn:curated}productId" }, "quantity": { kind: "element", qname: "{urn:curated}quantity" } } });
 const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({"orderId": z.string(), "lineItem": z.array(LineItemTypeSchema).min(1)})).register(xmlRegistry, { qname: "{urn:curated}OrderType", fields: { "orderId": { kind: "element", qname: "{urn:curated}orderId" }, "lineItem": { kind: "element", qname: "{urn:curated}lineItem" } } });
 const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({"firstName": z.string(), "lastName": z.string(), "age": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}PersonType", fields: { "firstName": { kind: "element", qname: "{urn:curated}firstName" }, "lastName": { kind: "element", qname: "{urn:curated}lastName" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
@@ -160,6 +166,7 @@ export const allExampleSchema = z.lazy(() => AllTypeSchema).register(xmlRegistry
 export const OptionalBagSchema = z.lazy(() => anonymous_OptionalBag_TypeSchema).register(xmlRegistry, { root: "{urn:curated}OptionalBag" });
 export const BagSchema = z.lazy(() => anonymous_Bag_TypeSchema).register(xmlRegistry, { root: "{urn:curated}Bag" });
 export const contactSchema = z.lazy(() => ContactTypeSchema).register(xmlRegistry, { root: "{urn:curated}contact" });
+export const paragraphSchema = z.lazy(() => ParagraphTypeSchema).register(xmlRegistry, { root: "{urn:curated}paragraph" });
 export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, { root: "{urn:curated}order" });
 export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:curated}person" });
 "
