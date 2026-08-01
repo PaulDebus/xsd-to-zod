@@ -88,3 +88,61 @@ describe("xs:redefine self-references", () => {
     expect(ir.simpleTypes["{}yn-redefined"]).toBeDefined();
   });
 });
+
+// XSD 1.1 allows circular attributeGroup definitions (direct self-reference,
+// not through xs:redefine). The expansion must break the cycle so fields from
+// the non-self-referencing part are still collected.
+const ATTGC010 = path.resolve("testdata/upstream/w3c-xsdtests/msData/attributeGroup/attgC010.xsd");
+
+describe("circular attributeGroup self-reference (XSD 1.1)", () => {
+  it("does not overflow the stack on a direct attributeGroup self-ref and emits a diagnostic", () => {
+    const ir = parseXsd([ATTGC010]);
+    expect(ir.diagnostics).toEqual([
+      {
+        kind: "circular-attribute-group-ref",
+        message: 'circular attributeGroup ref "{}test" dropped',
+        ref: "{}test",
+      },
+    ]);
+    const testType = ir.complexTypes["{}test"]!;
+    const attrNames = testType.fields.filter((f) => f.kind === "attribute").map((f) => f.qname);
+    expect(attrNames).toContain("{}foo");
+    expect(attrNames).toContain("{}bar");
+  });
+});
+
+// Circular model groups must also be broken to prevent stack overflow.
+const CIRCULAR_GROUP = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="T" type="test"/>
+  <xs:complexType name="test">
+    <xs:group ref="test"/>
+  </xs:complexType>
+  <xs:group name="test">
+    <xs:sequence>
+      <xs:group ref="test"/>
+      <xs:element name="foo" type="xs:string"/>
+    </xs:sequence>
+  </xs:group>
+</xs:schema>`;
+
+describe("circular group self-reference (XSD 1.1)", () => {
+  it("does not overflow the stack on a direct group self-ref and emits a diagnostic", () => {
+    let ir: ReturnType<typeof parseXsd> | undefined;
+    withTempDir((dir) => {
+      const main = path.join(dir, "main.xsd");
+      fs.writeFileSync(main, CIRCULAR_GROUP);
+      ir = parseXsd([main]);
+    });
+    expect(ir!.diagnostics).toEqual([
+      {
+        kind: "circular-group-ref",
+        message: 'circular group ref "{}test" dropped',
+        ref: "{}test",
+      },
+    ]);
+    const testType = ir!.complexTypes["{}test"]!;
+    const elemNames = testType.fields.filter((f) => f.kind === "element").map((f) => f.qname);
+    expect(elemNames).toContain("{}foo");
+  });
+});
