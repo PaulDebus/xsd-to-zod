@@ -256,12 +256,12 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 Not supported by the generator (the conformance tier validates them anyway):
 
 - Mixed content models
-- `xs:any` / `xs:anyAttribute` wildcards
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
 - Substitution groups
 
 Zod-tier specifics worth knowing:
 
+- `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped, not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)
 - `xs:float`/`xs:double` specials `INF`/`-INF`/`NaN` are rejected
