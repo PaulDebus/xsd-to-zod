@@ -95,9 +95,15 @@ describe("xs:redefine self-references", () => {
 const ATTGC010 = path.resolve("testdata/upstream/w3c-xsdtests/msData/attributeGroup/attgC010.xsd");
 
 describe("circular attributeGroup self-reference (XSD 1.1)", () => {
-  it("does not overflow the stack on a direct attributeGroup self-ref", () => {
+  it("does not overflow the stack on a direct attributeGroup self-ref and emits a diagnostic", () => {
     const ir = parseXsd([ATTGC010]);
-    expect(ir.diagnostics).toHaveLength(0);
+    expect(ir.diagnostics).toEqual([
+      {
+        kind: "circular-attribute-group-ref",
+        message: 'circular attributeGroup ref "{}test" dropped',
+        ref: "{}test",
+      },
+    ]);
     const testType = ir.complexTypes["{}test"]!;
     const attrNames = testType.fields.filter((f) => f.kind === "attribute").map((f) => f.qname);
     expect(attrNames).toContain("{}foo");

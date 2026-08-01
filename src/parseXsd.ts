@@ -637,20 +637,14 @@ const expandGroupRef = (
   entry: GroupEntry | undefined,
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
-  stack: Set<string>,
+  kind: "group" | "attributeGroup",
   unresolvedKind: DiagnosticKind,
   unresolvedPrefix: string,
-  circularKind?: DiagnosticKind,
+  circularKind: DiagnosticKind,
 ): void => {
+  const stack = kind === "group" ? ctx.expansionStack.groups : ctx.expansionStack.attributeGroups;
   if (stack.has(refQName)) {
-    if (circularKind) {
-      report(
-        ctx.diagnostics,
-        circularKind,
-        `circular group ref "${refQName}" dropped`,
-        refQName,
-      );
-    }
+    report(ctx.diagnostics, circularKind, `circular ${kind} ref "${refQName}" dropped`, refQName);
     return;
   }
   if (!entry) {
@@ -990,7 +984,7 @@ const collectFields = (
           ...optProp("choiceBranch", choiceBranch),
           ...optProp("parentTypeName", parentTypeName),
         },
-        ctx.expansionStack.groups,
+        "group",
         "unresolved-group-ref",
         "unresolved group ref",
         "circular-group-ref",
@@ -1017,9 +1011,10 @@ const collectFields = (
           ...optProp("choiceBranch", choiceBranch),
           ...optProp("parentTypeName", parentTypeName),
         },
-        ctx.expansionStack.attributeGroups,
+        "attributeGroup",
         "unresolved-attribute-group-ref",
         "unresolved attributeGroup ref",
+        "circular-attribute-group-ref",
       );
       continue;
     }
