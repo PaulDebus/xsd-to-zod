@@ -595,10 +595,11 @@ type FieldCollectionContext = {
   attributes: Record<string, GlobalAttributeDecl>;
   diagnostics: Diagnostic[];
   allowMissingImports: boolean;
-  /** Tracks group refs currently being expanded to prevent infinite recursion. */
-  groupStack: Set<string>;
-  /** Tracks attributeGroup refs currently being expanded to prevent infinite recursion. */
-  attrGroupStack: Set<string>;
+  /** Tracks group / attributeGroup refs currently being expanded to prevent infinite recursion. */
+  expansionStack: {
+    groups: Set<string>;
+    attributeGroups: Set<string>;
+  };
 };
 
 // Shared shape for ref-based element fields.  The resolved-ref and
@@ -629,6 +630,48 @@ type CollectFieldsScope = {
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
   parentTypeName?: string;
+};
+
+const expandGroupRef = (
+  refQName: QName,
+  entry: GroupEntry | undefined,
+  ctx: FieldCollectionContext,
+  scope: CollectFieldsScope,
+  stack: Set<string>,
+  unresolvedKind: DiagnosticKind,
+  unresolvedPrefix: string,
+  circularKind?: DiagnosticKind,
+): void => {
+  if (stack.has(refQName)) {
+    if (circularKind) {
+      report(
+        ctx.diagnostics,
+        circularKind,
+        `circular group ref "${refQName}" dropped`,
+        refQName,
+      );
+    }
+    return;
+  }
+  if (!entry) {
+    report(ctx.diagnostics, unresolvedKind, `${unresolvedPrefix} "${refQName}"`, refQName);
+    return;
+  }
+  stack.add(refQName);
+  collectFields(
+    entry.node,
+    {
+      ...ctx,
+      nsMap: entry.nsMap,
+      formDefaults: entry.formDefaults,
+    },
+    {
+      ...scope,
+      ownerNs: entry.ownerNs,
+      parentTypeName: scope.parentTypeName ?? clarkToLocal(refQName),
+    },
+  );
+  stack.delete(refQName);
 };
 
 const collectFields = (
@@ -934,33 +977,24 @@ const collectFields = (
         continue;
       }
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
-      if (ctx.groupStack.has(refQName)) {
-        continue;
-      }
-      const groupEntry = groups[refQName];
-      if (groupEntry) {
-        ctx.groupStack.add(refQName);
-        collectFields(
-          groupEntry.node,
-          {
-            ...ctx,
-            nsMap: groupEntry.nsMap,
-            formDefaults: groupEntry.formDefaults,
-          },
-          {
-            ownerNs: groupEntry.ownerNs,
-            fields,
-            wildcards,
-            ...optProp("choiceGroup", choiceGroup),
-            inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
-            ...optProp("choiceBranch", choiceBranch),
-            parentTypeName: parentTypeName ?? clarkToLocal(refQName),
-          },
-        );
-        ctx.groupStack.delete(refQName);
-      } else {
-        report(diagnostics, "unresolved-group-ref", `unresolved group ref "${refQName}"`, refQName);
-      }
+      expandGroupRef(
+        refQName,
+        groups[refQName],
+        ctx,
+        {
+          ownerNs,
+          fields,
+          wildcards,
+          ...optProp("choiceGroup", choiceGroup),
+          inheritedCardinality: combineCardinality(inheritedCardinality, parseCardinality(child)),
+          ...optProp("choiceBranch", choiceBranch),
+          ...optProp("parentTypeName", parentTypeName),
+        },
+        ctx.expansionStack.groups,
+        "unresolved-group-ref",
+        "unresolved group ref",
+        "circular-group-ref",
+      );
       continue;
     }
 
@@ -970,38 +1004,23 @@ const collectFields = (
         continue;
       }
       const refQName = resolveTypeQName(ref, nsMap, diagnostics);
-      if (ctx.attrGroupStack.has(refQName)) {
-        continue;
-      }
-      const attrEntry = attributeGroups[refQName];
-      if (attrEntry) {
-        ctx.attrGroupStack.add(refQName);
-        collectFields(
-          attrEntry.node,
-          {
-            ...ctx,
-            nsMap: attrEntry.nsMap,
-            formDefaults: attrEntry.formDefaults,
-          },
-          {
-            ownerNs: attrEntry.ownerNs,
-            fields,
-            wildcards,
-            ...optProp("choiceGroup", choiceGroup),
-            inheritedCardinality,
-            ...optProp("choiceBranch", choiceBranch),
-            parentTypeName: parentTypeName ?? clarkToLocal(refQName),
-          },
-        );
-        ctx.attrGroupStack.delete(refQName);
-      } else {
-        report(
-          diagnostics,
-          "unresolved-attribute-group-ref",
-          `unresolved attributeGroup ref "${refQName}"`,
-          refQName,
-        );
-      }
+      expandGroupRef(
+        refQName,
+        attributeGroups[refQName],
+        ctx,
+        {
+          ownerNs,
+          fields,
+          wildcards,
+          ...optProp("choiceGroup", choiceGroup),
+          inheritedCardinality,
+          ...optProp("choiceBranch", choiceBranch),
+          ...optProp("parentTypeName", parentTypeName),
+        },
+        ctx.expansionStack.attributeGroups,
+        "unresolved-attribute-group-ref",
+        "unresolved attributeGroup ref",
+      );
       continue;
     }
 
@@ -1178,8 +1197,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     attributes,
     diagnostics: diagnostics,
     allowMissingImports: opts?.allowMissingImports ?? false,
-    groupStack: new Set(),
-    attrGroupStack: new Set(),
+    expansionStack: { groups: new Set(), attributeGroups: new Set() },
   });
 
   // Build import/include graph for topological sorting

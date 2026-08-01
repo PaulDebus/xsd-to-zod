@@ -92,7 +92,9 @@ export type DiagnosticKind =
   /** Union member dropped because it closed a derivation cycle. */
   | "circular-union-member"
   /** Restriction/list type dropped because it derives from itself. */
-  | "circular-derivation";
+  | "circular-derivation"
+  /** Group ref dropped because it closed an expansion cycle. */
+  | "circular-group-ref";
 
 export type Diagnostic = {
   kind: DiagnosticKind;
