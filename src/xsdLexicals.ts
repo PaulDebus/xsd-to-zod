@@ -32,7 +32,9 @@ const DATE_TIME_RE = new RegExp(String.raw`^(${YEAR})-(${MONTH})-(${DAY})T${TIME
 const TIME_RE = new RegExp(String.raw`^${TIME}(?:${TZ})?$`);
 const G_YEAR_RE = new RegExp(String.raw`^(${YEAR})(?:${TZ})?$`);
 const G_YEAR_MONTH_RE = new RegExp(String.raw`^(${YEAR})-${MONTH}(?:${TZ})?$`);
-const G_MONTH_RE = new RegExp(String.raw`^--${MONTH}(?:${TZ})?$`);
+// XSD 1.0 writes gMonth as --MM--, XSD 1.1 dropped the trailing --; both are
+// accepted (the round-trip re-emits the original lexical).
+const G_MONTH_RE = new RegExp(String.raw`^--${MONTH}(?:--)?(?:${TZ})?$`);
 const G_MONTH_DAY_RE = new RegExp(String.raw`^--(${MONTH})-(${DAY})(?:${TZ})?$`);
 const G_DAY_RE = new RegExp(String.raw`^---${DAY}(?:${TZ})?$`);
 

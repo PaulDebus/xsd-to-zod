@@ -84,7 +84,7 @@ const DATE_TIME_RE = new RegExp(String.raw`^(${YEAR})-(${MONTH})-(${DAY})T${TIME
 const TIME_RE = new RegExp(String.raw`^${TIME_C}${TZ_C}?$`);
 const G_YEAR_RE = new RegExp(String.raw`^(${YEAR})${TZ_C}?$`);
 const G_YEAR_MONTH_RE = new RegExp(String.raw`^(${YEAR})-(${MONTH})${TZ_C}?$`);
-const G_MONTH_RE = new RegExp(String.raw`^--(${MONTH})${TZ_C}?$`);
+const G_MONTH_RE = new RegExp(String.raw`^--(${MONTH})(?:--)?${TZ_C}?$`);
 const G_MONTH_DAY_RE = new RegExp(String.raw`^--(${MONTH})-(${DAY})${TZ_C}?$`);
 const G_DAY_RE = new RegExp(String.raw`^---(${DAY})${TZ_C}?$`);
 
