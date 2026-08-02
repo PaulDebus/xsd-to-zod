@@ -146,6 +146,7 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 | `--include-libraries` | Include type-definition-only schemas (those without root elements); skipped by default |
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
+| `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
 
 Bundle all imports and includes into a single self-contained XSD:
 

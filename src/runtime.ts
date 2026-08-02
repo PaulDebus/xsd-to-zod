@@ -4,6 +4,7 @@ import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
 import { type XmlFieldMeta, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import { writeXsdDatatype, type XsdDatatypeName, type XsdStructuredValue } from "./xsdDateTime.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 
@@ -652,6 +653,10 @@ const substituteEmpty = (
   if (field.hasFixed) {
     return { substituted: true, value: field.fixedValue };
   }
+  // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+  if (fieldMeta.fixedValue !== undefined) {
+    return { substituted: true, value: fieldMeta.fixedValue };
+  }
   if (fieldMeta.defaultValue !== undefined) {
     return { substituted: true, value: fieldMeta.defaultValue };
   }
@@ -729,6 +734,16 @@ const readField = (
       // validate:false fast path the walker supplies them from the def.
       if (field.hasFixed) {
         return { present: true, value: field.fixedValue };
+      }
+      // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+      if (fieldMeta.fixedValue !== undefined) {
+        return { present: true, value: fieldMeta.fixedValue };
+      }
+      // Structured date/time attribute default: the meta lexical, which
+      // validation transforms (the def default is the transformed object and
+      // would fail re-validation as a pipe input).
+      if (fieldMeta.defaultValue !== undefined) {
+        return { present: true, value: fieldMeta.defaultValue };
       }
       if (field.hasDefault) {
         return { present: true, value: field.defaultValue };
@@ -955,6 +970,26 @@ const serializeLeaf = (schema: AnySchema, value: unknown): string => {
   return serializePrimitive(value);
 };
 
+// Structured date/time value → canonical XSD lexical. Strings pass through
+// unchanged (back-compat for hand-written schemas and mixed usage).
+const serializeDatatypeValue = (datatype: XsdDatatypeName, value: unknown): string =>
+  escapeXml(
+    typeof value === "string" ? value : writeXsdDatatype(datatype, value as XsdStructuredValue),
+  );
+
+// Leaf serialization honoring the field's structured datatype meta; list
+// values canonicalize per item.
+const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: unknown): string => {
+  const datatype = fieldMeta.datatype;
+  if (datatype === undefined) {
+    return serializeLeaf(schema, value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeDatatypeValue(datatype, item)).join(" ");
+  }
+  return serializeDatatypeValue(datatype, value);
+};
+
 const writeObjectFields = (
   schema: AnySchema,
   obj: Record<string, unknown>,
@@ -983,7 +1018,7 @@ const writeObjectFields = (
         continue;
       }
       attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeLeaf(field.itemSchema, value)}"`,
+        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeFieldLeaf(fieldMeta, field.itemSchema, value)}"`,
       );
       continue;
     }
@@ -992,7 +1027,7 @@ const writeObjectFields = (
       if (value === undefined) {
         continue;
       }
-      elements.push(serializeLeaf(field.itemSchema, value));
+      elements.push(serializeFieldLeaf(fieldMeta, field.itemSchema, value));
       continue;
     }
 
@@ -1026,7 +1061,9 @@ const writeObjectFields = (
         elements.push(`<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`);
         continue;
       }
-      elements.push(`<${localName}>${serializeLeaf(field.itemSchema, item)}</${localName}>`);
+      elements.push(
+        `<${localName}>${serializeFieldLeaf(fieldMeta, field.itemSchema, item)}</${localName}>`,
+      );
     }
   }
 
@@ -1138,8 +1175,14 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
-  } else {
+  } else if (meta.datatype === undefined) {
     body = serializeLeaf(typeSchema, data);
+  } else {
+    // List-typed root: whitespace-joined canonical lexicals, one per item.
+    const rootDatatype = meta.datatype;
+    body = Array.isArray(data)
+      ? data.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
+      : serializeDatatypeValue(rootDatatype, data);
   }
 
   const nsDecls: string[] = [];

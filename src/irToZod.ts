@@ -2,10 +2,49 @@ import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
 import type { ComplexTypeDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
+import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
 const NUMBER_PRIMITIVES = new Set([...XSD_SAFE_INTEGER_TYPE_NAMES, "decimal", "float", "double"]);
+
+// Date/time builtins that datatypes: "structured" parses into plain objects
+// (xsdDateTime.ts): builtin local name → generated-code helper and TS type.
+const XSD_STRUCTURED_TYPES: ReadonlyMap<
+  string,
+  { parseFn: string; writeFn: string; tsType: string }
+> = new Map([
+  ["date", { parseFn: "parseXsdDate", writeFn: "writeXsdDate", tsType: "XsdDate" }],
+  ["dateTime", { parseFn: "parseXsdDateTime", writeFn: "writeXsdDateTime", tsType: "XsdDateTime" }],
+  ["time", { parseFn: "parseXsdTime", writeFn: "writeXsdTime", tsType: "XsdTime" }],
+  ["gYear", { parseFn: "parseXsdGYear", writeFn: "writeXsdGYear", tsType: "XsdGYear" }],
+  [
+    "gYearMonth",
+    { parseFn: "parseXsdGYearMonth", writeFn: "writeXsdGYearMonth", tsType: "XsdGYearMonth" },
+  ],
+  ["gMonth", { parseFn: "parseXsdGMonth", writeFn: "writeXsdGMonth", tsType: "XsdGMonth" }],
+  [
+    "gMonthDay",
+    { parseFn: "parseXsdGMonthDay", writeFn: "writeXsdGMonthDay", tsType: "XsdGMonthDay" },
+  ],
+  ["gDay", { parseFn: "parseXsdGDay", writeFn: "writeXsdGDay", tsType: "XsdGDay" }],
+  ["duration", { parseFn: "parseXsdDuration", writeFn: "writeXsdDuration", tsType: "XsdDuration" }],
+]);
+
+// Structured helper for a builtin local name, narrowed for the dispatch fns.
+const structuredType = (
+  builtinLocal: string | undefined,
+):
+  | ({ parseFn: string; writeFn: string; tsType: string } & { name: XsdDatatypeName })
+  | undefined => {
+  const info = builtinLocal === undefined ? undefined : XSD_STRUCTURED_TYPES.get(builtinLocal);
+  return info === undefined ? undefined : { ...info, name: builtinLocal as XsdDatatypeName };
+};
+
+// Parse a fixed/default lexical at codegen time and emit it as an object
+// literal matching the structured runtime value.
+const structuredLiteral = (name: XsdDatatypeName, raw: string): string =>
+  JSON.stringify(parseXsdDatatype(name, raw));
 
 // Builtins whose lexical space the zod tier can check (xsdLexicals.ts has the
 // validators): builtin local name → exported validator function. QName,
@@ -142,6 +181,7 @@ const primitiveToZod = (
   definedTypes: Set<string>,
   constName: ReadonlyMap<QName, string>,
   usedHelpers: Set<string>,
+  structured: boolean,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -181,7 +221,15 @@ const primitiveToZod = (
   const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
   if (validator) {
     usedHelpers.add(validator);
-    return `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    const base = `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    // Structured mode: the lexical check stays, the parsed value becomes a
+    // plain object (xsdDateTime.ts) via a transform after the refine.
+    const structuredInfo = structured ? structuredType(parts.local) : undefined;
+    if (structuredInfo) {
+      usedHelpers.add(structuredInfo.parseFn);
+      return `${base}.transform(${structuredInfo.parseFn})`;
+    }
+    return base;
   }
 
   return XSD_PRIMITIVE_EMITTERS.get(parts.local) ?? "z.string()";
@@ -239,7 +287,9 @@ const withFacets = (
   facets: Facet[],
   usage: FacetUsage,
   kind: "number" | "bigint" | "boolean" | "string",
-  builtinLocal?: string,
+  builtinLocal: string | undefined,
+  structured: boolean,
+  usedHelpers: Set<string>,
 ): string => {
   if (!facets.length) {
     return base;
@@ -248,6 +298,21 @@ const withFacets = (
   const enumFacets = facets.filter((f) => f.kind === "enumeration");
   const whiteSpace = facets.find((f) => f.kind === "whiteSpace");
   const enumLiterals = enumFacets.map((f) => typedLiteral(kind, f.value));
+
+  // Structured date/time values are objects, so enum membership compares
+  // canonical lexicals (value-space equality) instead of reference identity.
+  const st = structured ? structuredType(builtinLocal) : undefined;
+  if (st && enumFacets.length > 0) {
+    usedHelpers.add(st.writeFn);
+  }
+  const enumConstraint =
+    st === undefined
+      ? undefined
+      : `.refine((val) => [${enumFacets
+          .map((f) => JSON.stringify(writeXsdDatatype(st.name, parseXsdDatatype(st.name, f.value))))
+          .join(
+            ", ",
+          )}].includes(${st.writeFn}(val)), { message: 'value is not one of the allowed values' })`;
 
   // Order facets on xs:decimal compare the original lexicals, not the coerced
   // double: both the boundary and the instance value can carry more
@@ -290,7 +355,10 @@ const withFacets = (
   }
 
   if (enumFacets.length > 0 && otherFacets.length === 0 && decimalOrderFacets.length === 0) {
-    if (isStringType(base)) {
+    if (enumConstraint !== undefined) {
+      // Structured base (a string→object pipe): keep it and constrain.
+      result += enumConstraint;
+    } else if (isStringType(base)) {
       result = `z.enum([${enumLiterals.join(", ")}])`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
       result = `z.union([${enumLiterals.map((lit) => `z.literal(${lit})`).join(", ")}])`;
@@ -302,9 +370,14 @@ const withFacets = (
     for (const facet of otherFacets) {
       switch (facet.kind) {
         case "pattern":
-          // .regex() exists only on string schemas; elsewhere the pattern is
-          // checked against the coerced value's string form (#114).
-          if (isStringType(result)) {
+          // Structured date/time values have no string form of their own; the
+          // pattern applies to the canonical lexical.
+          if (st !== undefined) {
+            usedHelpers.add(st.writeFn);
+            result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
+          } else if (isStringType(result)) {
+            // .regex() exists only on string schemas; elsewhere the pattern is
+            // checked against the coerced value's string form (#114).
             result += `.regex(new RegExp(${JSON.stringify(facet.value)}))`;
           } else {
             result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(String(val)), { message: 'value does not match the pattern' })`;
@@ -332,6 +405,11 @@ const withFacets = (
           ) {
             // Length unit is list items (whitespace-separated tokens).
             result += `.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${facet.value}, { message: 'item count constraint violated' })`;
+          } else if (st !== undefined) {
+            // Structured date/time: the length facet applies to the lexical
+            // space, so measure the canonical lexical of the parsed value.
+            usedHelpers.add(st.writeFn);
+            result += `.refine((val) => ${st.writeFn}(val).length ${op} ${facet.value}, { message: 'length constraint violated' })`;
           } else if (isStringType(result)) {
             result +=
               facet.kind === "length"
@@ -416,7 +494,9 @@ const withFacets = (
     }
 
     if (enumFacets.length > 0) {
-      result += `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
+      result +=
+        enumConstraint ??
+        `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   }
 
@@ -468,10 +548,24 @@ const withCardinality = (
   field: IrField,
   ir: XsdIr,
   forceOptional: boolean,
+  structured: boolean,
+  usedHelpers: Set<string>,
 ): string => {
   const kind = resolvePrimitiveKind(field.typeName, ir);
-  let result =
-    field.fixedValue === undefined ? schema : `z.literal(${typedLiteral(kind, field.fixedValue)})`;
+  let result = schema;
+  if (field.fixedValue !== undefined) {
+    // Structured date/time fixed: z.literal compares objects by reference, so
+    // constrain by canonical lexical equality instead. The value itself is in
+    // the field meta (the runtime substitutes present-but-empty content).
+    const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
+    if (st) {
+      usedHelpers.add(st.writeFn);
+      const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
+      result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
+    } else {
+      result = `z.literal(${typedLiteral(kind, field.fixedValue)})`;
+    }
+  }
   if (field.nillable) {
     result += ".nullable()";
   }
@@ -498,7 +592,8 @@ const withCardinality = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined
   ) {
-    result += `.default(${typedLiteral(kind, field.defaultValue)})`;
+    const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
+    result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
   }
   return result;
 };
@@ -605,23 +700,55 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
   return refines;
 };
 
+// The structured datatype a type's values arrive in, looking through xs:list
+// item types (a list of xs:date holds structured items too). Literals must NOT
+// use this: fixed/default lexicals of a list type are whitespace-separated.
+const structuredTypeOfTypeName = (
+  typeName: QName,
+  ir: XsdIr,
+): ReturnType<typeof structuredType> => {
+  const direct = structuredType(resolveBuiltinLocal(typeName, ir));
+  if (direct) {
+    return direct;
+  }
+  const simple = ir.simpleTypes[typeName];
+  return simple?.kind === "list"
+    ? structuredType(resolveBuiltinLocal(simple.itemType, ir))
+    : undefined;
+};
+
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict.
-const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr): string => {
+const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr, structured: boolean): string => {
   const entries = type.fields.map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
     if (field.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       parts.push("open: true");
     }
+    const st = structured ? structuredTypeOfTypeName(field.typeName, ir) : undefined;
+    if (st) {
+      // Lets the serializer canonicalize structured values back to lexicals.
+      parts.push(`datatype: ${JSON.stringify(st.name)}`);
+    }
+    // The runtime substitutes meta defaults before validation, so even in
+    // structured mode the meta holds the lexical — the schema's transform
+    // turns it into the structured value. Attribute defaults only need the
+    // meta in structured mode: string mode reads them from the zod def.
     if (
-      field.kind === "element" &&
       field.defaultValue !== undefined &&
-      field.fixedValue === undefined
+      field.fixedValue === undefined &&
+      (field.kind === "element" || (structured && st && field.kind === "attribute"))
     ) {
       parts.push(
         `defaultValue: ${typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.defaultValue)}`,
       );
+    }
+    if (structured && st && field.fixedValue !== undefined) {
+      // Structured fixed values cannot ride a z.literal (reference equality on
+      // objects): the constraint is a canonical-lexical refine and the runtime
+      // substitutes the lexical from here (validation transforms it).
+      parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
@@ -658,12 +785,14 @@ const tsArrayOf = (type: string): string => `${type.includes(" | ") ? `(${type})
 
 // TS output type for a type reference, mirroring the runtime output of the
 // generated zod expression. Interfaces exist only for complex types; simple
-// types are inlined structurally.
+// types are inlined structurally. `dt` is set in structured mode and collects
+// the xsdDateTime type names the generated module must import.
 const tsTypeOfTypeName = (
   typeName: QName,
   ir: XsdIr,
   ifaceName: ReadonlyMap<QName, string>,
   seen: Set<QName>,
+  dt: { usedTypes: Set<string> } | undefined,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -675,6 +804,11 @@ const tsTypeOfTypeName = (
     }
     if (XSD_SAFE_INTEGER_TYPE_NAMES.has(parts.local)) {
       return "number";
+    }
+    const st = dt ? structuredType(parts.local) : undefined;
+    if (st) {
+      dt?.usedTypes.add(st.tsType);
+      return st.tsType;
     }
     switch (parts.local) {
       case "anyType":
@@ -698,10 +832,10 @@ const tsTypeOfTypeName = (
   }
   seen.add(typeName);
   if (simple.kind === "list") {
-    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen));
+    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen, dt));
   }
   if (simple.kind === "union") {
-    const members = simple.memberTypes.map((mt) => tsTypeOfTypeName(mt, ir, ifaceName, seen));
+    const members = simple.memberTypes.map((mt) => tsTypeOfTypeName(mt, ir, ifaceName, seen, dt));
     return members.length > 0 ? members.join(" | ") : "unknown";
   }
   // Restriction: a pure enumeration on a direct builtin base becomes a
@@ -716,10 +850,16 @@ const tsTypeOfTypeName = (
     baseParts?.ns === XSD_NS &&
     baseParts.local !== "anyType"
   ) {
+    // Structured enums have no literal types (objects); the base type it is.
+    const st = dt ? structuredType(baseParts.local) : undefined;
+    if (st) {
+      dt?.usedTypes.add(st.tsType);
+      return st.tsType;
+    }
     const kind = resolvePrimitiveKind(simple.baseType, ir);
     return enumFacets.map((f) => typedLiteral(kind, f.value)).join(" | ");
   }
-  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen);
+  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt);
 };
 
 // Escape `*/` and format a description as a JSDoc block.
@@ -743,11 +883,21 @@ const tsFieldLine = (
   ir: XsdIr,
   ifaceName: ReadonlyMap<QName, string>,
   forceOptional: boolean,
+  dt: { usedTypes: Set<string> } | undefined,
 ): string => {
-  let type =
-    field.fixedValue === undefined
-      ? tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set())
-      : typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.fixedValue);
+  let type: string;
+  if (field.fixedValue === undefined) {
+    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
+  } else {
+    // Structured fixed values have no literal type; the base type it is.
+    const st = dt ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
+    if (st) {
+      dt?.usedTypes.add(st.tsType);
+      type = st.tsType;
+    } else {
+      type = typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.fixedValue);
+    }
+  }
   if (field.nillable) {
     type += " | null";
   }
@@ -806,9 +956,14 @@ export type IrToZodOptions = {
   // Emit plain JavaScript (no TS type annotations) so the output can be
   // imported directly as .mjs — used by the CLI validate subcommand.
   js?: boolean;
+  // "structured" parses the XSD date/time builtins into plain objects
+  // (xsdDateTime.ts) via a transform after the lexical check; "string"
+  // (default) keeps them as validated strings.
+  datatypes?: "string" | "structured";
 };
 
 export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } => {
+  const structured = opts?.datatypes === "structured";
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([
     ...Object.keys(ir.simpleTypes),
@@ -816,6 +971,8 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   ]);
   const usage: FacetUsage = { totalDigits: false, fractionDigits: false, decimalCompare: false };
   const usedHelpers = new Set<string>();
+  const usedTypes = new Set<string>();
+  const dt = structured && !opts?.js ? { usedTypes } : undefined;
 
   // Unique identifiers for the generated module, shared across value and type
   // space so an interface can never shadow a root export (public API of
@@ -874,6 +1031,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
             ir,
             ifaceName,
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
+            dt,
           ),
         )
         .join("\n");
@@ -892,15 +1050,27 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     claimTypeName(simpleType.name);
     let expr: string;
     if (simpleType.kind === "list") {
-      const itemExpr = primitiveToZod(simpleType.itemType, definedTypes, constName, usedHelpers);
+      const itemExpr = primitiveToZod(
+        simpleType.itemType,
+        definedTypes,
+        constName,
+        usedHelpers,
+        structured,
+      );
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
       const memberExprs = simpleType.memberTypes.map((mt) =>
-        primitiveToZod(mt, definedTypes, constName, usedHelpers),
+        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured),
       );
       expr = `z.union([${memberExprs.join(", ")}])`;
     } else {
-      const baseExpr = primitiveToZod(simpleType.baseType, definedTypes, constName, usedHelpers);
+      const baseExpr = primitiveToZod(
+        simpleType.baseType,
+        definedTypes,
+        constName,
+        usedHelpers,
+        structured,
+      );
       expr = simpleType.facets
         ? withFacets(
             baseExpr,
@@ -908,6 +1078,8 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
             usage,
             resolvePrimitiveKind(simpleType.name, ir),
             resolveBuiltinLocal(simpleType.name, ir),
+            structured,
+            usedHelpers,
           )
         : baseExpr;
     }
@@ -923,10 +1095,12 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
             withCardinality(
-              primitiveToZod(field.typeName, definedTypes, constName, usedHelpers),
+              primitiveToZod(field.typeName, definedTypes, constName, usedHelpers, structured),
               field,
               ir,
               field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
+              structured,
+              usedHelpers,
             ),
             field.description,
           )}`,
@@ -938,7 +1112,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       `const ${constName.get(complexType.name)}${annotation} = ${registered(
         `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${choiceRefines(complexType).join("")})`,
         complexType.description,
-        fieldsMetaFor(complexType, ir),
+        fieldsMetaFor(complexType, ir, structured),
       )};`,
     );
   }
@@ -951,11 +1125,15 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     // Root exports are fresh wrapper objects: registry meta is keyed by schema
     // object identity, so registering { root } on the shared type schema would
     // clobber its type meta (and collide when two roots share one type).
-    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers)})`;
+    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured)})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`];
     if (rootDef.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       rootMeta.push("open: true");
+    }
+    const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
+    if (rootSt) {
+      rootMeta.push(`datatype: ${JSON.stringify(rootSt.name)}`);
     }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(
@@ -985,9 +1163,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     usage.decimalCompare ? "xsdDecimalCompare" : undefined,
     ...[...usedHelpers].sort(),
   ].filter((name): name is string => name !== undefined);
+  const typeImport =
+    usedTypes.size > 0
+      ? `\nimport type { ${[...usedTypes].sort().join(", ")} } from 'xsd-to-zod';`
+      : "";
   schemaLines[importLineIndex] =
     `import { z } from 'zod';\n` +
-    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';`;
+    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
 
   return { schemas: `${schemaLines.join("\n")}\n` };
 };

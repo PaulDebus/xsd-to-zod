@@ -13,14 +13,17 @@
 // procedure — there is nothing a lexical check could reject. QName/NOTATION
 // need schema context and are separate work.
 
-const collapseWhiteSpace = (value: string): string =>
+// Exported for xsdDateTime.ts, whose structured parsers collapse first too.
+export const collapseWhiteSpace = (value: string): string =>
   value.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
 
 // XSD 1.0 timezones are bounded to -14:00..+14:00 (per errata).
-const TZ = String.raw`(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))`;
-const YEAR = String.raw`-?(?:[1-9]\d{3,}|0\d{3})`;
-const MONTH = String.raw`(?:0[1-9]|1[0-2])`;
-const DAY = String.raw`(?:0[1-9]|[12]\d|3[01])`;
+// The lexical building blocks are exported for the structured parsers in
+// xsdDateTime.ts, which wrap them in capture groups.
+export const TZ = String.raw`(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))`;
+export const YEAR = String.raw`-?(?:[1-9]\d{3,}|0\d{3})`;
+export const MONTH = String.raw`(?:0[1-9]|1[0-2])`;
+export const DAY = String.raw`(?:0[1-9]|[12]\d|3[01])`;
 // Hour 24 is only permitted as 24:00:00 with optional zero fraction.
 const TIME = String.raw`(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?|24:00:00(?:\.0+)?)`;
 
@@ -34,8 +37,9 @@ const G_MONTH_DAY_RE = new RegExp(String.raw`^--(${MONTH})-(${DAY})(?:${TZ})?$`)
 const G_DAY_RE = new RegExp(String.raw`^---${DAY}(?:${TZ})?$`);
 
 // Shape only; component presence is checked after the match ("P"/"PT" carry
-// no components and are invalid).
-const DURATION_RE =
+// no components and are invalid). Exported for the structured duration parser
+// in xsdDateTime.ts (the capture groups carry the components).
+export const DURATION_RE =
   /^-?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/;
 
 const daysInMonth = (year: number, month: number): number => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { QName } from "./types.js";
+import type { XsdDatatypeName } from "./xsdDateTime.js";
 
 /**
  * Per-field XML knowledge, stored on the containing object schema (not on the
@@ -10,12 +11,27 @@ export type XmlFieldMeta = {
   kind: "element" | "attribute" | "text" | "any" | "anyAttribute";
   qname: QName;
   /**
-   * Element default (coerced JS value, elements only). XSD applies an element
-   * default to present-but-empty elements — not to absent ones — so it cannot
-   * be a zod `.default()`; the runtime substitutes it while walking (#66).
-   * Attribute defaults are plain `.default()` on the field schema instead.
+   * Element default (coerced JS value). XSD applies an element default to
+   * present-but-empty elements — not to absent ones — so it cannot be a zod
+   * `.default()`; the runtime substitutes it while walking (#66). Attribute
+   * defaults are plain `.default()` on the field schema instead — except in
+   * structured date/time mode, where the meta carries the lexical and the
+   * schema's transform produces the structured value.
    */
   defaultValue?: unknown;
+  /**
+   * Structured date/time fixed value (datatypes: "structured" only), held as
+   * its XSD lexical: objects cannot ride a z.literal (reference equality), so
+   * the fixed constraint is a canonical-lexical refine and the runtime
+   * substitutes from here — validation then transforms it, like any content.
+   */
+  fixedValue?: unknown;
+  /**
+   * Structured date/time builtin of the field's values (datatypes:
+   * "structured" only). The serializer canonicalizes non-string values back
+   * to XSD lexicals with the matching writer; strings pass through.
+   */
+  datatype?: XsdDatatypeName;
   /**
    * Open (xs:anyType) content: the field holds the normalized open shape
    * (clark-keyed children, '@'-prefixed attributes, '_text') rather than a
@@ -45,6 +61,8 @@ export type XmlMeta = {
   fixedValue?: unknown;
   /** Open (xs:anyType) root element — see XmlFieldMeta.open. */
   open?: boolean;
+  /** Structured date/time builtin of a simple-typed root — see XmlFieldMeta.datatype. */
+  datatype?: XsdDatatypeName;
   fields?: Record<string, XmlFieldMeta>;
 };
 
