@@ -3,8 +3,16 @@ import { CompactBuilderFactory } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
-import { type XmlFieldMeta, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
-import { writeXsdDatatype, type XsdDatatypeName, type XsdStructuredValue } from "./xsdDateTime.js";
+import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import { xsdDecimalCompare } from "./xsdChecks.js";
+import {
+  parseXsdDatatype,
+  writeXsdDatatype,
+  type XsdDatatypeName,
+  type XsdStructuredValue,
+} from "./xsdDateTime.js";
+import { collapseWhiteSpace } from "./xsdLexicals.js";
+import { xsdPattern } from "./xsdPattern.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 
@@ -346,9 +354,15 @@ const coerceList = (raw: unknown, itemSchema: AnySchema): unknown[] =>
     .filter(Boolean)
     .map((item) => coerceLexical(item, itemSchema));
 
-const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
+const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unknown => {
   if (raw === undefined || raw === null) {
     return raw;
+  }
+  if (!skipFacets) {
+    const facets = findFacetsMeta(schema);
+    if (facets !== undefined) {
+      checkLexicalFacets(String(raw), schema, facets);
+    }
   }
   const def = unwrapModifiers(schema)._zod.def;
   switch (def.type) {
@@ -415,6 +429,207 @@ const coerceLexical = (raw: unknown, schema: AnySchema): unknown => {
     default:
       return raw;
   }
+};
+
+// ---------------------------------------------------------------------------
+// Lexical preservation. Coercion discards the original XML text, but two
+// consumers still need it: the lexical-space facets (XSD evaluates pattern
+// against the lexical, and exact decimal boundaries outlive a double) and the
+// serializer (libxml2 validates the serialized document, so `007` must not
+// come back as `7`). Facet checks run here, at the single coercion point;
+// the serializer consults the retained lexicals recorded by the read path.
+// ---------------------------------------------------------------------------
+
+// Walk the wrapper chain until a schema carries registry meta with lexical
+// facets — simple types register them on their type schema.
+const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined => {
+  let current = schema;
+  for (;;) {
+    const meta = xmlRegistry.get(current);
+    if (meta?.facets) {
+      return meta.facets;
+    }
+    const next = peelOnce(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
+  }
+};
+
+const applyWhiteSpace = (
+  lexical: string,
+  whiteSpace: "replace" | "collapse" | undefined,
+): string => {
+  if (whiteSpace === "replace") {
+    return lexical.replace(/[\t\n\r]/g, " ");
+  }
+  if (whiteSpace === "collapse") {
+    return collapseWhiteSpace(lexical);
+  }
+  return lexical;
+};
+
+const valuesEqual = (a: unknown, b: unknown): boolean => {
+  if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, i) => valuesEqual(item, b[i]));
+  }
+  return a === b;
+};
+
+// Enumeration membership is a value-space compare, both sides prepared the
+// same way: date/time builtins canonicalize (-00:00 equals +00:00), anything
+// else compares the coerced JS values (decimal 1.0 equals 1.00).
+const enumValue = (lexical: string, schema: AnySchema, facets: XmlLexicalFacets): unknown => {
+  if (facets.datatype !== undefined) {
+    try {
+      return writeXsdDatatype(facets.datatype, parseXsdDatatype(facets.datatype, lexical));
+    } catch {
+      return lexical;
+    }
+  }
+  try {
+    return coerceLexical(lexical, schema, true);
+  } catch {
+    return lexical;
+  }
+};
+
+// Lexical-space facets cannot live in the generated schema (a zod refine only
+// sees the coerced value), so the runtime enforces them at parse time.
+const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFacets): void => {
+  const lexical = applyWhiteSpace(raw, facets.whiteSpace);
+  // Each derivation step contributes an alternative set: any one pattern per
+  // set must match (XSD ORs within a step, ANDs across steps).
+  for (const alternatives of facets.patterns ?? []) {
+    if (!alternatives.some((source) => xsdPattern(source).test(lexical))) {
+      throw new Error(`Invalid lexical ${JSON.stringify(raw)}: does not match the pattern facet`);
+    }
+  }
+  const enumerations = facets.enumerations ?? [];
+  if (enumerations.length > 0) {
+    const value = enumValue(lexical, schema, facets);
+    const member = enumerations.some((allowed) =>
+      valuesEqual(enumValue(applyWhiteSpace(allowed, facets.whiteSpace), schema, facets), value),
+    );
+    if (!member) {
+      throw new Error(`Invalid lexical ${JSON.stringify(raw)}: not one of the allowed values`);
+    }
+  }
+  const orderChecks: [string | undefined, (cmp: number) => boolean][] = [
+    [facets.minInclusive, (cmp) => cmp >= 0],
+    [facets.maxInclusive, (cmp) => cmp <= 0],
+    [facets.minExclusive, (cmp) => cmp > 0],
+    [facets.maxExclusive, (cmp) => cmp < 0],
+  ];
+  for (const [boundary, inRange] of orderChecks) {
+    if (boundary === undefined) {
+      continue;
+    }
+    const cmp = xsdDecimalCompare(lexical, boundary);
+    // NaN means an invalid xs:decimal lexical (e.g. exponent notation).
+    if (Number.isNaN(cmp)) {
+      throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(raw)}`);
+    }
+    if (!inRange(cmp)) {
+      throw new Error(`Invalid lexical ${JSON.stringify(raw)}: value out of range`);
+    }
+  }
+};
+
+// Retained original lexicals, keyed by the containing data object (leaf
+// primitives have no identity of their own): field key → lexical, or one
+// lexical per occurrence (index-aligned) for repeated fields.
+type LexicalRecord = Map<string, string | (string | undefined)[]>;
+const lexicalStore = new WeakMap<object, LexicalRecord>();
+
+// Simple-typed roots have no containing object — keyed by the root schema,
+// guarded by the parsed value so a stale entry can never attach to a
+// different document.
+const rootLexicals = new Map<AnySchema, { data: unknown; lexical: string }>();
+
+const recordLexical = (
+  container: object,
+  key: string,
+  lexical: string | (string | undefined)[],
+): void => {
+  let record = lexicalStore.get(container);
+  if (record === undefined) {
+    record = new Map();
+    lexicalStore.set(container, record);
+  }
+  record.set(key, lexical);
+};
+
+// zod's safeParse rebuilds the data tree, so entries keyed by the walked
+// objects would be unreachable from the validated result. The two trees are
+// structurally isomorphic — re-key by position.
+const transferLexicals = (walked: unknown, parsed: unknown): void => {
+  if (
+    walked === null ||
+    parsed === null ||
+    typeof walked !== "object" ||
+    typeof parsed !== "object"
+  ) {
+    return;
+  }
+  const record = lexicalStore.get(walked);
+  if (record !== undefined) {
+    lexicalStore.delete(walked);
+    lexicalStore.set(parsed, record);
+  }
+  if (Array.isArray(walked) || Array.isArray(parsed)) {
+    if (Array.isArray(walked) && Array.isArray(parsed)) {
+      const n = Math.min(walked.length, parsed.length);
+      for (let i = 0; i < n; i++) {
+        transferLexicals(walked[i], parsed[i]);
+      }
+    }
+    return;
+  }
+  for (const [key, value] of Object.entries(walked)) {
+    transferLexicals(value, (parsed as Record<string, unknown>)[key]);
+  }
+};
+
+// A retained lexical is only re-emitted when it still denotes the value being
+// serialized — mutated or hand-built data falls back to canonical lexing.
+const storedLexicalFor = (
+  stored: string | undefined,
+  value: unknown,
+  itemSchema: AnySchema,
+): string | undefined => {
+  if (stored === undefined) {
+    return undefined;
+  }
+  try {
+    const whiteSpace = findFacetsMeta(itemSchema)?.whiteSpace;
+    return valuesEqual(coerceLexical(applyWhiteSpace(stored, whiteSpace), itemSchema, true), value)
+      ? stored
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Serialize a leaf, preferring the lexical retained at parse time.
+const serializeStoredLeaf = (
+  fieldMeta: XmlFieldMeta,
+  itemSchema: AnySchema,
+  value: unknown,
+  stored: string | undefined,
+): string => {
+  // Fixed constraints compare lexically — re-emit the declared fixed lexical.
+  if (fieldMeta.fixedLexical !== undefined) {
+    return escapeXml(fieldMeta.fixedLexical);
+  }
+  const lexical = storedLexicalFor(stored, value, itemSchema);
+  return lexical === undefined
+    ? serializeFieldLeaf(fieldMeta, itemSchema, value)
+    : escapeXml(lexical);
 };
 
 // ---------------------------------------------------------------------------
@@ -535,9 +750,12 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
-    const { present, value } = readField(fieldMeta, fieldSchema, node, namespaceContext);
+    const { present, value, lexical } = readField(fieldMeta, fieldSchema, node, namespaceContext);
     if (present) {
       result[key] = value;
+      if (lexical !== undefined) {
+        recordLexical(result, key, lexical);
+      }
     }
   }
   const fieldList = Object.values(fields);
@@ -668,13 +886,13 @@ const readOccurrence = (
   fieldMeta: XmlFieldMeta,
   entry: unknown,
   namespaceContext: Record<string, string>,
-): unknown => {
+): { value: unknown; lexical?: string | undefined } => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
     const childContext = withNamespaceContext(namespaceContext, childNode);
     const nilValue = findAttributeValue(childNode, `{${XSI_NS}}nil`, childContext);
     if (nilValue === "true" || nilValue === "1") {
-      return null;
+      return { value: null };
     }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
@@ -682,41 +900,48 @@ const readOccurrence = (
       if (text === undefined || text === "") {
         const empty = substituteEmpty(field, fieldMeta);
         if (empty.substituted) {
-          return empty.value;
+          return { value: empty.value };
         }
       }
-      return openWalk(childNode, childContext);
+      return { value: openWalk(childNode, childContext) };
     }
     if (hasObjectShape(field.itemSchema)) {
-      return readObject(field.itemSchema, childNode, childContext);
+      return { value: readObject(field.itemSchema, childNode, childContext) };
     }
     const text = textOf(childNode);
     if (text === undefined || text === "") {
       const empty = substituteEmpty(field, fieldMeta);
       if (empty.substituted) {
-        return empty.value;
+        return { value: empty.value };
       }
     }
-    return coerceLexical(text, field.itemSchema);
+    return {
+      value: coerceLexical(text, field.itemSchema),
+      lexical: text === undefined ? undefined : String(text),
+    };
   }
 
   // Scalar entry: the parser yields text-only elements as bare strings.
   if (entry === "") {
     const empty = substituteEmpty(field, fieldMeta);
     if (empty.substituted) {
-      return empty.value;
+      return { value: empty.value };
     }
   }
   if (fieldMeta.open) {
-    return entry;
+    return { value: entry };
   }
   if (hasObjectShape(field.itemSchema)) {
-    return readObject(field.itemSchema, { "#text": entry }, namespaceContext);
+    return { value: readObject(field.itemSchema, { "#text": entry }, namespaceContext) };
   }
-  return coerceLexical(entry, field.itemSchema);
+  return { value: coerceLexical(entry, field.itemSchema), lexical: String(entry) };
 };
 
-type FieldRead = { present: boolean; value: unknown };
+type FieldRead = {
+  present: boolean;
+  value: unknown;
+  lexical?: string | (string | undefined)[] | undefined;
+};
 
 const readField = (
   fieldMeta: XmlFieldMeta,
@@ -750,7 +975,7 @@ const readField = (
       }
       return { present: false, value: undefined };
     }
-    return { present: true, value: coerceLexical(raw, field.itemSchema) };
+    return { present: true, value: coerceLexical(raw, field.itemSchema), lexical: String(raw) };
   }
 
   if (fieldMeta.kind === "text") {
@@ -766,17 +991,23 @@ const readField = (
     return {
       present: true,
       value: coerceLexical(text ?? "", field.itemSchema),
+      lexical: text === undefined ? "" : String(text),
     };
   }
 
-  const values = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
+  const occurrences = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
     readOccurrence(field, fieldMeta, entry, namespaceContext),
   );
   if (field.isArray) {
-    return { present: true, value: values };
+    const lexicals = occurrences.map((o) => o.lexical);
+    return {
+      present: true,
+      value: occurrences.map((o) => o.value),
+      lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
+    };
   }
-  if (values.length > 0) {
-    return { present: true, value: values[0] };
+  if (occurrences.length > 0) {
+    return { present: true, value: occurrences[0]!.value, lexical: occurrences[0]!.lexical };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
   // present-but-empty elements, not absent ones (#66).
@@ -815,7 +1046,11 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
       return meta.defaultValue;
     }
   }
-  return coerceLexical(text, typeSchema);
+  const value = coerceLexical(text, typeSchema);
+  if (text !== undefined) {
+    rootLexicals.set(schema, { data: value, lexical: String(text) });
+  }
+  return value;
 };
 
 // Open content (xs:anyType, wildcards): schema-less walk into the normalized
@@ -1000,6 +1235,7 @@ const writeObjectFields = (
   const attributes: string[] = [];
   const elements: string[] = [];
   let usesXsi = false;
+  const lexicals = lexicalStore.get(obj);
 
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
@@ -1008,6 +1244,8 @@ const writeObjectFields = (
       continue;
     }
     const field = analyzeField(fieldSchema);
+    const stored = lexicals?.get(key);
+    const storedSingle = typeof stored === "string" ? stored : undefined;
 
     if (fieldMeta.kind === "attribute") {
       if (value === undefined) {
@@ -1018,7 +1256,7 @@ const writeObjectFields = (
         continue;
       }
       attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeFieldLeaf(fieldMeta, field.itemSchema, value)}"`,
+        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle)}"`,
       );
       continue;
     }
@@ -1027,7 +1265,7 @@ const writeObjectFields = (
       if (value === undefined) {
         continue;
       }
-      elements.push(serializeFieldLeaf(fieldMeta, field.itemSchema, value));
+      elements.push(serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle));
       continue;
     }
 
@@ -1038,7 +1276,8 @@ const writeObjectFields = (
     // to their default/fixed, which are parse-time concerns only (#66).
     const localName = elementName(fieldMeta.qname, ctx.prefixMap);
     const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
-    for (const item of values) {
+    for (let i = 0; i < values.length; i++) {
+      const item = values[i];
       if (item === undefined) {
         continue;
       }
@@ -1061,8 +1300,9 @@ const writeObjectFields = (
         elements.push(`<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`);
         continue;
       }
+      const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
       elements.push(
-        `<${localName}>${serializeFieldLeaf(fieldMeta, field.itemSchema, item)}</${localName}>`,
+        `<${localName}>${serializeStoredLeaf(fieldMeta, field.itemSchema, item, storedItem)}</${localName}>`,
       );
     }
   }
@@ -1126,9 +1366,16 @@ export const safeParseXml = <S extends z.ZodType>(
     return { success: true, data: data as z.output<S> };
   }
   const result = schema.safeParse(data);
-  return result.success
-    ? { success: true, data: result.data as z.output<S> }
-    : { success: false, error: result.error };
+  if (!result.success) {
+    return { success: false, error: result.error };
+  }
+  // zod rebuilt the tree during validation — re-key the retained lexicals.
+  transferLexicals(data, result.data);
+  const rootEntry = rootLexicals.get(schema);
+  if (rootEntry !== undefined) {
+    rootEntry.data = result.data;
+  }
+  return { success: true, data: result.data as z.output<S> };
 };
 
 /**
@@ -1175,8 +1422,13 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
+  } else if (meta.fixedLexical !== undefined) {
+    // Fixed root: re-emit the declared fixed lexical (see XmlFieldMeta).
+    body = escapeXml(meta.fixedLexical);
   } else if (meta.datatype === undefined) {
-    body = serializeLeaf(typeSchema, data);
+    const entry = rootLexicals.get(schema);
+    const stored = storedLexicalFor(entry?.lexical, data, typeSchema);
+    body = stored === undefined ? serializeLeaf(typeSchema, data) : escapeXml(stored);
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
     const rootDatatype = meta.datatype;

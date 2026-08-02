@@ -32,7 +32,9 @@ const DATE_TIME_RE = new RegExp(String.raw`^(${YEAR})-(${MONTH})-(${DAY})T${TIME
 const TIME_RE = new RegExp(String.raw`^${TIME}(?:${TZ})?$`);
 const G_YEAR_RE = new RegExp(String.raw`^(${YEAR})(?:${TZ})?$`);
 const G_YEAR_MONTH_RE = new RegExp(String.raw`^(${YEAR})-${MONTH}(?:${TZ})?$`);
-const G_MONTH_RE = new RegExp(String.raw`^--${MONTH}(?:${TZ})?$`);
+// XSD 1.0 writes gMonth as --MM--, XSD 1.1 dropped the trailing --; both are
+// accepted (the round-trip re-emits the original lexical).
+const G_MONTH_RE = new RegExp(String.raw`^--${MONTH}(?:--)?(?:${TZ})?$`);
 const G_MONTH_DAY_RE = new RegExp(String.raw`^--(${MONTH})-(${DAY})(?:${TZ})?$`);
 const G_DAY_RE = new RegExp(String.raw`^---${DAY}(?:${TZ})?$`);
 
@@ -124,12 +126,14 @@ export const xsdLanguage = match(/^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/);
 
 // XML 1.0 (5th edition) Name productions. NameChar adds digits, '-', '.',
 // middle dot and combining ranges to NameStartChar; NCName* excludes ':'.
-const NAME_START_CHAR =
+// Exported (as character-class content) for the XSD regex translation in
+// xsdPattern.ts, whose \i / \c multi-character escapes are these same sets.
+export const NAME_START_CHAR =
   ":A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF" +
   "\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD" +
   "\\u{10000}-\\u{EFFFF}";
 const NCNAME_START_CHAR = NAME_START_CHAR.replace(":", "");
-const NAME_CHAR_EXTRA = "\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040";
+export const NAME_CHAR_EXTRA = "\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040";
 const NAME_RE = new RegExp(`^[${NAME_START_CHAR}][${NAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`, "u");
 const NMTOKEN_RE = new RegExp(`^[${NAME_START_CHAR}${NAME_CHAR_EXTRA}]+$`, "u");
 const NCNAME_RE = new RegExp(

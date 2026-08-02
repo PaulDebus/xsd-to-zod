@@ -1,7 +1,9 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
 import type { ComplexTypeDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
+import type { XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
+import { xsdDecimalCompare } from "./xsdChecks.js";
 import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
@@ -277,11 +279,38 @@ const toFieldKey = (field: IrField): string => {
 const withDescription = (expr: string, description: string | undefined): string =>
   description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
 
-type FacetUsage = { totalDigits: boolean; fractionDigits: boolean; decimalCompare: boolean };
+type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
+
+// The structure a (possibly chained) restriction ultimately derives from.
+// Enumeration facets on list and union bases cannot be checked by the
+// generated schema (the value is an array / a union member), so they route to
+// the runtime's lexical-facet meta.
+const resolveBaseStructure = (
+  typeName: QName,
+  ir: XsdIr,
+  seen?: Set<string>,
+): "list" | "union" | undefined => {
+  const seenNames = seen ?? new Set<string>();
+  if (seenNames.has(typeName)) {
+    return undefined;
+  }
+  seenNames.add(typeName);
+  const simple = ir.simpleTypes[typeName];
+  if (simple === undefined) {
+    return undefined;
+  }
+  return simple.kind === "restriction"
+    ? resolveBaseStructure(simple.baseType, ir, seenNames)
+    : simple.kind;
+};
 
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the resolved primitive kind — same rule as
-// fixed/default values (#68, #84).
+// fixed/default values (#68, #84). Facets the generated schema cannot check
+// against the coerced value (pattern on non-string/list/union bases, enums on
+// list/union/date-time bases, exact xs:decimal order bounds) are collected
+// into `lexical` instead — the runtime enforces those against the original
+// XML lexical (see XmlLexicalFacets).
 const withFacets = (
   base: string,
   facets: Facet[],
@@ -290,6 +319,8 @@ const withFacets = (
   builtinLocal: string | undefined,
   structured: boolean,
   usedHelpers: Set<string>,
+  baseStructure: "list" | "union" | undefined,
+  lexical: XmlLexicalFacets,
 ): string => {
   if (!facets.length) {
     return base;
@@ -314,47 +345,48 @@ const withFacets = (
             ", ",
           )}].includes(${st.writeFn}(val)), { message: 'value is not one of the allowed values' })`;
 
-  // Order facets on xs:decimal compare the original lexicals, not the coerced
-  // double: both the boundary and the instance value can carry more
-  // significant digits than a double holds (#136). The schema therefore
-  // validates the decimal lexical and its bounds as a string, then transforms
-  // to the JS number the runtime produces.
-  const ORDER_FACET_KINDS = new Set([
-    "minInclusive",
-    "maxInclusive",
-    "minExclusive",
-    "maxExclusive",
-  ]);
-  const decimalOrderFacets =
-    builtinLocal === "decimal" && kind === "number"
-      ? facets.filter((f) => ORDER_FACET_KINDS.has(f.kind))
-      : [];
-  const otherFacets = facets.filter(
-    (f) => f.kind !== "enumeration" && f.kind !== "whiteSpace" && !decimalOrderFacets.includes(f),
-  );
-
-  let result = base;
-  if (decimalOrderFacets.length > 0) {
-    usage.decimalCompare = true;
-    const DECIMAL_LEXICAL_SOURCE = "^[+-]?(\\d+(\\.\\d*)?|\\.\\d+)$";
-    const orderRefines = decimalOrderFacets.map((f) => {
-      const op =
-        f.kind === "minInclusive"
-          ? ">="
-          : f.kind === "maxInclusive"
-            ? "<="
-            : f.kind === "minExclusive"
-              ? ">"
-              : "<";
-      return `.refine((val) => xsdDecimalCompare(val, ${JSON.stringify(f.value)}) ${op} 0, { message: 'value out of range' })`;
-    });
-    result =
-      `z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, ` +
-      `z.string().regex(new RegExp(${JSON.stringify(DECIMAL_LEXICAL_SOURCE)}), { message: 'invalid xs:decimal lexical' })` +
-      `${orderRefines.join("")}.transform(Number))`;
+  const enumViaMeta =
+    st === undefined &&
+    enumFacets.length > 0 &&
+    (baseStructure !== undefined ||
+      (builtinLocal !== undefined && XSD_STRUCTURED_TYPES.has(builtinLocal)));
+  if (enumViaMeta) {
+    lexical.enumerations = enumFacets.map((f) => f.value);
+    if (baseStructure === undefined && builtinLocal !== undefined) {
+      lexical.datatype = builtinLocal as XsdDatatypeName;
+    }
   }
 
-  if (enumFacets.length > 0 && otherFacets.length === 0 && decimalOrderFacets.length === 0) {
+  // xs:decimal order facets compare the original lexicals exactly: both the
+  // boundary and the instance value can carry more significant digits than a
+  // double holds (#136), so they route to the runtime meta.
+  const isDecimalOrderFacet = (
+    f: Facet,
+  ): f is Extract<
+    Facet,
+    { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" }
+  > =>
+    builtinLocal === "decimal" &&
+    kind === "number" &&
+    (f.kind === "minInclusive" ||
+      f.kind === "maxInclusive" ||
+      f.kind === "minExclusive" ||
+      f.kind === "maxExclusive");
+  for (const f of facets.filter(isDecimalOrderFacet)) {
+    lexical[f.kind] = f.value;
+  }
+
+  const otherFacets = facets.filter(
+    (f): f is Exclude<Facet, { kind: "enumeration" | "whiteSpace" }> =>
+      f.kind !== "enumeration" && f.kind !== "whiteSpace" && !isDecimalOrderFacet(f),
+  );
+
+  // Patterns of this derivation step form one alternative set (XSD ORs
+  // patterns within a step); collected here and flushed at the end.
+  const ownPatterns: string[] = [];
+
+  let result = base;
+  if (enumFacets.length > 0 && !enumViaMeta && otherFacets.length === 0) {
     if (enumConstraint !== undefined) {
       // Structured base (a string→object pipe): keep it and constrain.
       result += enumConstraint;
@@ -376,11 +408,15 @@ const withFacets = (
             usedHelpers.add(st.writeFn);
             result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
           } else if (isStringType(result)) {
-            // .regex() exists only on string schemas; elsewhere the pattern is
-            // checked against the coerced value's string form (#114).
-            result += `.regex(new RegExp(${JSON.stringify(facet.value)}))`;
+            // The string value IS the (whiteSpace-processed) lexical, so the
+            // schema can check it — with XSD regex semantics (anchored,
+            // unicode-aware multi-character escapes).
+            usedHelpers.add("xsdPattern");
+            result += `.regex(xsdPattern(${JSON.stringify(facet.value)}))`;
           } else {
-            result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(String(val)), { message: 'value does not match the pattern' })`;
+            // Non-string/list/union base: the pattern must be evaluated
+            // against the original lexical, which the schema cannot see.
+            ownPatterns.push(facet.value);
           }
           break;
         case "length":
@@ -493,22 +529,108 @@ const withFacets = (
       }
     }
 
-    if (enumFacets.length > 0) {
+    if (enumFacets.length > 0 && !enumViaMeta) {
       result +=
         enumConstraint ??
         `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   }
 
+  if (ownPatterns.length > 0) {
+    const patterns = lexical.patterns ?? [];
+    patterns.push(ownPatterns);
+    lexical.patterns = patterns;
+  }
+
   // whiteSpace applies before the other facets per XSD, so it wraps the
   // checked schema in a preprocess (#69). 'preserve' is deliberately a no-op.
   if (whiteSpace?.value === "collapse") {
+    lexical.whiteSpace = "collapse";
     result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
   } else if (whiteSpace?.value === "replace") {
+    lexical.whiteSpace = "replace";
     result = `z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, ${result})`;
+  }
+  // whiteSpace=collapse is fixed for list types in XSD.
+  if (baseStructure === "list" && lexical.whiteSpace === undefined) {
+    lexical.whiteSpace = "collapse";
+  }
+  // Builtin defaults: every builtin but the string-ish ones fixes
+  // whiteSpace=collapse (normalizedString: replace) — facet checks see the
+  // processed lexical even when the restriction declares no whiteSpace facet.
+  if (Object.keys(lexical).length > 0 && lexical.whiteSpace === undefined) {
+    if (builtinLocal === "normalizedString") {
+      lexical.whiteSpace = "replace";
+    } else if (builtinLocal !== undefined && builtinLocal !== "string") {
+      lexical.whiteSpace = "collapse";
+    }
   }
 
   return result;
+};
+
+// Lexical facets accumulate over the derivation chain: patterns AND across
+// steps (each step's set ORs internally), enumerations narrow (the derived
+// set is a subset, so it wins), decimal bounds tighten. The immediate base's
+// stored entry already carries its whole chain (dependency-order emission).
+const mergeLexicalFacets = (
+  base: XmlLexicalFacets | undefined,
+  own: XmlLexicalFacets,
+): XmlLexicalFacets | undefined => {
+  if (base === undefined) {
+    return Object.keys(own).length > 0 ? own : undefined;
+  }
+  const merged: XmlLexicalFacets = {};
+  const whiteSpace = own.whiteSpace ?? base.whiteSpace;
+  if (whiteSpace !== undefined) {
+    merged.whiteSpace = whiteSpace;
+  }
+  const datatype = own.datatype ?? base.datatype;
+  if (datatype !== undefined) {
+    merged.datatype = datatype;
+  }
+  const patterns = [...(base.patterns ?? []), ...(own.patterns ?? [])];
+  if (patterns.length > 0) {
+    merged.patterns = patterns;
+  }
+  const enumerations = own.enumerations ?? base.enumerations;
+  if (enumerations !== undefined) {
+    merged.enumerations = enumerations;
+  }
+  const tighter = (
+    a: string | undefined,
+    b: string | undefined,
+    preferLarger: boolean,
+  ): string | undefined => {
+    if (a === undefined) {
+      return b;
+    }
+    if (b === undefined) {
+      return a;
+    }
+    const cmp = xsdDecimalCompare(a, b);
+    if (Number.isNaN(cmp) || cmp === 0) {
+      return b;
+    }
+    return preferLarger === cmp > 0 ? a : b;
+  };
+  const minInclusive = tighter(base.minInclusive, own.minInclusive, true);
+  if (minInclusive !== undefined) {
+    merged.minInclusive = minInclusive;
+  }
+  const minExclusive = tighter(base.minExclusive, own.minExclusive, true);
+  if (minExclusive !== undefined) {
+    merged.minExclusive = minExclusive;
+  }
+  const maxInclusive = tighter(base.maxInclusive, own.maxInclusive, false);
+  if (maxInclusive !== undefined) {
+    merged.maxInclusive = maxInclusive;
+  }
+  const maxExclusive = tighter(base.maxExclusive, own.maxExclusive, false);
+  if (maxExclusive !== undefined) {
+    merged.maxExclusive = maxExclusive;
+  }
+  return merged;
 };
 
 // Emit simple types in dependency order — a restriction/list/union can
@@ -750,6 +872,10 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr, structured: boolean): st
       // substitutes the lexical from here (validation transforms it).
       parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
     }
+    if (!structured && field.fixedValue !== undefined) {
+      // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
+      parts.push(`fixedLexical: ${JSON.stringify(field.fixedValue)}`);
+    }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
   // Wildcard sentinels: '*' sweeps unmatched child elements, '@*' unmatched
@@ -855,6 +981,11 @@ const tsTypeOfTypeName = (
     if (st) {
       dt?.usedTypes.add(st.tsType);
       return st.tsType;
+    }
+    // Date/time builtins route the enum check to the runtime meta (value-space
+    // compare), so the value keeps the builtin's string form.
+    if (XSD_STRUCTURED_TYPES.has(baseParts.local)) {
+      return "string";
     }
     const kind = resolvePrimitiveKind(simple.baseType, ir);
     return enumFacets.map((f) => typedLiteral(kind, f.value)).join(" | ");
@@ -969,10 +1100,12 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     ...Object.keys(ir.simpleTypes),
     ...Object.keys(ir.complexTypes),
   ]);
-  const usage: FacetUsage = { totalDigits: false, fractionDigits: false, decimalCompare: false };
+  const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
   const usedHelpers = new Set<string>();
   const usedTypes = new Set<string>();
   const dt = structured && !opts?.js ? { usedTypes } : undefined;
+  // Merged lexical facets per emitted simple type (derivation-chain complete).
+  const lexicalFacetsByType = new Map<QName, XmlLexicalFacets>();
 
   // Unique identifiers for the generated module, shared across value and type
   // space so an interface can never shadow a root export (public API of
@@ -1071,6 +1204,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         usedHelpers,
         structured,
       );
+      const lexical: XmlLexicalFacets = {};
       expr = simpleType.facets
         ? withFacets(
             baseExpr,
@@ -1080,8 +1214,25 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
             resolveBuiltinLocal(simpleType.name, ir),
             structured,
             usedHelpers,
+            resolveBaseStructure(simpleType.baseType, ir),
+            lexical,
           )
         : baseExpr;
+      const merged = mergeLexicalFacets(lexicalFacetsByType.get(simpleType.baseType), lexical);
+      if (merged !== undefined) {
+        lexicalFacetsByType.set(simpleType.name, merged);
+        // .register mutates its receiver's registry entry: register the meta
+        // on a fresh clone so a derived type never clobbers its base's.
+        expr = `z.clone(${expr})`;
+        schemaLines.push(
+          `const ${constName.get(simpleType.name)} = ${registered(
+            expr,
+            simpleType.description,
+            `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
+          )};`,
+        );
+        continue;
+      }
     }
     schemaLines.push(
       `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
@@ -1144,6 +1295,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       rootMeta.push(
         `fixedValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.fixedValue)}`,
       );
+      rootMeta.push(`fixedLexical: ${JSON.stringify(rootDef.fixedValue)}`);
     }
     // JSDoc on the export so IDE hover shows the docs: the element's own
     // annotation wins, otherwise fall back to the annotated type.
@@ -1160,7 +1312,6 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const xsdImports = [
     usage.totalDigits ? "xsdTotalDigits" : undefined,
     usage.fractionDigits ? "xsdFractionDigits" : undefined,
-    usage.decimalCompare ? "xsdDecimalCompare" : undefined,
     ...[...usedHelpers].sort(),
   ].filter((name): name is string => name !== undefined);
   const typeImport =
