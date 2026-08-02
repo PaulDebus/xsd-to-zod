@@ -851,7 +851,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         // Decimal order facets compare the original lexicals exactly in the
         // runtime (facet meta) — the schema keeps the value-space checks.
         expect(generated.schemas).toContain(
-          'const PriceSchema = z.clone(z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" })).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0"} });',
+          'const PriceSchema = z.clone(z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" })).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0","whiteSpace":"collapse"} });',
         );
       });
     });
@@ -872,7 +872,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const TemperatureSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Temperature", facets: {"minExclusive":"-273.15","maxExclusive":"10000"} });',
+          'const TemperatureSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Temperature", facets: {"minExclusive":"-273.15","maxExclusive":"10000","whiteSpace":"collapse"} });',
         );
       });
     });

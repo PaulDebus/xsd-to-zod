@@ -553,6 +553,16 @@ const withFacets = (
   if (baseStructure === "list" && lexical.whiteSpace === undefined) {
     lexical.whiteSpace = "collapse";
   }
+  // Builtin defaults: every builtin but the string-ish ones fixes
+  // whiteSpace=collapse (normalizedString: replace) — facet checks see the
+  // processed lexical even when the restriction declares no whiteSpace facet.
+  if (Object.keys(lexical).length > 0 && lexical.whiteSpace === undefined) {
+    if (builtinLocal === "normalizedString") {
+      lexical.whiteSpace = "replace";
+    } else if (builtinLocal !== undefined && builtinLocal !== "string") {
+      lexical.whiteSpace = "collapse";
+    }
+  }
 
   return result;
 };
@@ -859,6 +869,10 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr, structured: boolean): st
       // objects): the constraint is a canonical-lexical refine and the runtime
       // substitutes the lexical from here (validation transforms it).
       parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
+    }
+    if (!structured && field.fixedValue !== undefined) {
+      // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
+      parts.push(`fixedLexical: ${JSON.stringify(field.fixedValue)}`);
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
@@ -1279,6 +1293,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       rootMeta.push(
         `fixedValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.fixedValue)}`,
       );
+      rootMeta.push(`fixedLexical: ${JSON.stringify(rootDef.fixedValue)}`);
     }
     // JSDoc on the export so IDE hover shows the docs: the element's own
     // annotation wins, otherwise fall back to the annotated type.

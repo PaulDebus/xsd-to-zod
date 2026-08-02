@@ -31,7 +31,7 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     // the coerced value's String() form is not the XML lexical.
     expect(code).not.toContain(".regex(");
     expect(code).not.toContain(".test(String(val))");
-    expect(code).toContain('facets: {"patterns":[["[0-9]{5}"]]}');
+    expect(code).toContain('facets: {"patterns":[["[0-9]{5}"]],"whiteSpace":"collapse"}');
   });
 
   it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", () => {

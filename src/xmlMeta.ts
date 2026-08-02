@@ -71,6 +71,13 @@ export type XmlFieldMeta = {
    * schema-driven structure; the runtime walks/serializes it generically.
    */
   open?: boolean;
+  /**
+   * Declared fixed lexical. The serializer re-emits it verbatim for
+   * fixed-constrained fields: schema processors compare fixed constraints
+   * lexically (boolean fixed="1" rejects the canonical "true"), so neither
+   * the instance lexical nor the canonical form is reliable.
+   */
+  fixedLexical?: string;
 };
 
 /**
@@ -96,6 +103,8 @@ export type XmlMeta = {
   open?: boolean;
   /** Structured date/time builtin of a simple-typed root — see XmlFieldMeta.datatype. */
   datatype?: XsdDatatypeName;
+  /** Declared fixed lexical of the root element — see XmlFieldMeta.fixedLexical. */
+  fixedLexical?: string;
   /** Lexical-space facets of a simple type — enforced by the runtime. */
   facets?: XmlLexicalFacets;
   fields?: Record<string, XmlFieldMeta>;

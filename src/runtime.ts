@@ -624,8 +624,14 @@ const serializeStoredLeaf = (
   value: unknown,
   stored: string | undefined,
 ): string => {
+  // Fixed constraints compare lexically — re-emit the declared fixed lexical.
+  if (fieldMeta.fixedLexical !== undefined) {
+    return escapeXml(fieldMeta.fixedLexical);
+  }
   const lexical = storedLexicalFor(stored, value, itemSchema);
-  return lexical !== undefined ? escapeXml(lexical) : serializeFieldLeaf(fieldMeta, itemSchema, value);
+  return lexical !== undefined
+    ? escapeXml(lexical)
+    : serializeFieldLeaf(fieldMeta, itemSchema, value);
 };
 
 // ---------------------------------------------------------------------------
@@ -1418,6 +1424,9 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
+  } else if (meta.fixedLexical !== undefined) {
+    // Fixed root: re-emit the declared fixed lexical (see XmlFieldMeta).
+    body = escapeXml(meta.fixedLexical);
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);
     const stored = storedLexicalFor(entry?.lexical, data, typeSchema);
