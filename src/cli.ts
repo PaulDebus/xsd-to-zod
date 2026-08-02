@@ -187,6 +187,7 @@ type GenerateOptions = {
   includeLibraries?: boolean;
   allowMissingImports?: boolean;
   silent?: boolean;
+  datatypes?: string;
 };
 
 type ValidateOptions = {
@@ -206,6 +207,10 @@ type BundleOptions = {
 
 const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<void> => {
   const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
+  const datatypes = opts.datatypes ?? "string";
+  if (datatypes !== "string" && datatypes !== "structured") {
+    throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
+  }
   const files = expandDirectories(filesOrDirs);
 
   if (files.length === 0) {
@@ -253,7 +258,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     warnDiagnostics(ir);
   }
 
-  const { schemas } = irToZod(ir);
+  const { schemas } = irToZod(ir, { datatypes });
 
   const outDir = resolve(out);
   if (!existsSync(outDir)) {
@@ -370,6 +375,10 @@ const program = new Command()
     "Suppress warnings for unresolved XSD references; unresolved element refs map to z.unknown() instead of being dropped",
   )
   .option("--silent", "Suppress informational output (warnings are still shown)")
+  .option(
+    "--datatypes <mode>",
+    'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
+  )
   .action(generate);
 
 program
