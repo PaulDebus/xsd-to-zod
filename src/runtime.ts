@@ -3,6 +3,7 @@ import { CompactBuilderFactory } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
+import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -11,7 +12,6 @@ import {
   type XsdStructuredValue,
 } from "./xsdDateTime.js";
 import { collapseWhiteSpace } from "./xsdLexicals.js";
-import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { xsdPattern } from "./xsdPattern.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
@@ -506,9 +506,7 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
   // set must match (XSD ORs within a step, ANDs across steps).
   for (const alternatives of facets.patterns ?? []) {
     if (!alternatives.some((source) => xsdPattern(source).test(lexical))) {
-      throw new Error(
-        `Invalid lexical ${JSON.stringify(raw)}: does not match the pattern facet`,
-      );
+      throw new Error(`Invalid lexical ${JSON.stringify(raw)}: does not match the pattern facet`);
     }
   }
   const enumerations = facets.enumerations ?? [];
@@ -629,9 +627,9 @@ const serializeStoredLeaf = (
     return escapeXml(fieldMeta.fixedLexical);
   }
   const lexical = storedLexicalFor(stored, value, itemSchema);
-  return lexical !== undefined
-    ? escapeXml(lexical)
-    : serializeFieldLeaf(fieldMeta, itemSchema, value);
+  return lexical === undefined
+    ? serializeFieldLeaf(fieldMeta, itemSchema, value)
+    : escapeXml(lexical);
 };
 
 // ---------------------------------------------------------------------------
@@ -1430,7 +1428,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);
     const stored = storedLexicalFor(entry?.lexical, data, typeSchema);
-    body = stored !== undefined ? escapeXml(stored) : serializeLeaf(typeSchema, data);
+    body = stored === undefined ? serializeLeaf(typeSchema, data) : escapeXml(stored);
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
     const rootDatatype = meta.datatype;

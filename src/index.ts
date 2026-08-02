@@ -33,7 +33,6 @@ export type {
 } from "./types.js";
 export type { XmlFieldMeta, XmlLexicalFacets, XmlMeta } from "./xmlMeta.js";
 export { xmlRegistry } from "./xmlMeta.js";
-export { xsdPattern } from "./xsdPattern.js";
 export {
   countFractionDigits,
   countTotalDigits,
@@ -95,3 +94,4 @@ export {
   xsdNMTOKENS,
   xsdTime,
 } from "./xsdLexicals.js";
+export { xsdPattern } from "./xsdPattern.js";

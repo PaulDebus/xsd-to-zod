@@ -1,10 +1,10 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
 import type { ComplexTypeDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
+import type { XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
-import type { XmlLexicalFacets } from "./xmlMeta.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
@@ -537,7 +537,9 @@ const withFacets = (
   }
 
   if (ownPatterns.length > 0) {
-    (lexical.patterns ??= []).push(ownPatterns);
+    const patterns = lexical.patterns ?? [];
+    patterns.push(ownPatterns);
+    lexical.patterns = patterns;
   }
 
   // whiteSpace applies before the other facets per XSD, so it wraps the
