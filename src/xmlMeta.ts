@@ -3,6 +3,39 @@ import type { QName } from "./types.js";
 import type { XsdDatatypeName } from "./xsdDateTime.js";
 
 /**
+ * Lexical-space facets of a simple type, enforced by the runtime during
+ * parseXml against the ORIGINAL XML lexical (see runtime.ts checkLexicalFacets).
+ * These constraints cannot live in the generated zod schema: a zod refine
+ * only sees the coerced JS value, whose String() form is not the XML lexical
+ * (`007` → 7, exact decimal boundaries → rounded doubles). The generated
+ * schema keeps the value-space-correct checks only.
+ *
+ * All values are the raw XSD facet lexicals. Enumeration membership is a
+ * value-space compare (both sides coerced the same way; date/time builtins —
+ * `datatype` — canonicalized), decimal order boundaries compare exactly in
+ * BigInt arithmetic.
+ */
+export type XmlLexicalFacets = {
+  /** whiteSpace processing applied to the lexical before the facet checks. */
+  whiteSpace?: "replace" | "collapse";
+  /**
+   * XSD pattern sources, one alternative set per derivation step: any one
+   * pattern per set must match (XSD ORs patterns within a step, ANDs across
+   * steps). Each pattern must match the whole processed lexical.
+   */
+  patterns?: string[][];
+  /** Enumeration values as XSD lexicals. */
+  enumerations?: string[];
+  /** xs:decimal order-facet boundaries (exact lexical compare). */
+  minInclusive?: string;
+  maxInclusive?: string;
+  minExclusive?: string;
+  maxExclusive?: string;
+  /** Date/time builtin of the type — selects canonicalizing enum compare. */
+  datatype?: XsdDatatypeName;
+};
+
+/**
  * Per-field XML knowledge, stored on the containing object schema (not on the
  * field schemas): a named type can be referenced by several elements with
  * different qnames, so field-level meta would conflict on shared schemas.
@@ -63,6 +96,8 @@ export type XmlMeta = {
   open?: boolean;
   /** Structured date/time builtin of a simple-typed root — see XmlFieldMeta.datatype. */
   datatype?: XsdDatatypeName;
+  /** Lexical-space facets of a simple type — enforced by the runtime. */
+  facets?: XmlLexicalFacets;
   fields?: Record<string, XmlFieldMeta>;
 };
 

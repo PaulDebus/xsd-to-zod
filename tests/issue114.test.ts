@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { irToZod, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd, safeParseXml } from "../src/index.js";
 import { generateAndImport, withTempDir, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for the issue-#114 facet codegen fixes: facet
@@ -18,7 +18,7 @@ const codeFor = (xsd: string): string => {
 };
 
 describe("facet codegen on incompatible Zod types (#114)", () => {
-  it("emits pattern as a String(val) refine on non-string bases", () => {
+  it("routes pattern on non-string bases to the lexical-facet meta", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="FiveDigits">
@@ -27,8 +27,11 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     </xs:restriction>
   </xs:simpleType>
 </xs:schema>`);
+    // The pattern is evaluated against the original lexical at parse time;
+    // the coerced value's String() form is not the XML lexical.
     expect(code).not.toContain(".regex(");
-    expect(code).toContain(".test(String(val))");
+    expect(code).not.toContain(".test(String(val))");
+    expect(code).toContain('facets: {"patterns":[["[0-9]{5}"]]}');
   });
 
   it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", () => {
@@ -85,7 +88,7 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     expect(code).toContain("val.length >= 2");
   });
 
-  it("generated module imports and validates (pattern refine rejects mismatches)", async () => {
+  it("generated module imports and validates (pattern enforced against the lexical)", async () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(
@@ -102,8 +105,11 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
       );
       const mod = await generateAndImport([file]);
       const schema = Object.values(mod)[0] as import("zod").z.ZodType;
-      expect(schema.safeParse(12345n).success).toBe(true);
-      expect(schema.safeParse(123n).success).toBe(false);
+      // The lexical check lives in the runtime: both instances satisfy the
+      // pattern lexically, even though String(coerced) would not.
+      expect(safeParseXml(schema, "<n>12345</n>").success).toBe(true);
+      expect(safeParseXml(schema, "<n>012345</n>").success).toBe(false);
+      expect(safeParseXml(schema, "<n>123</n>").success).toBe(false);
     });
   });
 });

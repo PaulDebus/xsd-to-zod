@@ -822,7 +822,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const CountryCodeSchema = z.string().regex(new RegExp("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
+          'const CountryCodeSchema = z.string().regex(xsdPattern("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
         );
       });
     });
@@ -848,8 +848,10 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("emits fractionDigits refine + decimal-exact min for Price", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
+        // Decimal order facets compare the original lexicals exactly in the
+        // runtime (facet meta) — the schema keeps the value-space checks.
         expect(generated.schemas).toContain(
-          'const PriceSchema = z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, z.string().regex(new RegExp("^[+-]?(\\\\d+(\\\\.\\\\d*)?|\\\\.\\\\d+)$"), { message: \'invalid xs:decimal lexical\' }).refine((val) => xsdDecimalCompare(val, "0") >= 0, { message: \'value out of range\' }).transform(Number)).refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" }).register(xmlRegistry, { qname: "{urn:facets}Price" });',
+          'const PriceSchema = z.clone(z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" })).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0"} });',
         );
       });
     });
@@ -859,9 +861,9 @@ describe("xsd-to-zod v1 pipeline", () => {
         const generated = irToZod(parseXsd([file]));
         // totalDigits on the integer-based LargeInt is an inline bigint
         // digit-count refine; only fractionDigits still needs the helper.
-        // Decimal order facets compare exactly via xsdDecimalCompare (#136).
+        // Decimal order facets moved to the runtime's facet meta (#136).
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdFractionDigits, xsdDecimalCompare } from 'xsd-to-zod';",
+          "import { xmlRegistry, xsdFractionDigits, xsdPattern } from 'xsd-to-zod';",
         );
       });
     });
@@ -870,7 +872,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const TemperatureSchema = z.preprocess((v) => typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v, z.string().regex(new RegExp("^[+-]?(\\\\d+(\\\\.\\\\d*)?|\\\\.\\\\d+)$"), { message: \'invalid xs:decimal lexical\' }).refine((val) => xsdDecimalCompare(val, "-273.15") > 0, { message: \'value out of range\' }).refine((val) => xsdDecimalCompare(val, "10000") < 0, { message: \'value out of range\' }).transform(Number)).register(xmlRegistry, { qname: "{urn:facets}Temperature" });',
+          'const TemperatureSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Temperature", facets: {"minExclusive":"-273.15","maxExclusive":"10000"} });',
         );
       });
     });
@@ -879,7 +881,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const ShortCodeSchema = z.string().regex(new RegExp("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val), { message: \'value is not one of the allowed values\' }).register(xmlRegistry, { qname: "{urn:facets}ShortCode" });',
+          'const ShortCodeSchema = z.string().regex(xsdPattern("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val), { message: \'value is not one of the allowed values\' }).register(xmlRegistry, { qname: "{urn:facets}ShortCode" });',
         );
       });
     });
@@ -906,7 +908,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const TokenTypeSchema = z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()).register(xmlRegistry, { qname: "{urn:facets}TokenType" });',
+          'const TokenTypeSchema = z.clone(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string())).register(xmlRegistry, { qname: "{urn:facets}TokenType", facets: {"whiteSpace":"collapse"} });',
         );
       });
     });
