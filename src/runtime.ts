@@ -5,7 +5,6 @@ import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
 import type { QName } from "./types.js";
 import {
-  substitutionGroupMembers,
   type XmlFieldMeta,
   type XmlLexicalFacets,
   type XmlMeta,
@@ -553,22 +552,37 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
 type LexicalRecord = Map<string, string | (string | undefined)[]>;
 const lexicalStore = new WeakMap<object, LexicalRecord>();
 
+// The substitution-group member qname each element occurrence was read as
+// (only recorded when the actual tag differs from the field's head element):
+// field key → member qname, index-aligned for repeated fields. The serializer
+// re-emits the member tag instead of the head's.
+const substQNameStore = new WeakMap<object, LexicalRecord>();
+
 // Simple-typed roots have no containing object — keyed by the root schema,
 // guarded by the parsed value so a stale entry can never attach to a
 // different document.
 const rootLexicals = new Map<AnySchema, { data: unknown; lexical: string }>();
+
+const recordInto = (
+  store: WeakMap<object, LexicalRecord>,
+  container: object,
+  key: string,
+  entry: string | (string | undefined)[],
+): void => {
+  let record = store.get(container);
+  if (record === undefined) {
+    record = new Map();
+    store.set(container, record);
+  }
+  record.set(key, entry);
+};
 
 const recordLexical = (
   container: object,
   key: string,
   lexical: string | (string | undefined)[],
 ): void => {
-  let record = lexicalStore.get(container);
-  if (record === undefined) {
-    record = new Map();
-    lexicalStore.set(container, record);
-  }
-  record.set(key, lexical);
+  recordInto(lexicalStore, container, key, lexical);
 };
 
 // zod's safeParse rebuilds the data tree, so entries keyed by the walked
@@ -583,10 +597,12 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   ) {
     return;
   }
-  const record = lexicalStore.get(walked);
-  if (record !== undefined) {
-    lexicalStore.delete(walked);
-    lexicalStore.set(parsed, record);
+  for (const store of [lexicalStore, substQNameStore]) {
+    const record = store.get(walked);
+    if (record !== undefined) {
+      store.delete(walked);
+      store.set(parsed, record);
+    }
   }
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
@@ -703,21 +719,38 @@ const findElementValues = (
   return matches;
 };
 
-// The schema to read or serialize one element occurrence with: when the
-// actual tag is a substitution-group member of the field's head element, the
-// member's own type schema (its root export peeled one level — the registered
-// type schema, meta intact); otherwise the field schema unchanged.
-const substitutionSchemaFor = (
-  headQName: QName,
-  tagQName: string,
-  headSchema: AnySchema,
-): AnySchema => {
-  if (tagQName === headQName) {
+// Walk the wrapper chain until a schema carries registry meta with a
+// `substElement` qname — substitution-group union options register it on
+// their lazy wrapper.
+const findSubstElementMeta = (schema: AnySchema): QName | undefined => {
+  let current = schema;
+  for (;;) {
+    const meta = xmlRegistry.get(current);
+    if (meta?.substElement) {
+      return meta.substElement;
+    }
+    const next = peelOnce(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
+  }
+};
+
+// The schema to read or serialize one element occurrence with. A
+// substitution-group head field's schema is a union of per-element options,
+// each tagged with its element qname (XmlMeta.substElement); the option
+// whose qname matches the actual tag wins — head tags included, since the
+// union itself is not the head's type. Any other field schema passes through
+// unchanged.
+const substitutionSchemaFor = (tagQName: string, headSchema: AnySchema): AnySchema => {
+  const def = unwrapModifiers(headSchema)._zod.def;
+  if (def.type !== "union") {
     return headSchema;
   }
-  for (const member of substitutionGroupMembers.get(headQName) ?? []) {
-    if (findRootMeta(member as AnySchema)?.root === tagQName) {
-      return peelOnce(member as AnySchema);
+  for (const option of (def as z.core.$ZodUnionDef).options) {
+    if (findSubstElementMeta(option as AnySchema) === tagQName) {
+      return option as AnySchema;
     }
   }
   return headSchema;
@@ -769,6 +802,14 @@ const readObject = (
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
+  // Element qnames declared on this object: a tag that exactly names one of
+  // them belongs to that field, not to a sibling head's substitution group
+  // (the exact particle match wins over substitution-group membership).
+  const exactElementQNames = new Set(
+    Object.values(fields)
+      .filter((f) => f.kind === "element")
+      .map((f) => f.qname),
+  );
   // Null prototype: an XSD element named __proto__ must become an own property,
   // not a silent prototype mutation (#84).
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
@@ -777,11 +818,20 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
-    const { present, value, lexical } = readField(fieldMeta, fieldSchema, node, namespaceContext);
+    const { present, value, lexical, substQNames } = readField(
+      fieldMeta,
+      fieldSchema,
+      node,
+      namespaceContext,
+      exactElementQNames,
+    );
     if (present) {
       result[key] = value;
       if (lexical !== undefined) {
         recordLexical(result, key, lexical);
+      }
+      if (substQNames !== undefined) {
+        recordInto(substQNameStore, result, key, substQNames);
       }
     }
   }
@@ -872,7 +922,11 @@ const sweepWildcards = (
   namespaceContext: Record<string, string>,
   wildcards: { any: boolean; anyAttribute: boolean },
 ): void => {
-  const knownElements = new Set(fieldList.filter((f) => f.kind === "element").map((f) => f.qname));
+  const knownElements = new Set(
+    fieldList
+      .filter((f) => f.kind === "element")
+      .flatMap((f) => [f.qname, ...(f.substitutes ?? [])]),
+  );
   const knownAttributes = new Set(
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
   );
@@ -968,6 +1022,8 @@ type FieldRead = {
   present: boolean;
   value: unknown;
   lexical?: string | (string | undefined)[] | undefined;
+  /** Member qname per occurrence — set only where it differs from the head. */
+  substQNames?: string | (string | undefined)[] | undefined;
 };
 
 const readField = (
@@ -975,6 +1031,7 @@ const readField = (
   fieldSchema: AnySchema,
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
+  exactElementQNames?: ReadonlySet<string>,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1022,19 +1079,38 @@ const readField = (
     };
   }
 
-  const occurrences = findElementValues(node, fieldMeta.qname, namespaceContext).map((entry) =>
-    readOccurrence(field, fieldMeta, entry, namespaceContext),
+  const matched = findElementValues(
+    node,
+    fieldMeta.qname,
+    namespaceContext,
+    fieldMeta.substitutes ?? [],
+  ).filter(
+    (entry) =>
+      entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname),
   );
+  const occurrences = matched.map((entry) => {
+    const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
+    const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
+    return { ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext), qname: entry.qname };
+  });
+  const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
+  const substituted = qnames.some((q) => q !== undefined);
   if (field.isArray) {
     const lexicals = occurrences.map((o) => o.lexical);
     return {
       present: true,
       value: occurrences.map((o) => o.value),
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
+      substQNames: substituted ? qnames : undefined,
     };
   }
   if (occurrences.length > 0) {
-    return { present: true, value: occurrences[0]!.value, lexical: occurrences[0]!.lexical };
+    return {
+      present: true,
+      value: occurrences[0]!.value,
+      lexical: occurrences[0]!.lexical,
+      substQNames: qnames[0],
+    };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
   // present-but-empty elements, not absent ones (#66).
@@ -1263,6 +1339,7 @@ const writeObjectFields = (
   const elements: string[] = [];
   let usesXsi = false;
   const lexicals = lexicalStore.get(obj);
+  const substQNames = substQNameStore.get(obj);
 
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
@@ -1301,13 +1378,19 @@ const writeObjectFields = (
     }
     // Elements are always written when present in the data — even when equal
     // to their default/fixed, which are parse-time concerns only (#66).
-    const localName = elementName(fieldMeta.qname, ctx.prefixMap);
     const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
+    const storedQNames = substQNames?.get(key);
     for (let i = 0; i < values.length; i++) {
       const item = values[i];
       if (item === undefined) {
         continue;
       }
+      // A substituted occurrence re-emits its member tag and serializes with
+      // the member's own type schema; head occurrences use the field qname.
+      const occurrenceQName =
+        (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
+      const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
+      const localName = elementName(occurrenceQName, ctx.prefixMap);
       if (item === null) {
         usesXsi = true;
         elements.push(`<${localName} xsi:nil="true"/>`);
@@ -1320,8 +1403,8 @@ const writeObjectFields = (
         elements.push(`<${localName}${attrStr}>${inner.body}</${localName}>`);
         continue;
       }
-      if (hasObjectShape(field.itemSchema) && typeof item === "object" && !Array.isArray(item)) {
-        const inner = writeObjectFields(field.itemSchema, item as Record<string, unknown>, ctx);
+      if (hasObjectShape(itemSchema) && typeof item === "object" && !Array.isArray(item)) {
+        const inner = writeObjectFields(itemSchema, item as Record<string, unknown>, ctx);
         usesXsi = usesXsi || inner.usesXsi;
         const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
         elements.push(`<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`);
@@ -1329,7 +1412,7 @@ const writeObjectFields = (
       }
       const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
       elements.push(
-        `<${localName}>${serializeStoredLeaf(fieldMeta, field.itemSchema, item, storedItem)}</${localName}>`,
+        `<${localName}>${serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem)}</${localName}>`,
       );
     }
   }

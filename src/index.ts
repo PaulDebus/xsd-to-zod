@@ -32,7 +32,7 @@ export type {
   XsdIr,
 } from "./types.js";
 export type { XmlFieldMeta, XmlLexicalFacets, XmlMeta } from "./xmlMeta.js";
-export { registerSubstitution, xmlRegistry } from "./xmlMeta.js";
+export { xmlRegistry } from "./xmlMeta.js";
 export {
   countFractionDigits,
   countTotalDigits,

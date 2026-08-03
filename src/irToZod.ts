@@ -1360,20 +1360,30 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   };
 
   // Field value schema: the field's type, or — when the field references a
-  // substitution-group head — a union of all member types and the head type.
-  // Members come first: they are the more specific types, so a validating
-  // member branch is picked before the head's looser shape could strip
-  // member-only content.
+  // substitution-group head — a union of per-element options (head + all
+  // members). Each option is a lazy wrapper registered with its element
+  // qname (XmlMeta.substElement): the runtime matches the actual element tag
+  // against these to read and serialize with the right type. Members come
+  // first: they are the more specific types, so a validating member branch
+  // is picked before the head's looser shape could strip member-only content.
   const fieldTypeExpr = (field: IrField): string => {
     const headExpr = primitiveToZod(field.typeName, definedTypes, constName, usedHelpers, structured);
     const substMembers = membersByHead.get(field.qname);
     if (substMembers === undefined || substMembers.length === 0) {
       return headExpr;
     }
-    const memberExprs = substMembers.map((m) =>
-      primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured),
-    );
-    return `z.union([${[...memberExprs, headExpr].join(", ")}])`;
+    const option = (expr: string, qname: QName): string =>
+      `z.lazy(() => ${expr}).register(xmlRegistry, { substElement: ${JSON.stringify(qname)} })`;
+    const options = [
+      ...substMembers.map((m) =>
+        option(
+          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured),
+          m.name,
+        ),
+      ),
+      option(headExpr, field.qname),
+    ];
+    return `z.union([${options.join(", ")}])`;
   };
 
   // Interfaces first: exported so consumers can name the inferred types, and
@@ -1535,18 +1545,6 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     );
   }
 
-  // Wire substitution-group members to their heads (transitively closed): the
-  // runtime resolves a member's type schema from its root export when it
-  // reads or serializes a substituted element.
-  for (const [head, members] of membersByHead) {
-    for (const member of members) {
-      const memberExport = exportNames.get(member.name);
-      if (memberExport !== undefined) {
-        schemaLines.push(`registerSubstitution(${JSON.stringify(head)}, ${memberExport});`);
-      }
-    }
-  }
-
   const xsdImports = [
     usage.totalDigits ? "xsdTotalDigits" : undefined,
     usage.fractionDigits ? "xsdFractionDigits" : undefined,
@@ -1558,7 +1556,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       : "";
   schemaLines[importLineIndex] =
     `import { z } from 'zod';\n` +
-    `import { xmlRegistry${membersByHead.size > 0 ? ", registerSubstitution" : ""}${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
+    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
 
   return { schemas: `${schemaLines.join("\n")}\n` };
 };
