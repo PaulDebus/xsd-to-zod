@@ -70,10 +70,62 @@ describe("xsdPattern", () => {
     expect(xsdPattern("\\p{Lu}").test("a")).toBe(false);
   });
 
+  it("expands \\p{IsBlock} names to code-point ranges", () => {
+    expect(xsdPattern("\\p{IsBasicLatin}+").test("abc")).toBe(true);
+    expect(xsdPattern("\\p{IsBasicLatin}+").test("abç")).toBe(false);
+    // "IsGreek" is the ms/libxml2 name for the Greek and Coptic block.
+    expect(xsdPattern("\\p{IsGreek}").test("Έ")).toBe(true);
+    expect(xsdPattern("\\p{IsGreek}").test("A")).toBe(false);
+    expect(xsdPattern("\\p{IsHiragana}").test("あ")).toBe(true);
+    expect(xsdPattern("\\p{IsCJKUnifiedIdeographsExtensionB}").test("\u{20001}")).toBe(true);
+  });
+
+  it("expands \\P{IsBlock} to the complement of the block", () => {
+    expect(xsdPattern("\\P{IsGreek}").test("A")).toBe(true);
+    expect(xsdPattern("\\P{IsGreek}").test("Έ")).toBe(false);
+  });
+
+  it("translates character class subtraction", () => {
+    const re = xsdPattern("[a-z-[aeiou]]+");
+    expect(re.test("bcdfg")).toBe(true);
+    expect(re.test("abcde")).toBe(false);
+    // Quantifiers apply to the whole subtracted class.
+    expect(xsdPattern("[0-9-[5]]{2}").test("47")).toBe(true);
+    expect(xsdPattern("[0-9-[5]]{2}").test("45")).toBe(false);
+  });
+
+  it("translates the [\\i-[:]] NCName idiom as subtraction", () => {
+    const re = xsdPattern("[\\i-[:]][\\c-[:]]*");
+    expect(re.test("with-dash.and.dots")).toBe(true);
+    expect(re.test("has:colon")).toBe(false);
+    expect(re.test("1leading-digit")).toBe(false);
+  });
+
+  it("translates nested and negated subtraction", () => {
+    const re = xsdPattern("[a-z-[a-c-[b]]]+");
+    expect(re.test("bdf")).toBe(true);
+    expect(re.test("abc")).toBe(false);
+    expect(re.test("ac")).toBe(false);
+    // Subtraction from a negated class.
+    expect(xsdPattern("[^a-z-[x]]").test("A")).toBe(true);
+    expect(xsdPattern("[^a-z-[x]]").test("a")).toBe(false);
+    expect(xsdPattern("[^a-z-[x]]").test("x")).toBe(false);
+  });
+
+  it("translates a lone complement escape inside a class", () => {
+    expect(xsdPattern("[\\C]+").test("??*")).toBe(true);
+    expect(xsdPattern("[\\C]+").test("ab")).toBe(false);
+    // Double negation: [^\P{IsBasicLatin}] is the block itself.
+    expect(xsdPattern("[^\\P{IsBasicLatin}]").test("a")).toBe(true);
+    expect(xsdPattern("[^\\P{IsBasicLatin}]").test("ç")).toBe(false);
+  });
+
   it("falls back to the raw unanchored form for untranslatable constructs", () => {
-    // \p{IsBlock} names have no JS equivalent: the raw form treats the
-    // escape leniently (identity characters), like the old codegen did.
-    const re = xsdPattern("\\p{IsGreek}");
-    expect(re.source).toBe("\\p{IsGreek}");
+    // Unknown Unicode block names have no JS equivalent: the raw form treats
+    // the escape leniently (identity characters), like the old codegen did.
+    const re = xsdPattern("\\p{IsKlingon}");
+    expect(re.source).toBe("\\p{IsKlingon}");
+    // Unions mixing complement escapes with other items are inexpressible.
+    expect(xsdPattern("[a\\C]").source).toBe("[a\\C]");
   });
 });
