@@ -1695,11 +1695,15 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
 
       const qname = toClark(effectiveNs, name);
       const description = extractDocumentation(child);
+      const substitutionGroup = child["@_substitutionGroup"]
+        ? resolveTypeQName(String(child["@_substitutionGroup"]), resolveNsMap, state.diagnostics)
+        : undefined;
       state.elements[qname] = {
         name: qname,
         typeName,
         cardinality: parseCardinality(child),
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
+        ...optProp("substitutionGroup", substitutionGroup),
         ...optProp("description", description),
         ...valueConstraints(child),
       };

@@ -3,7 +3,14 @@ import { CompactBuilderFactory } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
-import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import type { QName } from "./types.js";
+import {
+  substitutionGroupMembers,
+  type XmlFieldMeta,
+  type XmlLexicalFacets,
+  type XmlMeta,
+  xmlRegistry,
+} from "./xmlMeta.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -659,17 +666,15 @@ const findElementValues = (
   node: Record<string, unknown>,
   qname: string,
   namespaceContext: Record<string, string>,
-): unknown[] => {
-  const expected = splitClark(qname);
-  const matches: unknown[] = [];
+  substitutes: readonly QName[] = [],
+): { value: unknown; qname: QName }[] => {
+  const expected = [qname, ...substitutes].map((q) => splitClark(q));
+  const matches: { value: unknown; qname: QName }[] = [];
   for (const [key, value] of Object.entries(node)) {
     if (key.startsWith("@_") || key === "#text" || key === "#cdata") {
       continue;
     }
     const { prefix, local } = splitQName(key);
-    if (local !== expected.local) {
-      continue;
-    }
     // Match per item, with each item's own xmlns context — repeated elements
     // may redeclare namespaces per sibling (#67).
     for (const item of toArray(value)) {
@@ -679,21 +684,43 @@ const findElementValues = (
         ? withNamespaceContext(namespaceContext, itemNode)
         : namespaceContext;
       const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-      if (namespace === expected.namespace) {
-        matches.push(item);
-        continue;
-      }
-      // Unqualified local elements (elementFormDefault="unqualified") belong to
-      // no namespace, yet real-world documents put them in the inherited
-      // default namespace. Accommodate them: a field in no namespace also
-      // matches unprefixed elements (lenient by design; the libxml2 tier is
-      // the strict one).
-      if (expected.namespace === "" && !prefix) {
-        matches.push(item);
+      const match = expected.find(
+        (e) =>
+          e.local === local &&
+          (namespace === e.namespace ||
+            // Unqualified local elements (elementFormDefault="unqualified")
+            // belong to no namespace, yet real-world documents put them in the
+            // inherited default namespace. Accommodate them: a field in no
+            // namespace also matches unprefixed elements (lenient by design;
+            // the libxml2 tier is the strict one).
+            (e.namespace === "" && !prefix)),
+      );
+      if (match !== undefined) {
+        matches.push({ value: item, qname: `{${match.namespace}}${match.local}` });
       }
     }
   }
   return matches;
+};
+
+// The schema to read or serialize one element occurrence with: when the
+// actual tag is a substitution-group member of the field's head element, the
+// member's own type schema (its root export peeled one level — the registered
+// type schema, meta intact); otherwise the field schema unchanged.
+const substitutionSchemaFor = (
+  headQName: QName,
+  tagQName: string,
+  headSchema: AnySchema,
+): AnySchema => {
+  if (tagQName === headQName) {
+    return headSchema;
+  }
+  for (const member of substitutionGroupMembers.get(headQName) ?? []) {
+    if (findRootMeta(member as AnySchema)?.root === tagQName) {
+      return peelOnce(member as AnySchema);
+    }
+  }
+  return headSchema;
 };
 
 const extractRoot = (
