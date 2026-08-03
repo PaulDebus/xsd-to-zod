@@ -108,4 +108,27 @@ describe("nested choice groups", () => {
       "{urn:other}foo": "",
     });
   });
+
+  it("fields of branches that are all nested compositors are optional", async () => {
+    const schema = await schemaFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:choice>
+      <xs:choice>
+        <xs:element name="c1"/>
+      </xs:choice>
+      <xs:choice>
+        <xs:element name="c2"/>
+      </xs:choice>
+      <xs:sequence>
+        <xs:element name="s1" type="xs:string"/>
+      </xs:sequence>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="t" type="T"/>
+</xs:schema>`);
+    expect(parseXml(schema, "<t><c2/></t>")).toEqual({ c2: "" });
+    expect(parseXml(schema, "<t><s1>a</s1></t>")).toEqual({ s1: "a" });
+    expect(() => parseXml(schema, "<t><c1/><c2/></t>")).toThrow(/choice/);
+  });
 });
