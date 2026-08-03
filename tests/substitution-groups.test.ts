@@ -9,9 +9,7 @@ import { generateAndImport, withTempDirAsync } from "./helpers.js";
 // expected, read with the member's own type, and serialized back under the
 // member's tag.
 
-const moduleFor = async (
-  xsds: Record<string, string>,
-): Promise<Record<string, unknown>> => {
+const moduleFor = async (xsds: Record<string, string>): Promise<Record<string, unknown>> => {
   let mod: Record<string, unknown> = {};
   await withTempDirAsync(async (dir) => {
     const files: string[] = [];

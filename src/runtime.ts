@@ -4,12 +4,7 @@ import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
 import type { QName } from "./types.js";
-import {
-  type XmlFieldMeta,
-  type XmlLexicalFacets,
-  type XmlMeta,
-  xmlRegistry,
-} from "./xmlMeta.js";
+import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -1084,14 +1079,14 @@ const readField = (
     fieldMeta.qname,
     namespaceContext,
     fieldMeta.substitutes ?? [],
-  ).filter(
-    (entry) =>
-      entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname),
-  );
+  ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
   const occurrences = matched.map((entry) => {
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
-    return { ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext), qname: entry.qname };
+    return {
+      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext),
+      qname: entry.qname,
+    };
   });
   const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
   const substituted = qnames.some((q) => q !== undefined);
