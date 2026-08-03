@@ -1,6 +1,6 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
-import type { ComplexTypeDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
+import type { ComplexTypeDef, ElementDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
 import type { XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
@@ -994,9 +994,18 @@ const structuredTypeOfTypeName = (
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict.
-const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr, structured: boolean): string => {
+const fieldsMetaFor = (
+  type: ComplexTypeDef,
+  ir: XsdIr,
+  structured: boolean,
+  membersByHead: ReadonlyMap<QName, ElementDef[]>,
+): string => {
   const entries = type.fields.map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
+    const substMembers = membersByHead.get(field.qname);
+    if (substMembers !== undefined && substMembers.length > 0) {
+      parts.push(`substitutes: ${JSON.stringify(substMembers.map((m) => m.name))}`);
+    }
     if (field.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       parts.push("open: true");
     }
@@ -1040,6 +1049,41 @@ const fieldsMetaFor = (type: ComplexTypeDef, ir: XsdIr, structured: boolean): st
     }
   }
   return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(", ")} }`;
+};
+
+// Head element qname → substitution-group member declarations, transitively
+// closed (a member's own members substitute for the head as well).
+const substitutionMembersByHead = (ir: XsdIr): Map<QName, ElementDef[]> => {
+  const direct = new Map<QName, QName[]>();
+  for (const element of Object.values(ir.elements)) {
+    if (element.substitutionGroup === undefined) {
+      continue;
+    }
+    const list = direct.get(element.substitutionGroup) ?? [];
+    list.push(element.name);
+    direct.set(element.substitutionGroup, list);
+  }
+  const result = new Map<QName, ElementDef[]>();
+  for (const head of direct.keys()) {
+    const members: ElementDef[] = [];
+    const seen = new Set<QName>([head]);
+    const walk = (current: QName): void => {
+      for (const memberName of direct.get(current) ?? []) {
+        if (seen.has(memberName)) {
+          continue;
+        }
+        seen.add(memberName);
+        const member = ir.elements[memberName];
+        if (member !== undefined) {
+          members.push(member);
+        }
+        walk(memberName);
+      }
+    };
+    walk(head);
+    result.set(head, members);
+  }
+  return result;
 };
 
 // ---------------------------------------------------------------------------
@@ -1167,10 +1211,21 @@ const tsFieldLine = (
   ifaceName: ReadonlyMap<QName, string>,
   forceOptional: boolean,
   dt: { usedTypes: Set<string> } | undefined,
+  membersByHead: ReadonlyMap<QName, ElementDef[]>,
 ): string => {
   let type: string;
   if (field.fixedValue === undefined) {
-    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
+    const headType = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
+    const substMembers = membersByHead.get(field.qname) ?? [];
+    // The field accepts any substitution-group member: the TS type is the
+    // union of the member types and the head type (deduped).
+    const types = [
+      ...new Set([
+        ...substMembers.map((m) => tsTypeOfTypeName(m.typeName, ir, ifaceName, new Set(), dt)),
+        headType,
+      ]),
+    ];
+    type = types.join(" | ");
   } else {
     // Structured fixed values have no literal type; the base type it is.
     const st = dt ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
@@ -1263,6 +1318,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // space so an interface can never shadow a root export (public API of
   // generated modules — those names keep their historic shape).
   const exportNames = rootSchemaExportNames(ir.rootElements);
+  const membersByHead = substitutionMembersByHead(ir);
   const usedNames = new Set<string>(exportNames.values());
   const alloc = (base: string): string => {
     let name = base;
@@ -1303,6 +1359,23 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     claimedTypeNames.add(qname);
   };
 
+  // Field value schema: the field's type, or — when the field references a
+  // substitution-group head — a union of all member types and the head type.
+  // Members come first: they are the more specific types, so a validating
+  // member branch is picked before the head's looser shape could strip
+  // member-only content.
+  const fieldTypeExpr = (field: IrField): string => {
+    const headExpr = primitiveToZod(field.typeName, definedTypes, constName, usedHelpers, structured);
+    const substMembers = membersByHead.get(field.qname);
+    if (substMembers === undefined || substMembers.length === 0) {
+      return headExpr;
+    }
+    const memberExprs = substMembers.map((m) =>
+      primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured),
+    );
+    return `z.union([${[...memberExprs, headExpr].join(", ")}])`;
+  };
+
   // Interfaces first: exported so consumers can name the inferred types, and
   // the const annotations below refer to them. js mode has no type level.
   if (!opts?.js) {
@@ -1317,6 +1390,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
             ifaceName,
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
             dt,
+            membersByHead,
           ),
         )
         .join("\n");
@@ -1398,7 +1472,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
             withCardinality(
-              primitiveToZod(field.typeName, definedTypes, constName, usedHelpers, structured),
+              fieldTypeExpr(field),
               field,
               ir,
               field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
@@ -1415,7 +1489,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       `const ${constName.get(complexType.name)}${annotation} = ${registered(
         `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${choiceRefines(complexType).join("")})`,
         complexType.description,
-        fieldsMetaFor(complexType, ir, structured),
+        fieldsMetaFor(complexType, ir, structured, membersByHead),
       )};`,
     );
   }
@@ -1461,6 +1535,18 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     );
   }
 
+  // Wire substitution-group members to their heads (transitively closed): the
+  // runtime resolves a member's type schema from its root export when it
+  // reads or serializes a substituted element.
+  for (const [head, members] of membersByHead) {
+    for (const member of members) {
+      const memberExport = exportNames.get(member.name);
+      if (memberExport !== undefined) {
+        schemaLines.push(`registerSubstitution(${JSON.stringify(head)}, ${memberExport});`);
+      }
+    }
+  }
+
   const xsdImports = [
     usage.totalDigits ? "xsdTotalDigits" : undefined,
     usage.fractionDigits ? "xsdFractionDigits" : undefined,
@@ -1472,7 +1558,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       : "";
   schemaLines[importLineIndex] =
     `import { z } from 'zod';\n` +
-    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
+    `import { xmlRegistry${membersByHead.size > 0 ? ", registerSubstitution" : ""}${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
 
   return { schemas: `${schemaLines.join("\n")}\n` };
 };

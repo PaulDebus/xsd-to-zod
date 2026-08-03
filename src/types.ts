@@ -78,6 +78,8 @@ export type ElementDef = {
   typeName: QName;
   cardinality: Cardinality;
   nillable?: boolean;
+  /** Head element qname when this element declares substitutionGroup. */
+  substitutionGroup?: QName;
   description?: string;
   /** Raw lexicals; coerced to the JS type at emission (#68). */
   defaultValue?: string;
