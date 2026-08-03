@@ -81,10 +81,10 @@ export type XmlFieldMeta = {
   /**
    * Substitution-group members of the head element this field references:
    * member element qnames (transitively closed) that may appear in place of
-   * the head. The field schema is a union of the head type and all member
-   * types; the runtime matches member tags, reads them with the member's own
-   * type (found via {@link substitutionGroupMembers}) and records the actual
-   * qname per occurrence so the serializer re-emits the member tag.
+   * the head. The field schema is a union of per-element options (head + all
+   * members, each tagged with {@link XmlMeta.substElement}); the runtime
+   * matches member tags, reads them with the member's own type and records
+   * the actual qname per occurrence so the serializer re-emits the member tag.
    */
   substitutes?: QName[];
 };
@@ -116,6 +116,14 @@ export type XmlMeta = {
   fixedLexical?: string;
   /** Lexical-space facets of a simple type — enforced by the runtime. */
   facets?: XmlLexicalFacets;
+  /**
+   * Element qname this schema validates the content of, on one option of a
+   * substitution-group field union: the head field's schema is a union of
+   * per-element options (head + all members), each a lazy wrapper carrying
+   * its element qname here. The runtime matches the actual element tag
+   * against these to read and serialize the occurrence with the right type.
+   */
+  substElement?: QName;
   fields?: Record<string, XmlFieldMeta>;
 };
 
@@ -138,36 +146,3 @@ export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> =
 if (!globalStore.__xsd_to_zod_xmlRegistry__) {
   globalStore.__xsd_to_zod_xmlRegistry__ = xmlRegistry;
 }
-
-/**
- * Head element qname → the generated root schemas of its substitution-group
- * members (transitively closed), populated by generated modules at import
- * time via {@link registerSubstitution}. Field meta only carries member
- * qnames (plain data); the runtime resolves the member's actual type schema
- * from here when it reads or serializes a substituted element. A member's
- * root schema peels to its type schema, whose registry meta stays intact.
- *
- * Same globalThis singleton trick as xmlRegistry: generated modules may hold
- * a different copy of the library than the runtime driving them.
- */
-const substStore = globalThis as {
-  __xsd_to_zod_substitutionGroupMembers__?: Map<QName, z.ZodType[]>;
-};
-
-export const substitutionGroupMembers: Map<QName, z.ZodType[]> =
-  substStore.__xsd_to_zod_substitutionGroupMembers__ ?? new Map<QName, z.ZodType[]>();
-if (!substStore.__xsd_to_zod_substitutionGroupMembers__) {
-  substStore.__xsd_to_zod_substitutionGroupMembers__ = substitutionGroupMembers;
-}
-
-/** Emitted once per substitution-group member by generated modules. */
-export const registerSubstitution = (head: QName, memberRootSchema: z.ZodType): void => {
-  const members = substitutionGroupMembers.get(head);
-  if (members === undefined) {
-    substitutionGroupMembers.set(head, [memberRootSchema]);
-    return;
-  }
-  if (!members.includes(memberRootSchema)) {
-    members.push(memberRootSchema);
-  }
-};
