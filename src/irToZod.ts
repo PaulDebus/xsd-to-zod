@@ -1,6 +1,14 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
-import type { ComplexTypeDef, ElementDef, Facet, IrField, QName, SimpleTypeDef, XsdIr } from "./types.js";
+import type {
+  ComplexTypeDef,
+  ElementDef,
+  Facet,
+  IrField,
+  QName,
+  SimpleTypeDef,
+  XsdIr,
+} from "./types.js";
 import type { XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
@@ -1367,7 +1375,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // first: they are the more specific types, so a validating member branch
   // is picked before the head's looser shape could strip member-only content.
   const fieldTypeExpr = (field: IrField): string => {
-    const headExpr = primitiveToZod(field.typeName, definedTypes, constName, usedHelpers, structured);
+    const headExpr = primitiveToZod(
+      field.typeName,
+      definedTypes,
+      constName,
+      usedHelpers,
+      structured,
+    );
     const substMembers = membersByHead.get(field.qname);
     if (substMembers === undefined || substMembers.length === 0) {
       return headExpr;
