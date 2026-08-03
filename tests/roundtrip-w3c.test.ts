@@ -11,8 +11,11 @@ const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 // Cases exercising XSD features xsd-to-zod does not support yet, with the
 // reason. Keyed by `<testGroup>/<instanceTest>` name.
 const KNOWN_FAILURES = new Map<string, string>([
-  ["ipo6/ipo_1", `${REASONS.substitutionGroups} (salutation substitutes ipo:ExternFirstElement)`],
-  ["ipo6/ipo_2", `${REASONS.substitutionGroups} (salutation substitutes ipo:ExternFirstElement)`],
+  // Substitution groups themselves work (salutation substitutes
+  // ipo:ExternFirstElement); what fails is the group-in-choice ordering:
+  // shipTo/billTo/singleAddress are emitted after comment/items.
+  ["ipo6/ipo_1", REASONS.choiceDocumentOrder],
+  ["ipo6/ipo_2", REASONS.choiceDocumentOrder],
 ]);
 
 // Test groups are discovered from the .testSet metadata (#108), not hardcoded
