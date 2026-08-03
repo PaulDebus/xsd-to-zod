@@ -74,6 +74,9 @@ const textOf = (node: Record<string, unknown>): unknown => {
   return `${text === undefined ? "" : String(text)}${cdataText}`;
 };
 
+const hasElementChildren = (node: Record<string, unknown>): boolean =>
+  Object.keys(node).some((key) => !key.startsWith("@_") && key !== "#text" && key !== "#cdata");
+
 const collectNamespaceDeclarations = (node: Record<string, unknown>): Record<string, string> => {
   const namespaces: Record<string, string> = {};
   for (const [key, value] of Object.entries(node)) {
@@ -991,8 +994,15 @@ const readOccurrence = (
         return { value: empty.value };
       }
     }
+    // A present element without character data has empty-string content: valid
+    // for string-allowing types, and numeric coercion of '' still rejects.
+    // Element children under a simple type are not character data — keep the
+    // absent value so validation rejects them.
     return {
-      value: coerceLexical(text, field.itemSchema),
+      value:
+        text === undefined && hasElementChildren(childNode)
+          ? undefined
+          : coerceLexical(text ?? "", field.itemSchema),
       lexical: text === undefined ? undefined : String(text),
     };
   }
@@ -1144,7 +1154,14 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
       return meta.defaultValue;
     }
   }
-  const value = coerceLexical(text, typeSchema);
+  // A present root without character data has empty-string content: valid for
+  // string-allowing types, and numeric coercion of '' still rejects. Element
+  // children under a simple type are not character data — keep the absent
+  // value so validation rejects them.
+  const value =
+    text === undefined && hasElementChildren(rootNode)
+      ? undefined
+      : coerceLexical(text ?? "", typeSchema);
   if (text !== undefined) {
     rootLexicals.set(schema, { data: value, lexical: String(text) });
   }

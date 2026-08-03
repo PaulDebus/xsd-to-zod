@@ -795,8 +795,12 @@ const multiBranchGroups = (type: ComplexTypeDef): Set<string> => {
       groups.add(field.choiceGroup);
     }
   }
-  for (const id of Object.keys(type.choiceGroupGuards ?? {})) {
+  for (const [id, guard] of Object.entries(type.choiceGroupGuards ?? {})) {
     groups.add(id);
+    // A choice that only shows up as the guard target of nested choices has no
+    // fields of its own, but it is still a choice: its nested branches decide
+    // reachability of everything below them.
+    groups.add(guard.group);
   }
   const multi = new Set<string>();
   for (const group of groups) {
@@ -809,6 +813,25 @@ const multiBranchGroups = (type: ComplexTypeDef): Set<string> => {
     }
   }
   return multi;
+};
+
+// Groups whose element fields must be optional in the object shape: branches
+// of a multi-branch choice may not be selected, and a choice nested inside
+// such a branch is only reachable when the branch is — so its fields are
+// optional too, transitively along the guard chain.
+const choiceOptionalGroups = (type: ComplexTypeDef): Set<string> => {
+  const optional = multiBranchGroups(type);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [id, guard] of Object.entries(type.choiceGroupGuards ?? {})) {
+      if (!optional.has(id) && optional.has(guard.group)) {
+        optional.add(id);
+        grew = true;
+      }
+    }
+  }
+  return optional;
 };
 
 const choiceRefines = (type: ComplexTypeDef): string[] => {
@@ -1405,7 +1428,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   if (!opts?.js) {
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
-      const multiBranch = multiBranchGroups(complexType);
+      const multiBranch = choiceOptionalGroups(complexType);
       const props = complexType.fields
         .map((field) =>
           tsFieldLine(
@@ -1490,7 +1513,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
-    const multiBranch = multiBranchGroups(complexType);
+    const multiBranch = choiceOptionalGroups(complexType);
     const props = complexType.fields
       .map(
         (field) =>

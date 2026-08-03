@@ -14,7 +14,6 @@ export const W3C_CORPUS_REASONS = {
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
-  anyTypeContent: "unsupported: xs:anyType content (element without a type maps to xs:string)",
   simpleContentShape: "parse: simpleContent _text shape mismatch (needs triage)",
 } as const;
 
@@ -102,8 +101,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ModelGroups_w3c.xml/mgI010/mgI010.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/ModelGroups_w3c.xml/mgI011/mgI011.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/ModelGroups_w3c.xml/mgI013/mgI013.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI016/mgI016.v", W3C_CORPUS_REASONS.anyTypeContent],
-  ["msMeta/ModelGroups_w3c.xml/mgI017/mgI017.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
@@ -129,7 +126,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Particles_w3c.xml/particlesEb038/particlesEb038.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  ["msMeta/Particles_w3c.xml/particlesHa015/particlesHa015.v", W3C_CORPUS_REASONS.anyTypeContent],
   [
     "msMeta/Particles_w3c.xml/particlesJs001/particlesJs001.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -252,7 +248,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/SimpleType_w3c.xml/stE066/stE066.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE079/stE079.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE094/stE094.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/SimpleType_w3c.xml/stZ054/stZ054.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/SimpleType_w3c.xml/stZ072/stZ072.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Wildcards_w3c.xml/wildG016/wildG016.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Wildcards_w3c.xml/wildG018/wildG018.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -458,7 +453,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["sunMeta/CType.testSet/basetd00101m2/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/ElemDecl.testSet/typedef01301m1/Positive", W3C_CORPUS_REASONS.anyTypeContent],
   [
     "sunMeta/ElemDecl.testSet/valueconstraint00501m1/Positive",
     W3C_CORPUS_REASONS.patternOnNonString,
