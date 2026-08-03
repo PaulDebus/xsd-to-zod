@@ -3,8 +3,8 @@
 // `it.fails` — a fix that makes a case pass turns the suite red; remove the
 // entry in the same PR. Generated from full corpus runs, then hand-maintained.
 export const W3C_CORPUS_REASONS = {
-  choiceValidation:
-    "nested choice groups: inner choice is enforced even when its outer branch is not selected (needs occurrence-aware validation)",
+  choiceDocumentOrder:
+    "choice: interleaved repeated branches collapse into per-element arrays; document order is lost and the serialized XML no longer validates",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
   wildcard: "unsupported: xs:any wildcard content",
   strictWildcardHarness:
@@ -21,7 +21,7 @@ export const W3C_CORPUS_REASONS = {
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["boeingMeta/BoeingXSDTestSet.testSet/ipo6/ipo_2", W3C_CORPUS_REASONS.substitutionGroups],
-  ["msMeta/Additional_w3c.xml/addA005/addA005.v", W3C_CORPUS_REASONS.choiceValidation],
+  ["msMeta/Additional_w3c.xml/addA005/addA005.v", W3C_CORPUS_REASONS.substitutionGroups],
   ["msMeta/Additional_w3c.xml/addB012/addB012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB067/addB067.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB068/addB068.i", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -86,12 +86,10 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Element_w3c.xml/elemZ021d/elemZ021d.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/Errata10_w3c.xml/errC001/errC001.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Group_w3c.xml/groupF009v/groupF009v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Group_w3c.xml/groupG004v/groupG004v.v", W3C_CORPUS_REASONS.requiredArrayEmpty],
   ["msMeta/Group_w3c.xml/groupH009v/groupH009v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Group_w3c.xml/groupH011v/groupH011v.v", W3C_CORPUS_REASONS.choiceValidation],
-  ["msMeta/Group_w3c.xml/groupH014v/groupH014v.v", W3C_CORPUS_REASONS.choiceValidation],
+  ["msMeta/Group_w3c.xml/groupH014v/groupH014v.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Group_w3c.xml/groupH017v/groupH017v.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/Group_w3c.xml/groupH018v/groupH018v.v", W3C_CORPUS_REASONS.choiceValidation],
+  ["msMeta/Group_w3c.xml/groupH018v/groupH018v.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Group_w3c.xml/groupJ009v/groupJ009v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Group_w3c.xml/groupL009v/groupL009v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Group_w3c.xml/groupN009v/groupN009v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -107,19 +105,14 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ModelGroups_w3c.xml/mgF012/mgF012.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/ModelGroups_w3c.xml/mgF014/mgF014.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/ModelGroups_w3c.xml/mgF019/mgF019.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgI009/mgI009.v", W3C_CORPUS_REASONS.choiceValidation],
   ["msMeta/ModelGroups_w3c.xml/mgI010/mgI010.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/ModelGroups_w3c.xml/mgI011/mgI011.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI012/mgI012.v", W3C_CORPUS_REASONS.choiceValidation],
   ["msMeta/ModelGroups_w3c.xml/mgI013/mgI013.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI014/mgI014.v", W3C_CORPUS_REASONS.choiceValidation],
-  ["msMeta/ModelGroups_w3c.xml/mgI015/mgI015.v", W3C_CORPUS_REASONS.choiceValidation],
   ["msMeta/ModelGroups_w3c.xml/mgI016/mgI016.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/ModelGroups_w3c.xml/mgI017/mgI017.v", W3C_CORPUS_REASONS.anyTypeContent],
-  ["msMeta/ModelGroups_w3c.xml/mgI018/mgI018.v", W3C_CORPUS_REASONS.choiceValidation],
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceValidation],
+  ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Notations_w3c.xml/notatH001v/notatH001v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   [
     "msMeta/Particles_w3c.xml/particlesA006/particlesA006.v",
@@ -147,7 +140,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
   ["msMeta/Particles_w3c.xml/particlesHa015/particlesHa015.v", W3C_CORPUS_REASONS.anyTypeContent],
-  ["msMeta/Particles_w3c.xml/particlesIb005/particlesIb005.v", W3C_CORPUS_REASONS.anyTypeContent],
   [
     "msMeta/Particles_w3c.xml/particlesJs001/particlesJs001.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
