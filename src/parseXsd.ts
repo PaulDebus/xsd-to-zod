@@ -7,6 +7,7 @@ import { readXmlFile } from "./readXmlFile.js";
 import { createOutputBuilder } from "./runtime.js";
 import type {
   Cardinality,
+  ChoiceGroupGuard,
   ComplexTypeDef,
   Diagnostic,
   DiagnosticKind,
@@ -617,6 +618,7 @@ type FieldCollectionContext = {
   elements: Record<string, ElementDef>;
   choiceCounter: { value: number };
   choiceGroupCardinality: Map<string, Cardinality>;
+  choiceGroupGuards: Map<string, ChoiceGroupGuard>;
   complexTypes: Record<string, ComplexTypeDef>;
   syntheticTypes: SyntheticTypeContext;
   groups: Record<string, GroupEntry>;
@@ -957,6 +959,7 @@ const collectWildcard =
     scope.wildcards.push({
       kind,
       namespaceConstraint: String(child["@_namespace"] ?? "##any"),
+      ...optProp("choiceGroup", scope.choiceGroup),
     });
   };
 
@@ -974,6 +977,11 @@ const collectChoice: FieldHandler = (child, ctx, scope) => {
   const groupId = `${ctx.choiceCounter.value++}`;
   const choiceCard = combineCardinality(scope.inheritedCardinality, parseCardinality(child));
   ctx.choiceGroupCardinality.set(groupId, choiceCard);
+  // A choice nested inside a branch of an outer choice is only reachable when
+  // that branch is selected — the codegen gates its check on the branch.
+  if (scope.choiceGroup !== undefined && scope.choiceBranch !== undefined) {
+    ctx.choiceGroupGuards.set(groupId, { group: scope.choiceGroup, branch: scope.choiceBranch });
+  }
   // Each direct child of the xs:choice is one branch. Branch identity is
   // threaded through as choiceBranch so fields inlined from a group ref or
   // nested compositor stay together as a single branch (#73 / ipo-style
@@ -1224,6 +1232,13 @@ const choiceGroupsMeta = (
   return Object.keys(record).length > 0 ? { choiceGroups: record } : {};
 };
 
+const choiceGuardsMeta = (
+  entries: Map<string, ChoiceGroupGuard> | Record<string, ChoiceGroupGuard>,
+): Pick<ComplexTypeDef, "choiceGroupGuards"> => {
+  const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
+  return Object.keys(record).length > 0 ? { choiceGroupGuards: record } : {};
+};
+
 const createFieldContext = (
   state: ParseState,
   nsMap: Record<string, string>,
@@ -1235,6 +1250,7 @@ const createFieldContext = (
   elements: state.elements,
   choiceCounter: state.choiceCounter,
   choiceGroupCardinality: new Map(),
+  choiceGroupGuards: new Map(),
   complexTypes: state.complexTypes,
   syntheticTypes: {
     targetNs,
@@ -1729,6 +1745,7 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
         ...optProp("baseType", baseType),
         ...optProp("description", description),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
+        ...choiceGuardsMeta(fCtx.choiceGroupGuards),
         ...(wildcards.length > 0 ? { wildcards } : {}),
       };
     }
@@ -1769,6 +1786,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
         : undefined;
       const description = extractDocumentation(override.node);
       const choiceGroupMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
+      const choiceGuardMeta = choiceGuardsMeta(fCtx.choiceGroupGuards);
       const effectiveBaseType = baseType === override.qname ? undefined : baseType;
       if (isMixedComplexType(override.node)) {
         prependMixedTextField(fields, override.targetNs);
@@ -1780,6 +1798,10 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...original.choiceGroups,
             ...Object.fromEntries(fCtx.choiceGroupCardinality),
           };
+          const mergedChoiceGuards = {
+            ...original.choiceGroupGuards,
+            ...Object.fromEntries(fCtx.choiceGroupGuards),
+          };
           const mergedWildcards = [...(original.wildcards ?? []), ...wildcards];
           state.complexTypes[override.qname] = {
             name: override.qname,
@@ -1787,6 +1809,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("baseType", original.baseType),
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
+            ...choiceGuardsMeta(mergedChoiceGuards),
             ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
           };
         } else {
@@ -1796,6 +1819,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("baseType", effectiveBaseType),
             ...optProp("description", description),
             ...choiceGroupMeta,
+            ...choiceGuardMeta,
             ...(wildcards.length > 0 ? { wildcards } : {}),
           };
         }
@@ -1806,6 +1830,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           ...optProp("baseType", effectiveBaseType),
           ...optProp("description", description),
           ...choiceGroupMeta,
+          ...choiceGuardMeta,
           ...(wildcards.length > 0 ? { wildcards } : {}),
         };
       }
@@ -1879,6 +1904,7 @@ const processDeferredType = (
     fields,
     ...optProp("baseType", baseType),
     ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
+    ...choiceGuardsMeta(fCtx.choiceGroupGuards),
     ...(wildcards.length > 0 ? { wildcards } : {}),
   };
 };
@@ -1953,15 +1979,37 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     }
     return type.choiceGroups ?? baseGroups;
   };
+  // Guards for nested choice groups inherit the same way.
+  const resolveMergedChoiceGuards = (
+    typeName: string,
+    stack: Set<string>,
+  ): Record<string, ChoiceGroupGuard> | undefined => {
+    const type = state.complexTypes[typeName];
+    if (!type) {
+      return undefined;
+    }
+    if (!type.baseType || !state.complexTypes[type.baseType] || stack.has(typeName)) {
+      return type.choiceGroupGuards;
+    }
+    const nextStack = new Set(stack);
+    nextStack.add(typeName);
+    const baseGuards = resolveMergedChoiceGuards(type.baseType, nextStack);
+    if (baseGuards && type.choiceGroupGuards) {
+      return { ...baseGuards, ...type.choiceGroupGuards };
+    }
+    return type.choiceGroupGuards ?? baseGuards;
+  };
 
   const mergedComplexTypes: Record<string, ComplexTypeDef> = {};
   for (const [name, type] of Object.entries(state.complexTypes)) {
     const mergedWildcards = resolveMergedWildcards(name, new Set());
     const mergedChoiceGroups = resolveMergedChoiceGroups(name, new Set());
+    const mergedChoiceGuards = resolveMergedChoiceGuards(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
       fields: dedupeTextFields(resolveMergedFields(name, new Set())),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
+      ...(mergedChoiceGuards ? { choiceGroupGuards: mergedChoiceGuards } : {}),
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
     };
   }
