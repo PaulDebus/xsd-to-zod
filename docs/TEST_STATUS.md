@@ -102,21 +102,21 @@ Features tested include:
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 pinned as `it.fails` — substitution groups)
 - [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,404 passing, 219 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,478 passing, 151 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,481 passing, 148 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
 - [x] W3C invalid-instance (negative) tests (1,528 cases: 1,139 rejected by the zod tier, 574 accepted leniently — libxml2 confirms invalid, recorded in the negative conformance report, 7 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Triage the pinned W3C known failures (largest buckets: pattern edge cases (multi-char escapes as range endpoints, `\p{IsBlock}` names), `xs:anyType` content, `xs:any` wildcards, libxml2-rejected serializations, nested choice groups). ~~Lexical preservation for enum/pattern~~ — done: lexical-space facets (pattern/enumeration/exact decimal bounds) are enforced by the runtime against the original XML lexical via `xmlRegistry` facet meta, and the serializer re-emits retained lexicals
+- [ ] Triage the pinned W3C known failures (largest buckets: libxml2-rejected serializations, undefined values, `xs:any` wildcards, substitution groups, `xs:anyType` content, nested choice groups). ~~Lexical preservation for enum/pattern~~ — done: lexical-space facets (pattern/enumeration/exact decimal bounds) are enforced by the runtime against the original XML lexical via `xmlRegistry` facet meta, and the serializer re-emits retained lexicals. ~~XSD regex translation~~ — done: class subtraction, `\p{IsBlock}` names (expanded to code-point ranges) and lone complement escapes in classes are translated to JS RegExp
 - [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,355 passing, 544 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by pattern edge cases, XSD regex translation, wildcards and substitution groups; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,633 passing, 266 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by libxml2-rejected serializations, undefined values, wildcards and substitution groups; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---

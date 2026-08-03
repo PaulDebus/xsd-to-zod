@@ -19,7 +19,6 @@ export const REASONS = {
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
   substitutionGroups: "unsupported: substitution groups",
   unionCoercion: "runtime: union member coercion rejects a valid value (needs triage)",
-  patternTranslation: "codegen: XSD pattern facet regex translation too strict (needs triage)",
   simpleContentShape: "parse: simpleContent _text shape mismatch (needs triage)",
   fileResolution: "harness: test-set file resolution (needs triage)",
 } as const;
@@ -27,7 +26,6 @@ export const REASONS = {
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addA005/addA005.v", REASONS.choiceValidation],
   ["Additional/addB012/addB012.v", REASONS.libxmlRejectsSerialized],
-  ["Additional/addB058/addB058.v", REASONS.patternTranslation],
   ["Additional/addB067/addB067.v", REASONS.libxmlRejectsSerialized],
   ["Additional/addB068/addB068.i", REASONS.libxmlRejectsSerialized],
   ["Additional/addB090/addB090.v", REASONS.wildcard],
@@ -89,8 +87,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Element/elemS003/elemS003.v", REASONS.substitutionGroups],
   ["Element/elemS007/elemS007.v", REASONS.substitutionGroups],
   ["Element/elemS008/elemS008.v", REASONS.needsTriage],
-  ["Element/elemU006/elemU006.v", REASONS.patternTranslation],
-  ["Element/elemU007/elemU007.v", REASONS.patternTranslation],
   ["Element/elemZ021d/elemZ021d.v", REASONS.anyTypeContent],
   ["Element/QFE1700c2/QFE1700c2.v", REASONS.needsTriage],
   ["Errata10/errC001/errC001.v", REASONS.needsTriage],
