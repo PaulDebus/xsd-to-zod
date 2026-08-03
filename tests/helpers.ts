@@ -176,12 +176,18 @@ const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 // libxml2 refuses to load at all ("URI is not absolute").
 const isAbsoluteUri = (uri: string): boolean => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(uri);
 
-export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[]): Promise<void> {
+export async function validateXmlAgainstSchemas(
+  xml: string,
+  xsdFiles: string[],
+  xmlFile?: string,
+): Promise<void> {
   if (xsdFiles.length === 0) {
     return;
   }
 
-  const { formatIssues, validateXml } = await import("../src/validate.js");
+  const { formatIssues, validateXml, validateXmlAgainstSchemaSet } = await import(
+    "../src/validate.js"
+  );
 
   const { namespace: rootNamespace } = extractRootInfo(xml);
 
@@ -197,10 +203,13 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
     hasRemoteImport: boolean;
   }[] = [];
   const errors: string[] = [];
-  for (const xsdFile of xsdFiles.map((f) => path.resolve(f))) {
+  const addCandidate = (xsdFile: string): void => {
+    if (candidates.some((c) => c.file === xsdFile)) {
+      return;
+    }
     if (!fs.existsSync(xsdFile)) {
       errors.push(`XSD file not found: ${xsdFile}`);
-      continue;
+      return;
     }
     const content = readXmlFile(xsdFile);
     candidates.push({
@@ -208,6 +217,9 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
       targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? "",
       hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content),
     });
+  };
+  for (const f of xsdFiles.map((f) => path.resolve(f))) {
+    addCandidate(f);
   }
 
   // Only XSDs whose targetNamespace matches the serialized root are relevant;
@@ -219,6 +231,75 @@ export async function validateXmlAgainstSchemas(xml: string, xsdFiles: string[])
   // offline: libxml2 would attempt a network fetch (and stall on timeouts).
   if (pool.some((c) => c.hasRemoteImport)) {
     return;
+  }
+
+  // The schema set for validation is the pool PLUS schemas referenced by
+  // xsi:schemaLocation hints in the original instance: strict wildcards are
+  // matched by declarations that may live only in those sibling documents,
+  // and single-schema libxml2 validation cannot see them. The serialized XML
+  // drops the hints (they are not content), so they are read from the source
+  // instance.
+  const hinted: typeof candidates = [];
+  if (xmlFile !== undefined) {
+    const instance = readXmlFile(xmlFile);
+    const locations: string[] = [];
+    for (const match of instance.matchAll(/\b\w+:schemaLocation\s*=\s*["']([^"']*)["']/g)) {
+      const tokens = (match[1] ?? "").trim().split(/\s+/);
+      for (let i = 0; i + 1 < tokens.length; i += 2) {
+        locations.push(tokens[i + 1]!);
+      }
+    }
+    for (const match of instance.matchAll(
+      /\b\w+:noNamespaceSchemaLocation\s*=\s*["']([^"']*)["']/g,
+    )) {
+      locations.push((match[1] ?? "").trim());
+    }
+    for (const location of locations) {
+      if (location === "" || /^https?:/i.test(location)) {
+        continue;
+      }
+      const file = path.resolve(path.dirname(xmlFile), location);
+      if (pool.some((c) => c.file === file) || hinted.some((c) => c.file === file)) {
+        continue;
+      }
+      if (!fs.existsSync(file)) {
+        continue;
+      }
+      const content = readXmlFile(file);
+      hinted.push({
+        file,
+        targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? "",
+        hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content),
+      });
+    }
+    if (hinted.some((c) => c.hasRemoteImport)) {
+      hinted.length = 0;
+    }
+  }
+
+  // With more than one schema in the set, validate against the aggregate:
+  // one libxml2 pass over a generated wrapper importing every entry, so
+  // cross-file declarations resolve. A set that fails to COMPILE (conflicting
+  // definitions across entries) falls back to per-file validation below.
+  const entries = [...pool, ...hinted];
+  if (entries.length > 1) {
+    try {
+      const result = await validateXmlAgainstSchemaSet(
+        xml,
+        entries.map((c) => ({
+          url: pathToFileURL(c.file).href,
+          targetNamespace: c.targetNamespace,
+        })),
+      );
+      if (result.valid) {
+        return;
+      }
+      // Aggregate-invalid implies per-file-invalid (a superset of declarations
+      // only relaxes validation); fall through for per-file error messages.
+    } catch {
+      // Aggregate compile error (e.g. duplicate definitions across the set):
+      // per-file validation below is the pre-existing behavior.
+    }
   }
 
   for (const { file } of pool) {
@@ -268,5 +349,5 @@ export async function runRoundTrip(
   const objectB = parseXml(rootSchema, serialized);
   expect(objectB).toEqual(objectA);
 
-  await validateXmlAgainstSchemas(serialized, xsdFiles);
+  await validateXmlAgainstSchemas(serialized, xsdFiles, xmlFile);
 }

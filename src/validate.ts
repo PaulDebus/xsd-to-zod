@@ -92,6 +92,54 @@ export const formatIssues = (issues: XmlValidationIssue[]): string[] =>
     return `${where}${issue.message}`;
   });
 
+/** One schema of a set validated together — see {@link validateXmlAgainstSchemaSet}. */
+export type SchemaSetEntry = {
+  /** Absolute URL of the schema document (file URL in Node), used as the xs:import schemaLocation. */
+  url: string;
+  /** The schema's targetNamespace, "" for a no-namespace schema. */
+  targetNamespace: string;
+};
+
+// Namespace of the generated aggregation wrapper. Only present when the set
+// contains no-namespace schemas: libxml2 rejects an xs:import without a
+// namespace attribute unless the importing schema carries a targetNamespace.
+const AGGREGATE_NS = "urn:xsd-to-zod:schema-set";
+
+const escapeAttr = (value: string): string =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * Aggregate a set of schema documents behind a generated wrapper of
+ * xs:imports, so validation sees every declaration of the set — e.g. a main
+ * schema plus siblings declaring strict-wildcard-matched content.
+ */
+export const aggregateSchemaSet = (entries: SchemaSetEntry[]): string => {
+  const imports = entries
+    .map((entry) =>
+      entry.targetNamespace === ""
+        ? `<xsd:import schemaLocation="${escapeAttr(entry.url)}"/>`
+        : `<xsd:import namespace="${escapeAttr(entry.targetNamespace)}" schemaLocation="${escapeAttr(entry.url)}"/>`,
+    )
+    .join("");
+  const wrapperNs = entries.some((entry) => entry.targetNamespace === "")
+    ? ` targetNamespace="${AGGREGATE_NS}"`
+    : "";
+  return `<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"${wrapperNs}>${imports}</xsd:schema>`;
+};
+
+/**
+ * Validate an XML document against a SET of XSD schemas (full conformance
+ * semantics, libxml2): all entries are aggregated via {@link aggregateSchemaSet}
+ * and validated together. Every entry needs a resolvable `url` — the wrapper
+ * references the schemas by location, so relative xs:include/xs:import inside
+ * them keeps working.
+ */
+export const validateXmlAgainstSchemaSet = async (
+  xml: string,
+  schemas: SchemaSetEntry[],
+  opts?: ValidateXmlOptions,
+): Promise<ValidateXmlResult> => validateXml(xml, aggregateSchemaSet(schemas), opts);
+
 /**
  * Validate an XML document against an XSD schema with full conformance
  * semantics (libxml2). Returns a result object; schema *compile* errors and
