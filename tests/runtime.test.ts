@@ -169,3 +169,86 @@ describe("type coercion (#65)", () => {
     expect(parseXml(xml)).toBeNull();
   });
 });
+
+describe("QName-typed values", () => {
+  const QNAME_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="HolderType">
+    <xs:sequence>
+      <xs:element name="val" type="xs:QName"/>
+    </xs:sequence>
+    <xs:attribute name="att" type="xs:QName"/>
+  </xs:complexType>
+  <xs:element name="holder" type="HolderType"/>
+  <xs:element name="qroot" type="xs:QName"/>
+</xs:schema>`;
+
+  const load = async (): Promise<Record<string, unknown>> => {
+    let schemasCode = "";
+    withTempDir((dir) => {
+      const file = path.join(dir, "qname.xsd");
+      fs.writeFileSync(file, QNAME_XSD);
+      schemasCode = irToZod(parseXsd([file])).schemas;
+    });
+    return importGeneratedSchemas(schemasCode);
+  };
+
+  it("re-declares the prefix of a QName attribute value at the root", async () => {
+    const mod = await load();
+    const schema = mod["holderSchema"] as z.ZodType;
+    const parsed = parseXmlRuntime(
+      schema,
+      '<holder xmlns:a="urn:alpha" att="a:foo"><val>a:bar</val></holder>',
+    );
+    expect(parsed).toEqual({ "@att": "a:foo", val: "a:bar" });
+    const serialized = serializeXmlRuntime(schema, parsed);
+    expect(serialized).toContain('xmlns:a="urn:alpha"');
+    expect(serialized).toContain('att="a:foo"');
+    expect(serialized).toContain(">a:bar</val>");
+    // And the re-parse of the serialized form agrees.
+    expect(parseXmlRuntime(schema, serialized)).toEqual(parsed);
+  });
+
+  it("re-declares the prefix of a simple-typed QName root value", async () => {
+    const mod = await load();
+    const schema = mod["qrootSchema"] as z.ZodType;
+    const parsed = parseXmlRuntime(schema, '<qroot xmlns:a="urn:alpha">a:foo</qroot>');
+    expect(parsed).toBe("a:foo");
+    const serialized = serializeXmlRuntime(schema, parsed);
+    expect(serialized).toContain('xmlns:a="urn:alpha"');
+    expect(serialized).toContain(">a:foo</qroot>");
+  });
+
+  it("rewrites the value prefix when it collides with a generated prefix", async () => {
+    // Namespaced root + fields take the generated ns0 prefix; a QName value
+    // whose source prefix is also "ns0" (bound to another URI) must be
+    // rewritten to a fresh prefix bound to its own URI.
+    const NS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:qn" xmlns:t="urn:qn" elementFormDefault="qualified">
+  <xs:complexType name="HolderType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+    <xs:attribute name="ref" type="xs:QName"/>
+  </xs:complexType>
+  <xs:element name="holder" type="t:HolderType"/>
+</xs:schema>`;
+    let schemasCode = "";
+    withTempDir((dir) => {
+      const file = path.join(dir, "qname-ns.xsd");
+      fs.writeFileSync(file, NS_XSD);
+      schemasCode = irToZod(parseXsd([file])).schemas;
+    });
+    const mod = await importGeneratedSchemas(schemasCode);
+    const schema = mod["holderSchema"] as z.ZodType;
+    const parsed = parseXmlRuntime(
+      schema,
+      '<t:holder xmlns:t="urn:qn" xmlns:ns0="urn:other" ref="ns0:foo"><t:name>x</t:name></t:holder>',
+    );
+    const serialized = serializeXmlRuntime(schema, parsed);
+    expect(serialized).toContain('xmlns:ns0="urn:qn"');
+    expect(serialized).toContain('ref="qns1:foo"');
+    expect(serialized).toContain('xmlns:qns1="urn:other"');
+    expect(parseXmlRuntime(schema, serialized)).toEqual(parsed);
+  });
+});

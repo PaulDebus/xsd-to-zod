@@ -1022,6 +1022,28 @@ const structuredTypeOfTypeName = (
     : undefined;
 };
 
+// QName/NOTATION values carry a namespace prefix in their lexical; the runtime
+// must record the binding at parse time so the serializer can re-declare it.
+const isQNameTyped = (typeName: QName, ir: XsdIr, seen?: Set<string>): boolean => {
+  const builtin = resolveBuiltinLocal(typeName, ir);
+  if (builtin !== undefined) {
+    return builtin === "QName" || builtin === "NOTATION";
+  }
+  const seenNames = seen ?? new Set<string>();
+  if (seenNames.has(typeName)) {
+    return false;
+  }
+  seenNames.add(typeName);
+  const simple = ir.simpleTypes[typeName];
+  if (simple?.kind === "union") {
+    return simple.memberTypes.some((member) => isQNameTyped(member, ir, seenNames));
+  }
+  if (simple?.kind === "list") {
+    return isQNameTyped(simple.itemType, ir, seenNames);
+  }
+  return false;
+};
+
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict.
@@ -1044,6 +1066,11 @@ const fieldsMetaFor = (
     if (st) {
       // Lets the serializer canonicalize structured values back to lexicals.
       parts.push(`datatype: ${JSON.stringify(st.name)}`);
+    }
+    if (field.kind === "element" || field.kind === "attribute") {
+      if (isQNameTyped(field.typeName, ir)) {
+        parts.push("qnameValue: true");
+      }
     }
     // The runtime substitutes meta defaults before validation, so even in
     // structured mode the meta holds the lexical — the schema's transform
@@ -1567,6 +1594,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
     if (rootSt) {
       rootMeta.push(`datatype: ${JSON.stringify(rootSt.name)}`);
+    }
+    if (isQNameTyped(rootDef.typeName, ir)) {
+      rootMeta.push("qnameValue: true");
     }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(
