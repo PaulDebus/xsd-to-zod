@@ -1,5 +1,9 @@
 import { type BaseOutputBuilder, BaseOutputBuilderFactory } from "@nodable/base-output-builder";
-import { CompactBuilderFactory } from "@nodable/compact-builder";
+import {
+  CompactBuilder,
+  CompactBuilderFactory,
+  type FactoryOptions,
+} from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
 import { splitClark, splitQName } from "./qname.js";
@@ -20,6 +24,51 @@ const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
 type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
 
+// Child attachment order per parsed node: the compact shape groups repeated
+// siblings under one key, which loses cross-tag document order. XSD particle
+// order (wildcard positions, compositor children) needs it, so the builder
+// records every attachment here.
+const childOrderStore = new WeakMap<object, [string, unknown][]>();
+
+/**
+ * Children of a parsed node in document order, when the node came out of the
+ * parser (undefined for programmatically built nodes).
+ */
+export const childOrderOf = (node: object): [string, unknown][] | undefined =>
+  childOrderStore.get(node);
+
+// CompactBuilder with the same grouping semantics plus order tracking in
+// childOrderStore. _addChildTo is the single choke point every child
+// attachment goes through; it is not part of the upstream type declarations,
+// so the grouping logic is mirrored here.
+class OrderTrackingCompactBuilder extends CompactBuilder {
+  _addChildTo(
+    key: string,
+    val: unknown,
+    node: Record<string, unknown> | string,
+    forceArray: boolean,
+  ): Record<string, unknown> {
+    const target: Record<string, unknown> = typeof node === "string" ? {} : node;
+    let order = childOrderStore.get(target);
+    if (order === undefined) {
+      order = [];
+      childOrderStore.set(target, order);
+    }
+    order.push([key, val]);
+    if (Object.hasOwn(target, key)) {
+      const existing = target[key];
+      if (Array.isArray(existing)) {
+        existing.push(val);
+      } else {
+        target[key] = [existing, val];
+      }
+    } else {
+      target[key] = forceArray ? [val] : val;
+    }
+    return target;
+  }
+}
+
 // Works around a declaration bug in @nodable/compact-builder@2.0.0 (#86):
 // CompactBuilder.addElement is declared as addElement(tag, matcher) while the
 // implementation — like BaseOutputBuilder.addElement — is addElement(tag),
@@ -37,7 +86,12 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   });
 
   override getInstance(...args: GetInstanceArgs): BaseOutputBuilder {
-    return this.inner.getInstance(...args) as BaseOutputBuilder;
+    return new OrderTrackingCompactBuilder(
+      args[0],
+      this.inner.builderOptions as FactoryOptions,
+      args[1],
+      this.inner.registry,
+    ) as unknown as BaseOutputBuilder;
   }
 
   override registerValueParser(...args: RegisterArgs): void {
@@ -207,12 +261,12 @@ const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
 // Walk the wrapper chain until a schema carries registry meta with a `fields`
 // map — type schemas register it on the lazy wrapper, which may sit below a
 // root export wrapper or array/optional cardinality wrappers.
-const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined => {
+const findObjectMeta = (schema: AnySchema): XmlMeta | undefined => {
   let current = schema;
   for (;;) {
     const meta = xmlRegistry.get(current);
     if (meta?.fields) {
-      return meta.fields;
+      return meta;
     }
     const next = peelOnce(current);
     if (next === current) {
@@ -221,6 +275,9 @@ const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undef
     current = next;
   }
 };
+
+const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined =>
+  findObjectMeta(schema)?.fields;
 
 type FieldAnalysis = {
   // Schema for one occurrence / the leaf. Lazy type schemas are kept intact:
@@ -837,9 +894,19 @@ const readObject = (
   const hasAny = fieldList.some((f) => f.kind === "any");
   const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
   if (hasAny || hasAnyAttribute) {
+    // Scalar element fields hold exactly one occurrence (readField takes the
+    // first); further occurrences of their qname are wildcard extras.
+    const scalarElements = new Set(
+      Object.entries(fields)
+        .filter(
+          ([key, f]) => f.kind === "element" && shape[key] && !analyzeField(shape[key]).isArray,
+        )
+        .map(([, f]) => f.qname),
+    );
     sweepWildcards(result, node, fieldList, namespaceContext, {
       any: hasAny,
       anyAttribute: hasAnyAttribute,
+      scalarElements,
     });
   }
   return result;
@@ -918,7 +985,7 @@ const sweepWildcards = (
   node: Record<string, unknown>,
   fieldList: XmlFieldMeta[],
   namespaceContext: Record<string, string>,
-  wildcards: { any: boolean; anyAttribute: boolean },
+  wildcards: { any: boolean; anyAttribute: boolean; scalarElements?: Set<string> },
 ): void => {
   const knownElements = new Set(
     fieldList
@@ -928,6 +995,7 @@ const sweepWildcards = (
   const knownAttributes = new Set(
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
   );
+  const consumed = new Map<string, number>();
   // Unqualified fields also match unprefixed elements in the inherited default
   // namespace (same leniency as findElementValues) — not extras.
   walkChildren(result, node, namespaceContext, {
@@ -935,9 +1003,31 @@ const sweepWildcards = (
       ? (namespace, local) => !knownAttributes.has(`{${namespace}}${local}`)
       : () => false,
     element: wildcards.any
-      ? (namespace, local, prefix) =>
-          !knownElements.has(`{${namespace}}${local}`) &&
-          (prefix !== "" || !knownElements.has(`{}${local}`))
+      ? (namespace, local, prefix) => {
+          const scalarQName =
+            wildcards.scalarElements === undefined
+              ? undefined
+              : (() => {
+                  const exact = `{${namespace}}${local}`;
+                  if (wildcards.scalarElements.has(exact)) {
+                    return exact;
+                  }
+                  const unqualified = `{}${local}`;
+                  return prefix === "" && wildcards.scalarElements.has(unqualified)
+                    ? unqualified
+                    : undefined;
+                })();
+          if (scalarQName !== undefined) {
+            // First occurrence feeds the scalar field; overflow is extra.
+            const seen = (consumed.get(scalarQName) ?? 0) + 1;
+            consumed.set(scalarQName, seen);
+            return seen > 1;
+          }
+          return (
+            !knownElements.has(`{${namespace}}${local}`) &&
+            (prefix !== "" || !knownElements.has(`{}${local}`))
+          );
+        }
       : () => false,
   });
 };
@@ -1217,6 +1307,34 @@ type SerializeCtx = {
   prefixMap: Map<string, string>;
 };
 
+// XSD namespace-constraint check ('##any', '##other', '##targetNamespace',
+// '##local', or explicit URIs). Lax tier: used to attribute extras to a
+// wildcard at serialization time, never to reject content.
+const wildcardAllows = (
+  constraint: string,
+  targetNamespace: string,
+  namespace: string,
+): boolean => {
+  for (const token of constraint.trim().split(/\s+/)) {
+    if (token === "##any") {
+      return true;
+    }
+    if (token === "##other" && namespace !== targetNamespace && namespace !== "") {
+      return true;
+    }
+    if (token === "##targetNamespace" && namespace === targetNamespace) {
+      return true;
+    }
+    if (token === "##local" && namespace === "") {
+      return true;
+    }
+    if (token === namespace && namespace !== "") {
+      return true;
+    }
+  }
+  return false;
+};
+
 // Serialize the normalized open shape (see openWalk): attributes, child
 // elements (arrays repeat), '_text'. Leaf values serialize as text.
 const openSerialize = (
@@ -1353,11 +1471,79 @@ const writeObjectFields = (
   const lexicals = lexicalStore.get(obj);
   const substQNames = substQNameStore.get(obj);
 
+  // Wildcard extras: data keys captured by the wildcard sweep that no declared
+  // field owns. Attribute extras ride anyAttribute; element extras flush at
+  // their wildcard's position among the declared element fields (see
+  // XmlFieldMeta.position), so sequence order survives the round-trip.
+  const fieldList = Object.values(fields);
+  const anyWildcards = fieldList.filter((f) => f.kind === "any");
+  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
+  const extraElements: [string, unknown][] = [];
+  if (anyWildcards.length > 0 || hasAnyAttribute) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key in fields || value === undefined) {
+        continue;
+      }
+      if (key.startsWith("@")) {
+        if (hasAnyAttribute) {
+          attributes.push(
+            `${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`,
+          );
+        }
+        continue;
+      }
+      if (anyWildcards.length > 0) {
+        extraElements.push([key, value]);
+      }
+    }
+  }
+
+  // Bucket each extra under its wildcard: the first whose namespace
+  // constraint allows the extra's namespace (single-wildcard types need no
+  // matching; leniency: unmatched extras go to the first wildcard).
+  const wildcardBuckets = new Map<XmlFieldMeta, [string, unknown][]>();
+  const firstAny = anyWildcards[0];
+  if (extraElements.length > 0 && firstAny !== undefined) {
+    const targetNamespace = splitClark(findObjectMeta(schema)?.qname ?? "{}").namespace;
+    for (const extra of extraElements) {
+      const namespace = splitClark(extra[0]).namespace;
+      const wildcard =
+        anyWildcards.length === 1
+          ? firstAny
+          : (anyWildcards.find((candidate) =>
+              wildcardAllows(candidate.namespaceConstraint ?? "##any", targetNamespace, namespace),
+            ) ?? firstAny);
+      const bucket = wildcardBuckets.get(wildcard) ?? [];
+      bucket.push(extra);
+      wildcardBuckets.set(wildcard, bucket);
+    }
+  }
+  const flushWildcard = (wildcard: XmlFieldMeta): void => {
+    const bucket = wildcardBuckets.get(wildcard);
+    if (bucket === undefined) {
+      return;
+    }
+    wildcardBuckets.delete(wildcard);
+    for (const [key, value] of bucket) {
+      usesXsi = pushOpenChildren(elements, elementName(key, ctx.prefixMap), value, ctx) || usesXsi;
+    }
+  };
+
+  let elementOrdinal = 0;
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     const value = obj[key];
     if (!fieldSchema) {
       continue;
+    }
+    if (fieldMeta.kind === "element") {
+      // Extras of a wildcard sitting at this ordinal precede the field.
+      for (const wildcard of anyWildcards) {
+        if (wildcard.position === elementOrdinal) {
+          flushWildcard(wildcard);
+        }
+      }
+      elementOrdinal++;
     }
     const field = analyzeField(fieldSchema);
     const stored = lexicals?.get(key);
@@ -1429,29 +1615,10 @@ const writeObjectFields = (
     }
   }
 
-  // Wildcard extras: data keys captured by the wildcard sweep that no declared
-  // field owns. Written after the declared fields (see sweepWildcards).
-  const fieldList = Object.values(fields);
-  const hasAny = fieldList.some((f) => f.kind === "any");
-  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
-  if (hasAny || hasAnyAttribute) {
-    for (const [key, value] of Object.entries(obj)) {
-      if (key in fields || value === undefined) {
-        continue;
-      }
-      if (key.startsWith("@")) {
-        if (hasAnyAttribute) {
-          attributes.push(
-            `${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`,
-          );
-        }
-        continue;
-      }
-      if (!hasAny) {
-        continue;
-      }
-      usesXsi = pushOpenChildren(elements, elementName(key, ctx.prefixMap), value, ctx) || usesXsi;
-    }
+  // Wildcards trailing all declared element fields (or without a position,
+  // e.g. hand-written schemas): their extras serialize last.
+  for (const wildcard of anyWildcards) {
+    flushWildcard(wildcard);
   }
 
   return { attributes, elements, usesXsi };
