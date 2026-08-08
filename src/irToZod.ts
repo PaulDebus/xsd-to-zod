@@ -275,6 +275,9 @@ const typedLiteral = (kind: "number" | "bigint" | "boolean" | "string", raw: str
 };
 
 const toFieldKey = (field: IrField): string => {
+  if (field.fieldKey !== undefined) {
+    return field.fieldKey;
+  }
   if (field.kind === "text") {
     return "_text";
   }

@@ -18,6 +18,13 @@ export type IrField = Cardinality & {
   choiceBranch?: string;
   defaultValue?: string;
   fixedValue?: string;
+  /**
+   * Disambiguated object key, assigned when two fields would map to the same
+   * key (same local name, different namespaces). Same-qname repeats keep the
+   * shared key: element lookup is by qname, so split keys would duplicate
+   * their values.
+   */
+  fieldKey?: string;
   /** Text of xs:annotation/xs:documentation, emitted as .describe() (#25). */
   description?: string;
 };

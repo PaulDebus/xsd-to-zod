@@ -26,16 +26,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
   ["msMeta/Additional_w3c.xml/isDefault079/isDefault079.v", W3C_CORPUS_REASONS.needsTriage],
-  [
-    "msMeta/Additional_w3c.xml/memberType004/memberType004.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Additional_w3c.xml/memberType008/memberType008.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
   ["msMeta/Attribute_w3c.xml/attO009/attO009.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/Attribute_w3c.xml/attO010/attO010.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO011/attO011.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -65,7 +56,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
 
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Notations_w3c.xml/notatH001v/notatH001v.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   [
@@ -90,18 +80,9 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
   [
-    "msMeta/Particles_w3c.xml/particlesJs001/particlesJs001.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
     "msMeta/Particles_w3c.xml/particlesQ013/particlesQ013.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  [
-    "msMeta/Particles_w3c.xml/particlesQ017/particlesQ017.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  ["msMeta/Particles_w3c.xml/particlesQ024/particlesQ024.v", W3C_CORPUS_REASONS.needsTriage],
   [
     "msMeta/Particles_w3c.xml/particlesQ030/particlesQ030.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -111,19 +92,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
   [
-    "msMeta/Particles_w3c.xml/particlesR016/particlesR016.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesR022/particlesR022.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
     "msMeta/Particles_w3c.xml/particlesV003/particlesV003.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesZ003/particlesZ003.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
   ["msMeta/Particles_w3c.xml/particlesZ005/particlesZ005.v", W3C_CORPUS_REASONS.needsTriage],
