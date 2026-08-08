@@ -87,6 +87,21 @@ export type XmlFieldMeta = {
    * the actual qname per occurrence so the serializer re-emits the member tag.
    */
   substitutes?: QName[];
+  /**
+   * Element-field ordinal a wildcard (kind "any") sits at in its compositor:
+   * captured extras are re-serialized before the declared element field with
+   * this ordinal, preserving sequence order. Absent for wildcards trailing
+   * all declared fields (extras serialize last, the default).
+   */
+  position?: number;
+  /**
+   * Raw namespace constraint of a wildcard (kind "any"), emitted when a type
+   * has several element wildcards: the serializer attributes each captured
+   * extra to the first wildcard whose constraint allows the extra's
+   * namespace. Leniency: never rejects — unmatched extras go to the first
+   * wildcard.
+   */
+  namespaceConstraint?: string;
 };
 
 /**

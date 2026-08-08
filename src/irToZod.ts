@@ -1071,13 +1071,22 @@ const fieldsMetaFor = (
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
   // Wildcard sentinels: '*' sweeps unmatched child elements, '@*' unmatched
-  // attributes into the open shape.
-  for (const wildcard of type.wildcards ?? []) {
-    if (wildcard.kind === "any") {
-      entries.push(`"*": { kind: "any", qname: "{}*" }`);
-    } else {
-      entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
+  // attributes into the open shape. Several element wildcards get distinct
+  // keys plus their namespace constraint, so the serializer can attribute
+  // each extra to the wildcard allowing it (see XmlFieldMeta).
+  const anyWildcards = (type.wildcards ?? []).filter((w) => w.kind === "any");
+  anyWildcards.forEach((wildcard, i) => {
+    const parts = [`kind: "any"`, `qname: "{}*"`];
+    if (wildcard.position !== undefined) {
+      parts.push(`position: ${wildcard.position}`);
     }
+    if (anyWildcards.length > 1) {
+      parts.push(`namespaceConstraint: ${JSON.stringify(wildcard.namespaceConstraint)}`);
+    }
+    entries.push(`${JSON.stringify(i === 0 ? "*" : `*${i + 1}`)}: { ${parts.join(", ")} }`);
+  });
+  if ((type.wildcards ?? []).some((w) => w.kind === "anyAttribute")) {
+    entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
   }
   return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(", ")} }`;
 };

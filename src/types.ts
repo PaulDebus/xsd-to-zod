@@ -71,6 +71,12 @@ export type WildcardDef = {
   /** Set when the wildcard sits inside a choice branch: wildcard content is
       invisible to the field-based choice check, so the group's refine is skipped. */
   choiceGroup?: string;
+  /**
+   * Element-field ordinal the wildcard particle sits at in its compositor
+   * (kind "any" only): captured extras are re-serialized before the declared
+   * element field with this ordinal, preserving sequence order.
+   */
+  position?: number;
 };
 
 export type ElementDef = {

@@ -6,7 +6,6 @@ export const W3C_CORPUS_REASONS = {
   choiceDocumentOrder:
     "choice: interleaved repeated branches collapse into per-element arrays; document order is lost and the serialized XML no longer validates",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
-  wildcard: "unsupported: xs:any wildcard content",
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   needsTriage: "needs triage",
@@ -25,9 +24,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Additional_w3c.xml/addB012/addB012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB067/addB067.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB068/addB068.i", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Additional_w3c.xml/addB090/addB090.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.libxmlStrictWildcardXsiType],
-  ["msMeta/Additional_w3c.xml/addB135/addB135.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Additional_w3c.xml/addC001/addC001.v", W3C_CORPUS_REASONS.undefinedValue],
   ["msMeta/Additional_w3c.xml/isDefault072/isDefault072.v", W3C_CORPUS_REASONS.undefinedValue],
@@ -86,11 +83,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/IdentityConstraint_w3c.xml/idF014/idF014.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idG030/idG030.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgF010/mgF010.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF011/mgF011.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF012/mgF012.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF014/mgF014.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF019/mgF019.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
+
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],

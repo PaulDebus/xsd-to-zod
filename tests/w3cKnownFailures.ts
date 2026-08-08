@@ -6,7 +6,7 @@
 // hand-maintained.
 export const REASONS = {
   undefinedValue: "parse: element value arrives as undefined (needs triage)",
-  wildcard: "unsupported: xs:any wildcard content",
+
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
@@ -25,9 +25,7 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB012/addB012.v", REASONS.libxmlRejectsSerialized],
   ["Additional/addB067/addB067.v", REASONS.libxmlRejectsSerialized],
   ["Additional/addB068/addB068.i", REASONS.libxmlRejectsSerialized],
-  ["Additional/addB090/addB090.v", REASONS.wildcard],
   ["Additional/addB116/addB116.v", REASONS.libxmlStrictWildcardXsiType],
-  ["Additional/addB135/addB135.v", REASONS.wildcard],
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
   ["Additional/addC001/addC001.v", REASONS.undefinedValue],
   ["Additional/isDefault072/isDefault072.v", REASONS.undefinedValue],
@@ -73,11 +71,7 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Group/groupL009v/groupL009v.v", REASONS.libxmlRejectsSerialized],
   ["Group/groupN009v/groupN009v.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgA015/mgA015.v", REASONS.libxmlRejectsSerialized],
-  ["ModelGroups/mgF010/mgF010.v", REASONS.wildcard],
-  ["ModelGroups/mgF011/mgF011.v", REASONS.wildcard],
-  ["ModelGroups/mgF012/mgF012.v", REASONS.wildcard],
-  ["ModelGroups/mgF014/mgF014.v", REASONS.wildcard],
-  ["ModelGroups/mgF019/mgF019.v", REASONS.libxmlRejectsSerialized],
+
   ["ModelGroups/mgO006/mgO006.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgQ002/mgQ002.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgQ003/mgQ003.v", REASONS.choiceDocumentOrder],
