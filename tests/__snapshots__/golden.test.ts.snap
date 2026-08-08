@@ -279,6 +279,38 @@ export const unqualifiedExampleSchema = z.lazy(() => UnqualifiedTypeSchema).regi
 "
 `;
 
+exports[`golden generated output (#84) > matches the golden output for substitution-groups/substitution-groups 1`] = `
+"// AUTO-GENERATED — DO NOT EDIT
+import { z } from 'zod';
+import { xmlRegistry } from 'xsd-to-zod';
+export interface anonymous_Library_Type {
+  "Publication": (BookType | MagazineType | PublicationType)[];
+  "comment"?: string | undefined;
+}
+export interface PublicationType {
+  "Title": string;
+}
+export interface BookType {
+  "Title": string;
+  "Author": string;
+}
+export interface MagazineType {
+  "Title": string;
+  "Issue": string;
+}
+const anonymous_Library_TypeSchema: z.ZodType<anonymous_Library_Type> = z.lazy(() => z.object({"Publication": z.array(z.union([z.lazy(() => BookTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Book" }), z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Magazine" }), z.lazy(() => PublicationTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Publication" })])).min(1), "comment": z.union([z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}editorNote" }), z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}comment" })]).optional()})).register(xmlRegistry, { qname: "{urn:substitution-groups}anonymous_Library_Type", fields: { "Publication": { kind: "element", qname: "{urn:substitution-groups}Publication", substitutes: ["{urn:substitution-groups}Book","{urn:substitution-groups}Magazine"] }, "comment": { kind: "element", qname: "{urn:substitution-groups}comment", substitutes: ["{urn:substitution-groups}editorNote"] } } });
+const PublicationTypeSchema: z.ZodType<PublicationType> = z.lazy(() => z.object({"Title": z.string()})).register(xmlRegistry, { qname: "{urn:substitution-groups}PublicationType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" } } });
+const BookTypeSchema: z.ZodType<BookType> = z.lazy(() => z.object({"Title": z.string(), "Author": z.string()})).register(xmlRegistry, { qname: "{urn:substitution-groups}BookType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" }, "Author": { kind: "element", qname: "{urn:substitution-groups}Author" } } });
+const MagazineTypeSchema: z.ZodType<MagazineType> = z.lazy(() => z.object({"Title": z.string(), "Issue": z.string()})).register(xmlRegistry, { qname: "{urn:substitution-groups}MagazineType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" }, "Issue": { kind: "element", qname: "{urn:substitution-groups}Issue" } } });
+export const PublicationSchema = z.lazy(() => PublicationTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Publication" });
+export const BookSchema = z.lazy(() => BookTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Book" });
+export const MagazineSchema = z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Magazine" });
+export const commentSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:substitution-groups}comment" });
+export const editorNoteSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:substitution-groups}editorNote" });
+export const LibrarySchema = z.lazy(() => anonymous_Library_TypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Library" });
+"
+`;
+
 exports[`golden generated output (#84) > matches the golden output for types/boolean 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';

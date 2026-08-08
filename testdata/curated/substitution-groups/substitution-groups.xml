@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<Library xmlns="urn:substitution-groups">
+  <Book>
+    <Title>The Old Man and the Sea</Title>
+    <Author>Ernest Hemingway</Author>
+  </Book>
+  <Magazine>
+    <Title>Health Weekly</Title>
+    <Issue>2002-05</Issue>
+  </Magazine>
+  <editorNote>check stock</editorNote>
+</Library>

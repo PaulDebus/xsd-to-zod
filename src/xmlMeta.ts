@@ -78,6 +78,15 @@ export type XmlFieldMeta = {
    * the instance lexical nor the canonical form is reliable.
    */
   fixedLexical?: string;
+  /**
+   * Substitution-group members of the head element this field references:
+   * member element qnames (transitively closed) that may appear in place of
+   * the head. The field schema is a union of per-element options (head + all
+   * members, each tagged with {@link XmlMeta.substElement}); the runtime
+   * matches member tags, reads them with the member's own type and records
+   * the actual qname per occurrence so the serializer re-emits the member tag.
+   */
+  substitutes?: QName[];
 };
 
 /**
@@ -107,6 +116,14 @@ export type XmlMeta = {
   fixedLexical?: string;
   /** Lexical-space facets of a simple type — enforced by the runtime. */
   facets?: XmlLexicalFacets;
+  /**
+   * Element qname this schema validates the content of, on one option of a
+   * substitution-group field union: the head field's schema is a union of
+   * per-element options (head + all members), each a lazy wrapper carrying
+   * its element qname here. The runtime matches the actual element tag
+   * against these to read and serialize the occurrence with the right type.
+   */
+  substElement?: QName;
   fields?: Record<string, XmlFieldMeta>;
 };
 

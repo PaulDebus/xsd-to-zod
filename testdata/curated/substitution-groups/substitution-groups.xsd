@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  targetNamespace="urn:substitution-groups" xmlns:t="urn:substitution-groups"
+  elementFormDefault="qualified">
+  <xs:complexType name="PublicationType">
+    <xs:sequence>
+      <xs:element name="Title" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="BookType">
+    <xs:complexContent>
+      <xs:extension base="t:PublicationType">
+        <xs:sequence>
+          <xs:element name="Author" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="MagazineType">
+    <xs:complexContent>
+      <xs:extension base="t:PublicationType">
+        <xs:sequence>
+          <xs:element name="Issue" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="Publication" abstract="true" type="t:PublicationType"/>
+  <xs:element name="Book" substitutionGroup="t:Publication" type="t:BookType"/>
+  <xs:element name="Magazine" substitutionGroup="t:Publication" type="t:MagazineType"/>
+  <xs:element name="comment" type="xs:string"/>
+  <xs:element name="editorNote" substitutionGroup="t:comment" type="xs:string"/>
+  <xs:element name="Library">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t:Publication" maxOccurs="unbounded"/>
+        <xs:element ref="t:comment" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
