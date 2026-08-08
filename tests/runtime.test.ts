@@ -246,9 +246,41 @@ describe("QName-typed values", () => {
       '<t:holder xmlns:t="urn:qn" xmlns:ns0="urn:other" ref="ns0:foo"><t:name>x</t:name></t:holder>',
     );
     const serialized = serializeXmlRuntime(schema, parsed);
+    // The namespaced <name> field allocates ns0 before the attribute value's
+    // binding is seen, so the value's prefix is rewritten to a fresh one.
     expect(serialized).toContain('xmlns:ns0="urn:qn"');
-    expect(serialized).toContain('ref="qns1:foo"');
-    expect(serialized).toContain('xmlns:qns1="urn:other"');
+    expect(serialized).toContain('ref="qns0:foo"');
+    expect(serialized).toContain('xmlns:qns0="urn:other"');
+    expect(parseXmlRuntime(schema, serialized)).toEqual({ "@ref": "qns0:foo", name: "x" });
+  });
+
+  it("keeps the source prefix when seen before any generated allocation", async () => {
+    // Attribute-only type: the binding is recorded during the body walk,
+    // before the root prefix is chosen, so the source prefix is reserved and
+    // the root takes the next generated prefix instead.
+    const NS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:qn" xmlns:t="urn:qn" elementFormDefault="qualified">
+  <xs:complexType name="HolderType">
+    <xs:attribute name="ref" type="xs:QName"/>
+  </xs:complexType>
+  <xs:element name="holder" type="t:HolderType"/>
+</xs:schema>`;
+    let schemasCode = "";
+    withTempDir((dir) => {
+      const file = path.join(dir, "qname-ns.xsd");
+      fs.writeFileSync(file, NS_XSD);
+      schemasCode = irToZod(parseXsd([file])).schemas;
+    });
+    const mod = await importGeneratedSchemas(schemasCode);
+    const schema = mod["holderSchema"] as z.ZodType;
+    const parsed = parseXmlRuntime(
+      schema,
+      '<t:holder xmlns:t="urn:qn" xmlns:ns0="urn:other" ref="ns0:foo"/>',
+    );
+    const serialized = serializeXmlRuntime(schema, parsed);
+    expect(serialized).toContain('xmlns:ns0="urn:other"');
+    expect(serialized).toContain('ref="ns0:foo"');
+    expect(serialized).not.toContain("ns0:holder");
     expect(parseXmlRuntime(schema, serialized)).toEqual(parsed);
   });
 });

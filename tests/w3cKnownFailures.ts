@@ -22,9 +22,6 @@ export const REASONS = {
 } as const;
 
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
-  ["Additional/addB012/addB012.v", REASONS.libxmlRejectsSerialized],
-  ["Additional/addB067/addB067.v", REASONS.libxmlRejectsSerialized],
-  ["Additional/addB068/addB068.i", REASONS.libxmlRejectsSerialized],
   ["Additional/addB116/addB116.v", REASONS.libxmlStrictWildcardXsiType],
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
   ["Additional/addC001/addC001.v", REASONS.undefinedValue],
@@ -44,15 +41,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlRejectsSerialized],
   ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlRejectsSerialized],
-  [
-    "DataTypes/QName_enumeration002_1369/QName_enumeration002_1369.v",
-    REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "DataTypes/QName_enumeration004_1371/QName_enumeration004_1371.v",
-    REASONS.libxmlRejectsSerialized,
-  ],
-  ["DataTypes/QName006_2089/QName006_2089.v", REASONS.libxmlRejectsSerialized],
   ["ElemDecl/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["ElemDecl/valueconstraint00501m1/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00501m2/Positive", REASONS.patternOnNonString],
@@ -95,8 +83,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Particles/particlesZ034_a1/particlesZ034_a1.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE065/stE065.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE066/stE066.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE079/stE079.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE094/stE094.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stZ072/stZ072.v", REASONS.needsTriage],
   ["SType/st_name00401m/ST_name00401m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],

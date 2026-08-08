@@ -1108,7 +1108,11 @@ const readOccurrence = (
   fieldMeta: XmlFieldMeta,
   entry: unknown,
   namespaceContext: Record<string, string>,
-): { value: unknown; lexical?: string | undefined; qnameNs?: Record<string, string> | undefined } => {
+): {
+  value: unknown;
+  lexical?: string | undefined;
+  qnameNs?: Record<string, string> | undefined;
+} => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
     const childContext = withNamespaceContext(namespaceContext, childNode);
@@ -1360,24 +1364,35 @@ const openWalk = (
 // Writing: data → XML, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
-const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
-  if (prefixMap.has(uri)) {
-    const existing = prefixMap.get(uri);
-    if (existing) {
-      return existing;
-    }
+const choosePrefix = (
+  uri: string,
+  prefixMap: Map<string, string>,
+  reserved?: ReadonlyMap<string, string>,
+): string => {
+  const existing = prefixMap.get(uri);
+  if (existing) {
+    return existing;
   }
-  const next = `ns${prefixMap.size}`;
+  const used = new Set(prefixMap.values());
+  let n = prefixMap.size;
+  let next = `ns${n}`;
+  while (used.has(next) || reserved?.has(next)) {
+    next = `ns${++n}`;
+  }
   prefixMap.set(uri, next);
   return next;
 };
 
-const elementName = (qname: string, prefixMap: Map<string, string>): string => {
+const elementName = (
+  qname: string,
+  prefixMap: Map<string, string>,
+  reserved?: ReadonlyMap<string, string>,
+): string => {
   const { namespace, local } = splitClark(qname);
   if (!namespace) {
     return local;
   }
-  return `${choosePrefix(namespace, prefixMap)}:${local}`;
+  return `${choosePrefix(namespace, prefixMap, reserved)}:${local}`;
 };
 
 type SerializeCtx = {
@@ -1398,13 +1413,10 @@ const declareQNamePrefixes = (
   if (bindings === undefined) {
     return lexical;
   }
-  // choosePrefix may still allocate `ns${n}` names later in the walk, so a
-  // binding prefix of that shape counts as taken unless prefixMap already
-  // binds it to the same URI.
+  // choosePrefix reserves these prefixes (see the reserved argument), so only
+  // prefixes already allocated — before the binding was seen — collide.
   const prefixTaken = (prefix: string): boolean =>
-    ctx.qnameNs.has(prefix) ||
-    [...ctx.prefixMap.values()].includes(prefix) ||
-    /^ns\d+$/.test(prefix);
+    ctx.qnameNs.has(prefix) || [...ctx.prefixMap.values()].includes(prefix);
   return lexical
     .split(/(\s+)/)
     .map((token) => {
@@ -1479,10 +1491,12 @@ const openSerialize = (
       continue;
     }
     if (key.startsWith("@")) {
-      attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(entry)}"`);
+      attributes.push(
+        `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${serializePrimitive(entry)}"`,
+      );
       continue;
     }
-    const tag = elementName(key, ctx.prefixMap);
+    const tag = elementName(key, ctx.prefixMap, ctx.qnameNs);
     usesXsi = pushOpenChildren(elements, tag, entry, ctx) || usesXsi;
   }
   return { attributes, body: elements.join(""), usesXsi };
@@ -1610,7 +1624,7 @@ const writeObjectFields = (
       if (key.startsWith("@")) {
         if (hasAnyAttribute) {
           attributes.push(
-            `${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`,
+            `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${serializePrimitive(value)}"`,
           );
         }
         continue;
@@ -1648,7 +1662,9 @@ const writeObjectFields = (
     }
     wildcardBuckets.delete(wildcard);
     for (const [key, value] of bucket) {
-      usesXsi = pushOpenChildren(elements, elementName(key, ctx.prefixMap), value, ctx) || usesXsi;
+      usesXsi =
+        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), value, ctx) ||
+        usesXsi;
     }
   };
 
@@ -1683,7 +1699,7 @@ const writeObjectFields = (
       const leaf = serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle);
       const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
       attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${declareQNamePrefixes(leaf, typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined, ctx)}"`,
+        `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${declareQNamePrefixes(leaf, typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined, ctx)}"`,
       );
       continue;
     }
@@ -1713,7 +1729,7 @@ const writeObjectFields = (
       const occurrenceQName =
         (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
       const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
-      const localName = elementName(occurrenceQName, ctx.prefixMap);
+      const localName = elementName(occurrenceQName, ctx.prefixMap, ctx.qnameNs);
       if (item === null) {
         usesXsi = true;
         elements.push(`<${localName} xsi:nil="true"/>`);
@@ -1737,9 +1753,7 @@ const writeObjectFields = (
       const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
       const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
       const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
-      elements.push(
-        `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`,
-      );
+      elements.push(`<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`);
     }
   }
 
@@ -1864,7 +1878,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   const nsDecls: string[] = [];
   let rootTag = rootInfo.local;
   if (rootInfo.namespace) {
-    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap);
+    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap, ctx.qnameNs);
     rootTag = `${rootPrefix}:${rootInfo.local}`;
     nsDecls.push(`xmlns:${rootPrefix}="${rootInfo.namespace}"`);
   }

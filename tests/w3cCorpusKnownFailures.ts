@@ -17,9 +17,6 @@ export const W3C_CORPUS_REASONS = {
 } as const;
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
-  ["msMeta/Additional_w3c.xml/addB012/addB012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Additional_w3c.xml/addB067/addB067.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Additional_w3c.xml/addB068/addB068.i", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.libxmlStrictWildcardXsiType],
   ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Additional_w3c.xml/addC001/addC001.v", W3C_CORPUS_REASONS.undefinedValue],
@@ -43,18 +40,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctL022/ctL022.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  [
-    "msMeta/DataTypes_w3c.xml/QName006_2089/QName006_2089.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/DataTypes_w3c.xml/QName_enumeration002_1369/QName_enumeration002_1369.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/DataTypes_w3c.xml/QName_enumeration004_1371/QName_enumeration004_1371.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
   [
     "msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -201,8 +186,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.patternOnNonString],
   ["msMeta/SimpleType_w3c.xml/stE065/stE065.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE066/stE066.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/SimpleType_w3c.xml/stE079/stE079.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/SimpleType_w3c.xml/stE094/stE094.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stZ072/stZ072.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Wildcards_w3c.xml/wildG016/wildG016.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Wildcards_w3c.xml/wildG018/wildG018.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
