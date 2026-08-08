@@ -160,7 +160,16 @@ const escapeXml = (value: string): string =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
+    .replaceAll("'", "&apos;")
+    // A literal CR never survives a parse round-trip (line-ending
+    // normalization maps it to LF) — it must be a character reference.
+    .replaceAll("\r", "&#xD;");
+
+// Attribute-value normalization additionally maps literal TAB and LF to
+// spaces, so attribute text needs those as character references too. Applied
+// post-escape: escapeXml never introduces raw TAB/LF.
+const escapeXmlAttrChars = (escaped: string): string =>
+  escaped.replaceAll("\t", "&#x9;").replaceAll("\n", "&#xA;");
 
 export const decodeXmlEntities = (xml: string): string =>
   xml
@@ -1492,7 +1501,7 @@ const openSerialize = (
     }
     if (key.startsWith("@")) {
       attributes.push(
-        `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${serializePrimitive(entry)}"`,
+        `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(entry))}"`,
       );
       continue;
     }
@@ -1624,7 +1633,7 @@ const writeObjectFields = (
       if (key.startsWith("@")) {
         if (hasAnyAttribute) {
           attributes.push(
-            `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${serializePrimitive(value)}"`,
+            `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(value))}"`,
           );
         }
         continue;
@@ -1698,8 +1707,13 @@ const writeObjectFields = (
       }
       const leaf = serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle);
       const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+      const declared = declareQNamePrefixes(
+        leaf,
+        typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined,
+        ctx,
+      );
       attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${declareQNamePrefixes(leaf, typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined, ctx)}"`,
+        `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"`,
       );
       continue;
     }
