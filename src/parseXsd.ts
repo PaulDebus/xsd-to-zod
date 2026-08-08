@@ -4,7 +4,7 @@ import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { createOutputBuilder } from "./runtime.js";
+import { childOrderOf, createOutputBuilder } from "./runtime.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -434,6 +434,27 @@ const nodeChildren = (node: AnyNode): [string, AnyNode][] => {
       if (entry && typeof entry === "object") {
         children.push([key, entry as AnyNode]);
       }
+    }
+  }
+  return children;
+};
+
+// Document-order children, when the parser's order tracking is available
+// (see childOrderOf): the grouped shape from nodeChildren loses cross-tag
+// order, which particle order — e.g. wildcard positions — depends on.
+// Falls back to the grouped iteration for programmatically built nodes.
+const nodeChildrenOrdered = (node: AnyNode): [string, AnyNode][] => {
+  const order = childOrderOf(node);
+  if (order === undefined) {
+    return nodeChildren(node);
+  }
+  const children: [string, AnyNode][] = [];
+  for (const [key, value] of order) {
+    if (key.startsWith("@_") || key === "#text") {
+      continue;
+    }
+    if (value && typeof value === "object") {
+      children.push([key, value as AnyNode]);
     }
   }
   return children;
@@ -959,6 +980,9 @@ const collectWildcard =
     scope.wildcards.push({
       kind,
       namespaceConstraint: String(child["@_namespace"] ?? "##any"),
+      ...(kind === "any"
+        ? { position: scope.fields.filter((f) => f.kind === "element").length }
+        : {}),
       ...optProp("choiceGroup", scope.choiceGroup),
     });
   };
@@ -987,7 +1011,7 @@ const collectChoice: FieldHandler = (child, ctx, scope) => {
   // nested compositor stay together as a single branch (#73 / ipo-style
   // shipTo+billTo vs singleAddress choices).
   let branchIndex = 0;
-  for (const [branchTag, branchChild] of nodeChildren(child)) {
+  for (const [branchTag, branchChild] of nodeChildrenOrdered(child)) {
     if (!CHOICE_BRANCH_TAGS.has(getNodeTagLocalName(branchTag))) {
       continue;
     }
@@ -1145,7 +1169,7 @@ const collectFields = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): void => {
-  for (const [tag, child] of nodeChildren(container)) {
+  for (const [tag, child] of nodeChildrenOrdered(container)) {
     FIELD_HANDLERS[getNodeTagLocalName(tag)]?.(child, ctx, scope);
   }
 };
@@ -1950,7 +1974,9 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     nextStack.add(typeName);
     return [...resolveMergedFields(type.baseType, nextStack), ...type.fields];
   };
-  // Wildcards inherit down the extension chain, like fields.
+  // Wildcards inherit down the extension chain, like fields. Extension
+  // content follows the base content, so a derived type's wildcard positions
+  // shift by the base's element-field count.
   const resolveMergedWildcards = (typeName: string, stack: Set<string>): WildcardDef[] => {
     const type = state.complexTypes[typeName];
     if (!type) {
@@ -1961,7 +1987,14 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     }
     const nextStack = new Set(stack);
     nextStack.add(typeName);
-    return [...resolveMergedWildcards(type.baseType, nextStack), ...(type.wildcards ?? [])];
+    const baseWildcards = resolveMergedWildcards(type.baseType, nextStack);
+    const baseElementCount = resolveMergedFields(type.baseType, nextStack).filter(
+      (f) => f.kind === "element",
+    ).length;
+    const own = (type.wildcards ?? []).map((w) =>
+      w.position === undefined ? w : { ...w, position: w.position + baseElementCount },
+    );
+    return [...baseWildcards, ...own];
   };
   // Choice group cardinality inherits down the extension chain, like fields.
   const resolveMergedChoiceGroups = (
