@@ -14,7 +14,6 @@ export const W3C_CORPUS_REASONS = {
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
-  anyTypeContent: "unsupported: xs:anyType content (element without a type maps to xs:string)",
   simpleContentShape: "parse: simpleContent _text shape mismatch (needs triage)",
 } as const;
 
@@ -99,11 +98,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ModelGroups_w3c.xml/mgF012/mgF012.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/ModelGroups_w3c.xml/mgF014/mgF014.v", W3C_CORPUS_REASONS.wildcard],
   ["msMeta/ModelGroups_w3c.xml/mgF019/mgF019.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgI010/mgI010.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI011/mgI011.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI013/mgI013.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ModelGroups_w3c.xml/mgI016/mgI016.v", W3C_CORPUS_REASONS.anyTypeContent],
-  ["msMeta/ModelGroups_w3c.xml/mgI017/mgI017.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
@@ -129,7 +123,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Particles_w3c.xml/particlesEb038/particlesEb038.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  ["msMeta/Particles_w3c.xml/particlesHa015/particlesHa015.v", W3C_CORPUS_REASONS.anyTypeContent],
   [
     "msMeta/Particles_w3c.xml/particlesJs001/particlesJs001.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -252,7 +245,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/SimpleType_w3c.xml/stE066/stE066.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE079/stE079.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE094/stE094.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/SimpleType_w3c.xml/stZ054/stZ054.v", W3C_CORPUS_REASONS.anyTypeContent],
   ["msMeta/SimpleType_w3c.xml/stZ072/stZ072.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Wildcards_w3c.xml/wildG016/wildG016.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Wildcards_w3c.xml/wildG018/wildG018.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -274,191 +266,10 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Wildcards_w3c.xml/wildO037/wildO037.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Wildcards_w3c.xml/wildO040/wildO040.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Wildcards_w3c.xml/wildZ003/wildZ003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-length/NISTXML-SV-IV-atomic-normalizedString-length-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-length/NISTXML-SV-IV-atomic-normalizedString-length-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-length/NISTXML-SV-IV-atomic-normalizedString-length-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-length/NISTXML-SV-IV-atomic-normalizedString-length-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-length/NISTXML-SV-IV-atomic-normalizedString-length-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength-1/NISTXML-SV-IV-atomic-normalizedString-maxLength-2-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength-2/NISTXML-SV-IV-atomic-normalizedString-maxLength-3-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength-3/NISTXML-SV-IV-atomic-normalizedString-maxLength-4-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength-4/NISTXML-SV-IV-atomic-normalizedString-maxLength-5-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength/NISTXML-SV-IV-atomic-normalizedString-maxLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength/NISTXML-SV-IV-atomic-normalizedString-maxLength-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength/NISTXML-SV-IV-atomic-normalizedString-maxLength-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength/NISTXML-SV-IV-atomic-normalizedString-maxLength-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-maxLength/NISTXML-SV-IV-atomic-normalizedString-maxLength-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-normalizedString-minLength/NISTXML-SV-IV-atomic-normalizedString-minLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-length/NISTXML-SV-IV-atomic-string-length-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-length/NISTXML-SV-IV-atomic-string-length-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-length/NISTXML-SV-IV-atomic-string-length-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-length/NISTXML-SV-IV-atomic-string-length-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-length/NISTXML-SV-IV-atomic-string-length-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength-1/NISTXML-SV-IV-atomic-string-maxLength-2-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength-2/NISTXML-SV-IV-atomic-string-maxLength-3-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength-3/NISTXML-SV-IV-atomic-string-maxLength-4-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength-4/NISTXML-SV-IV-atomic-string-maxLength-5-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength/NISTXML-SV-IV-atomic-string-maxLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength/NISTXML-SV-IV-atomic-string-maxLength-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength/NISTXML-SV-IV-atomic-string-maxLength-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength/NISTXML-SV-IV-atomic-string-maxLength-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-maxLength/NISTXML-SV-IV-atomic-string-maxLength-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-string-minLength/NISTXML-SV-IV-atomic-string-minLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-length/NISTXML-SV-IV-atomic-token-length-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-length/NISTXML-SV-IV-atomic-token-length-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-length/NISTXML-SV-IV-atomic-token-length-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-length/NISTXML-SV-IV-atomic-token-length-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-length/NISTXML-SV-IV-atomic-token-length-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength-1/NISTXML-SV-IV-atomic-token-maxLength-2-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength-2/NISTXML-SV-IV-atomic-token-maxLength-3-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength-3/NISTXML-SV-IV-atomic-token-maxLength-4-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength-4/NISTXML-SV-IV-atomic-token-maxLength-5-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength/NISTXML-SV-IV-atomic-token-maxLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength/NISTXML-SV-IV-atomic-token-maxLength-1-2",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength/NISTXML-SV-IV-atomic-token-maxLength-1-3",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength/NISTXML-SV-IV-atomic-token-maxLength-1-4",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-maxLength/NISTXML-SV-IV-atomic-token-maxLength-1-5",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
-  [
-    "nistMeta/NISTXMLSchemaDatatypes.testSet/atomic-token-minLength/NISTXML-SV-IV-atomic-token-minLength-1-1",
-    W3C_CORPUS_REASONS.undefinedValue,
-  ],
   ["sunMeta/CType.testSet/basetd00101m1/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/basetd00101m2/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/ElemDecl.testSet/typedef01301m1/Positive", W3C_CORPUS_REASONS.anyTypeContent],
   [
     "sunMeta/ElemDecl.testSet/valueconstraint00501m1/Positive",
     W3C_CORPUS_REASONS.patternOnNonString,
@@ -479,8 +290,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "sunMeta/ElemDecl.testSet/valueconstraint00601m7/Positive",
     W3C_CORPUS_REASONS.patternOnNonString,
   ],
-  ["sunMeta/MGroup.testSet/compositor00202m1/Positive", W3C_CORPUS_REASONS.undefinedValue],
-  ["sunMeta/MGroup.testSet/particles00203m1/Positive", W3C_CORPUS_REASONS.undefinedValue],
   ["sunMeta/SType.testSet/st_name00401m/ST_name00401m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p", W3C_CORPUS_REASONS.needsTriage],
