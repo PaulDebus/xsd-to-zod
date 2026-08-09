@@ -50,6 +50,37 @@ const parser = new XMLParser({
   OutputBuilder: createOutputBuilder(),
 });
 
+// Expand general entities declared in the document's internal DTD subset.
+// The parser only knows the predefined entities, but some schemas (the wg
+// IRI type library) build pattern facets from <!ENTITY> declarations.
+// First declaration wins (XML spec); references nest, so expansion recurses
+// with a cycle guard.
+const expandInternalEntities = (xml: string): string => {
+  const doctype = /<!DOCTYPE[^>[]*\[([\s\S]*?)\]\s*>/.exec(xml);
+  if (!doctype || doctype.index === undefined) {
+    return xml;
+  }
+  const entities = new Map<string, string>();
+  for (const m of doctype[1]!.matchAll(/<!ENTITY\s+([^\s%]+)\s+"([^"]*)"\s*>/g)) {
+    if (!entities.has(m[1]!)) {
+      entities.set(m[1]!, m[2]!);
+    }
+  }
+  if (entities.size === 0) {
+    return xml;
+  }
+  const expand = (value: string, seen: Set<string>): string =>
+    value.replace(/&([^\s;&]+);/g, (ref, name: string) => {
+      const replacement = entities.get(name);
+      if (replacement === undefined || seen.has(name)) {
+        return ref;
+      }
+      return expand(replacement, new Set(seen).add(name));
+    });
+  const head = xml.slice(0, doctype.index + doctype[0].length);
+  return head + expand(xml.slice(head.length), new Set());
+};
+
 type AnyNode = Record<string, unknown>;
 type FormDefault = "qualified" | "unqualified";
 type SchemaFormDefaults = {
@@ -374,7 +405,7 @@ const readSchema = (
   targetNs: string;
   formDefaults: SchemaFormDefaults;
 } => {
-  const xml = readXmlFile(filePath);
+  const xml = expandInternalEntities(readXmlFile(filePath));
   const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {

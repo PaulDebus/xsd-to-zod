@@ -14,8 +14,6 @@ export const REASONS = {
   needsTriage: "needs triage",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
-  valueSpaceRoundTrip:
-    "runtime: instance double rounds across the exact decimal facet boundary; the serialized lexical fails re-parse (lexical preservation needed)",
   choiceValidation:
     "nested choice groups: inner choice is enforced even when its outer branch is not selected (needs occurrence-aware validation)",
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
@@ -24,7 +22,6 @@ export const REASONS = {
   patternTranslation: "codegen: XSD pattern facet regex translation too strict (needs triage)",
   simpleContentShape: "parse: simpleContent _text shape mismatch (needs triage)",
   fileResolution: "harness: test-set file resolution (needs triage)",
-  dateTimeNegativeZeroTz: "runtime: dateTime -00:00 timezone lexical handling (needs triage)",
 } as const;
 
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
@@ -36,7 +33,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB090/addB090.v", REASONS.wildcard],
   ["Additional/addB116/addB116.v", REASONS.strictWildcardHarness],
   ["Additional/addB135/addB135.v", REASONS.wildcard],
-  ["Additional/addB145/addB145.v", REASONS.needsTriage],
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
   ["Additional/addC001/addC001.v", REASONS.undefinedValue],
   ["Additional/isDefault072/isDefault072.v", REASONS.undefinedValue],
@@ -61,40 +57,8 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["CType/basetd00101m1/Positive", REASONS.simpleContentShape],
   ["CType/basetd00101m2/Positive", REASONS.simpleContentShape],
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
-  ["DataTypes/boolean018_1874/boolean018_1874.v", REASONS.needsTriage],
-  ["DataTypes/byte_pattern001_1682/byte_pattern001_1682.v", REASONS.patternOnNonString],
-  [
-    "DataTypes/dateTime_enumeration005a_1129/dateTime_enumeration005a_1129.v",
-    REASONS.dateTimeNegativeZeroTz,
-  ],
-  [
-    "DataTypes/dateTime_enumeration005b_1130/dateTime_enumeration005b_1130.v",
-    REASONS.dateTimeNegativeZeroTz,
-  ],
-  ["DataTypes/decimal015_1889/decimal015_1889.v", REASONS.libxmlRejectsSerialized],
-  ["DataTypes/decimal016_1890/decimal016_1890.v", REASONS.libxmlRejectsSerialized],
-  ["DataTypes/duration_pattern001_1103/duration_pattern001_1103.v", REASONS.patternTranslation],
   ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlRejectsSerialized],
   ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlRejectsSerialized],
-  ["DataTypes/int_pattern001_1633/int_pattern001_1633.v", REASONS.patternOnNonString],
-  ["DataTypes/integer_pattern001_1537/integer_pattern001_1537.v", REASONS.patternOnNonString],
-  ["DataTypes/long_pattern001_1609/long_pattern001_1609.v", REASONS.patternOnNonString],
-  [
-    "DataTypes/negativeInteger_pattern001_1585/negativeInteger_pattern001_1585.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/nonNegativeInteger_pattern001_1706/nonNegativeInteger_pattern001_1706.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/nonPositiveInteger_pattern001_1561/nonPositiveInteger_pattern001_1561.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/positiveInteger_pattern001_1826/positiveInteger_pattern001_1826.v",
-    REASONS.patternOnNonString,
-  ],
   [
     "DataTypes/QName_enumeration002_1369/QName_enumeration002_1369.v",
     REASONS.libxmlRejectsSerialized,
@@ -104,23 +68,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
     REASONS.libxmlRejectsSerialized,
   ],
   ["DataTypes/QName006_2089/QName006_2089.v", REASONS.libxmlRejectsSerialized],
-  ["DataTypes/short_pattern001_1658/short_pattern001_1658.v", REASONS.patternOnNonString],
-  [
-    "DataTypes/unsignedByte_pattern001_1802/unsignedByte_pattern001_1802.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/unsignedInt_pattern001_1754/unsignedInt_pattern001_1754.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/unsignedLong_pattern001_1730/unsignedLong_pattern001_1730.v",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "DataTypes/unsignedShort_pattern001_1778/unsignedShort_pattern001_1778.v",
-    REASONS.patternOnNonString,
-  ],
   ["ElemDecl/abstract00101m/abstract00101m1_p", REASONS.requiredArrayEmpty],
   ["ElemDecl/disallowedsubst00301m1/Positive", REASONS.substitutionGroups],
   ["ElemDecl/disallowedsubst00401m1/Positive", REASONS.substitutionGroups],
@@ -132,19 +79,16 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ElemDecl/substgrpaffil00101m/substGrpAffil00101m1_p", REASONS.requiredArrayEmpty],
   ["ElemDecl/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["ElemDecl/typedef00205m/typeDef00205m1_p", REASONS.anyTypeContent],
-  ["ElemDecl/typedef00802m1/Positive", REASONS.patternOnNonString],
   ["ElemDecl/typedef01301m1/Positive", REASONS.anyTypeContent],
   ["ElemDecl/valueconstraint00501m1/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00501m2/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00501m4/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00501m5/Positive", REASONS.patternOnNonString],
-  ["ElemDecl/valueconstraint00601m5/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00601m7/Positive", REASONS.patternOnNonString],
   ["Element/elemS002/elemS002.v", REASONS.needsTriage],
   ["Element/elemS003/elemS003.v", REASONS.substitutionGroups],
   ["Element/elemS007/elemS007.v", REASONS.substitutionGroups],
   ["Element/elemS008/elemS008.v", REASONS.needsTriage],
-  ["Element/elemU005/elemU005.v", REASONS.patternTranslation],
   ["Element/elemU006/elemU006.v", REASONS.patternTranslation],
   ["Element/elemU007/elemU007.v", REASONS.patternTranslation],
   ["Element/elemZ021d/elemZ021d.v", REASONS.anyTypeContent],
@@ -181,66 +125,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ModelGroups/mgO006/mgO006.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgQ002/mgQ002.v", REASONS.libxmlRejectsSerialized],
   ["ModelGroups/mgQ003/mgQ003.v", REASONS.choiceValidation],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-2/NISTXML-SV-IV-atomic-decimal-pattern-3-4",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-1",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-2",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-3",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-4",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-pattern-4/NISTXML-SV-IV-atomic-decimal-pattern-5-5",
-    REASONS.patternOnNonString,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-2/NISTXML-SV-IV-atomic-decimal-maxExclusive-3-5",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-3/NISTXML-SV-IV-atomic-decimal-maxExclusive-4-5",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxExclusive-4/NISTXML-SV-IV-atomic-decimal-maxExclusive-5-5",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxInclusive-3/NISTXML-SV-IV-atomic-decimal-maxInclusive-4-5",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-maxInclusive-4/NISTXML-SV-IV-atomic-decimal-maxInclusive-5-5",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive-2/NISTXML-SV-IV-atomic-decimal-minExclusive-3-1",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minExclusive/NISTXML-SV-IV-atomic-decimal-minExclusive-1-1",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minInclusive-1/NISTXML-SV-IV-atomic-decimal-minInclusive-2-1",
-    REASONS.valueSpaceRoundTrip,
-  ],
-  [
-    "NISTXMLSchemaDatatypes/atomic-decimal-minInclusive/NISTXML-SV-IV-atomic-decimal-minInclusive-1-1",
-    REASONS.valueSpaceRoundTrip,
-  ],
   ["Particles/particlesA006/particlesA006.v", REASONS.libxmlRejectsSerialized],
   ["Particles/particlesA007/particlesA007.v", REASONS.libxmlRejectsSerialized],
   ["Particles/particlesB013/particlesB013.v", REASONS.wildcard],
@@ -280,17 +164,10 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Particles/particlesZ005/particlesZ005.v", REASONS.needsTriage],
   ["Particles/particlesZ012/particlesZ012.v", REASONS.needsTriage],
   ["Particles/particlesZ034_a1/particlesZ034_a1.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE050/stE050.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE055/stE055.v", REASONS.needsTriage],
   ["SimpleType/stE065/stE065.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE066/stE066.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE079/stE079.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE091/stE091.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE092/stE092.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stE093/stE093.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE094/stE094.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stG010/stG010.v", REASONS.needsTriage],
-  ["SimpleType/stH007/stH007.v", REASONS.needsTriage],
   ["SimpleType/stZ046/stZ046.v", REASONS.requiredArrayEmpty],
   ["SimpleType/stZ054/stZ054.v", REASONS.anyTypeContent],
   ["SimpleType/stZ072/stZ072.v", REASONS.needsTriage],
