@@ -9,6 +9,8 @@ export const REASONS = {
 
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
+  libxmlGap:
+    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, xml:space ref without import) — the zod-tier round-trip succeeds",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
   needsTriage: "needs triage",
   patternOnNonString:
@@ -26,7 +28,7 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
   ["Additional/addC001/addC001.v", REASONS.undefinedValue],
   ["Additional/isDefault072/isDefault072.v", REASONS.undefinedValue],
-  ["Additional/isDefault078/isDefault078.v", REASONS.libxmlRejectsSerialized],
+  ["Additional/isDefault078/isDefault078.v", REASONS.libxmlGap],
   ["Additional/isDefault079/isDefault079.v", REASONS.needsTriage],
   ["Attribute/attO009/attO009.v", REASONS.needsTriage],
   ["Attribute/attO011/attO011.v", REASONS.needsTriage],
@@ -36,8 +38,8 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["CType/basetd00101m1/Positive", REASONS.simpleContentShape],
   ["CType/basetd00101m2/Positive", REASONS.simpleContentShape],
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
-  ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlRejectsSerialized],
-  ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlRejectsSerialized],
+  ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlGap],
+  ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlGap],
   ["ElemDecl/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["ElemDecl/valueconstraint00501m1/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00501m2/Positive", REASONS.patternOnNonString],
@@ -46,14 +48,14 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ElemDecl/valueconstraint00601m7/Positive", REASONS.patternOnNonString],
   ["Element/QFE1700c2/QFE1700c2.v", REASONS.needsTriage],
   ["Errata10/errC001/errC001.v", REASONS.needsTriage],
-  ["Group/groupF009v/groupF009v.v", REASONS.libxmlRejectsSerialized],
-  ["Group/groupH009v/groupH009v.v", REASONS.libxmlRejectsSerialized],
+  ["Group/groupF009v/groupF009v.v", REASONS.libxmlGap],
+  ["Group/groupH009v/groupH009v.v", REASONS.libxmlGap],
   ["Group/groupH014v/groupH014v.v", REASONS.choiceDocumentOrder],
   ["Group/groupH017v/groupH017v.v", REASONS.needsTriage],
   ["Group/groupH018v/groupH018v.v", REASONS.choiceDocumentOrder],
-  ["Group/groupJ009v/groupJ009v.v", REASONS.libxmlRejectsSerialized],
-  ["Group/groupL009v/groupL009v.v", REASONS.libxmlRejectsSerialized],
-  ["Group/groupN009v/groupN009v.v", REASONS.libxmlRejectsSerialized],
+  ["Group/groupJ009v/groupJ009v.v", REASONS.libxmlGap],
+  ["Group/groupL009v/groupL009v.v", REASONS.libxmlGap],
+  ["Group/groupN009v/groupN009v.v", REASONS.libxmlGap],
   ["ModelGroups/mgA015/mgA015.v", REASONS.libxmlRejectsSerialized],
 
   ["ModelGroups/mgO006/mgO006.v", REASONS.libxmlRejectsSerialized],
