@@ -48,12 +48,18 @@ export type SimpleTypeDef = {
   | { kind: "union"; memberTypes: QName[] }
 );
 
+/** A nested choice group is only reachable through this enclosing branch. */
+export type ChoiceGroupGuard = { group: string; branch: string };
+
 export type ComplexTypeDef = {
   name: QName;
   baseType?: QName;
   fields: IrField[];
   description?: string;
   choiceGroups?: Record<string, Cardinality>;
+  /** Inner choice group id → the outer branch it hangs off. The inner group's
+      check applies only when that branch is selected. */
+  choiceGroupGuards?: Record<string, ChoiceGroupGuard>;
   /** xs:any / xs:anyAttribute wildcards (lax tier: content is captured in the open shape). */
   wildcards?: WildcardDef[];
 };
@@ -62,6 +68,9 @@ export type WildcardDef = {
   kind: "any" | "anyAttribute";
   /** Raw namespace constraint, e.g. '##any', '##other', '##targetNamespace ##local'. */
   namespaceConstraint: string;
+  /** Set when the wildcard sits inside a choice branch: wildcard content is
+      invisible to the field-based choice check, so the group's refine is skipped. */
+  choiceGroup?: string;
 };
 
 export type ElementDef = {
