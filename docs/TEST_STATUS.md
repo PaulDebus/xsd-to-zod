@@ -100,31 +100,52 @@ Features tested include:
 - [x] Negative test variants (7, with pinned lenient results)
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
-- [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata; ipo6 pinned as `it.fails` — group-in-choice document order)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,497 passing, 118 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata)
+- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,557 passing, 58 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
 - [x] W3C invalid-instance (negative) tests (1,528 cases: 1,139 rejected by the zod tier, 574 accepted leniently — libxml2 confirms invalid, recorded in the negative conformance report, 7 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Triage the pinned W3C known failures (largest buckets: libxml2-rejected serializations, undefined values). ~~`xs:any` wildcards~~ — done: extras re-serialize at the wildcard’s particle position (parser child-order tracking feeds IR wildcard ordinals), scalar-field overflow falls to the wildcard sweep, and the libxml2 tier validates against the group’s whole schema set. ~~`xs:anyType` content~~ — done: simple-typed elements/roots without character data read as empty-string content, and fields of choice branches made entirely of nested compositors are optional. ~~Lexical preservation for enum/pattern~~ — done: lexical-space facets (pattern/enumeration/exact decimal bounds) are enforced by the runtime against the original XML lexical via `xmlRegistry` facet meta, and the serializer re-emits retained lexicals. ~~XSD regex translation~~ — done: class subtraction, `\p{IsBlock}` names (expanded to code-point ranges) and lone complement escapes in classes are translated to JS RegExp. ~~Nested choice groups~~ — done: an inner choice is enforced only when its enclosing outer branch is selected (occurrence-aware choice refines); what remains pinned is interleaved-branch document order in the object model. ~~Substitution groups~~ — done: a field referencing a substitution head accepts any (transitive) member, read with the member's own type and serialized back under the member's tag; `block`/`abstract` constraints are not enforced (libxml2 tier is the conformance authority)
+- [ ] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187).
 - [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,665 passing, 234 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`, dominated by libxml2-rejected serializations, undefined values and wildcards; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,802 passing, 97 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
 
-## Known gaps (not yet supported by xsd-to-zod)
+## Pinned known failures
 
-These features exist in the test corpus but are skipped because the tool doesn't support them yet:
+Corpus cases that fail the round-trip are pinned as `it.fails` with a
+categorized reason: the case keeps running, and a fix that makes it pass
+turns the suite red until the pin is removed in the same PR. Two pin files:
+`tests/w3cKnownFailures.ts` (sun/ms selection, 58 pins) and
+`tests/w3cCorpusKnownFailures.ts` (full corpus, 97 pins). #122 tracks the
+buckets with per-case triage notes; their dispositions:
 
-- Attribute groups
+- **Fix in the zod tier** — genuine parse/serialize bugs: `needsTriage`
+  (20 + 20), `undefinedValue` (2 + 2), `simpleContentShape` (2 + 2), and
+  `patternOnNonString` (5 + 39, remaining XSD-regex translation gaps).
+- **Fix without changing the generated data model** — document-order loss
+  for repeated compositors and interleaved choice branches
+  (`choiceDocumentOrder`, 3 + 3, plus the order cases in
+  `libxmlRejectsSerialized`): the fix belongs in runtime metadata (like the
+  retained-lexical store), never in the emitted zod shapes.
+- **Feature decision, not a defect** — `xsi:type` on an abstract declared
+  type (3 cases) needs derived-type polymorphism in codegen; design
+  discussion before implementation.
+- **Won't fix (documented as pins)** — `libxmlGap` (8 + 8) and
+  `libxmlStrictWildcardXsiType` (1 + 1): the original W3C instance/schema
+  fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, `maxOccurs` beyond
+  libxml2's integer range, `xml:space` ref without import, strict-wildcard
+  `xsi:type` fallback). The zod-tier round-trip succeeds; the pin records the
+  libxml2 tier's deviation.
 
 ## Intentionally out of scope (zod tier)
 
@@ -136,6 +157,11 @@ These features exist in the test corpus but are skipped because the tool doesn't
   inherent test-data violations — libxml2 rejects the original XML itself
   (duplicate `xs:key` sequence, unmatched `xs:keyref`) — so they stay skipped
   regardless of feature support.
+- **Anything that would compromise the generated API** — the target is
+  idiomatic, typed zod schemas. Conformance work that can only succeed by
+  emitting un-idiomatic types (e.g. order-preserving content models instead
+  of per-element fields) is out of scope for codegen; fidelity improvements
+  go into runtime metadata instead.
 
 ---
 
