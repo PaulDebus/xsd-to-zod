@@ -1177,15 +1177,26 @@ const dedupeTextFields = (fields: IrField[]): IrField[] => {
 // several times) collapse into a single repeated field: the zod object shape
 // cannot hold duplicate keys. Occurrence ranges add up; the first particle's
 // value constraints win — per-position defaults are a rare corner the
-// flattened model cannot represent.
-const mergeRepeatedElementFields = (fields: IrField[]): IrField[] => {
+// flattened model cannot represent. A wildcard sitting between the two
+// particles (e1, xs:any, e1) blocks the collapse: the merged array would
+// swallow the wildcard's occurrences — they stay a scalar field plus
+// overflow extras instead (addB135).
+const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[]): IrField[] => {
+  const wildcardPositions = new Set(
+    wildcards.flatMap((w) => (w.position === undefined ? [] : [w.position])),
+  );
   const merged: IrField[] = [];
+  let elementOrdinal = -1;
   for (const field of fields) {
+    if (field.kind === "element") {
+      elementOrdinal++;
+    }
     const prev = merged[merged.length - 1];
     if (
       prev &&
       prev.kind === "element" &&
       field.kind === "element" &&
+      !wildcardPositions.has(elementOrdinal) &&
       field.qname === prev.qname &&
       field.typeName === prev.typeName &&
       field.nillable === prev.nillable &&
@@ -2130,7 +2141,10 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     mergedComplexTypes[name] = {
       ...type,
       fields: disambiguateFieldKeys(
-        mergeRepeatedElementFields(dedupeTextFields(resolveMergedFields(name, new Set()))),
+        mergeRepeatedElementFields(
+          dedupeTextFields(resolveMergedFields(name, new Set())),
+          mergedWildcards,
+        ),
       ),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedChoiceGuards ? { choiceGroupGuards: mergedChoiceGuards } : {}),
