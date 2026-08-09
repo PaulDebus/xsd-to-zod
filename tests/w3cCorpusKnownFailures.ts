@@ -17,10 +17,6 @@ export const W3C_CORPUS_REASONS = {
 } as const;
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
-  // Substitution groups themselves work (salutation substitutes
-  // ipo:ExternFirstElement); what fails is the group-in-choice ordering:
-  // shipTo/billTo/singleAddress are emitted after comment/items.
-  ["boeingMeta/BoeingXSDTestSet.testSet/ipo6/ipo_2", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Additional_w3c.xml/addB012/addB012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB067/addB067.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB068/addB068.i", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
@@ -47,7 +43,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctL022/ctL022.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ComplexType_w3c.xml/ctZ007/ctZ007.v", W3C_CORPUS_REASONS.requiredArrayEmpty],
   [
     "msMeta/DataTypes_w3c.xml/QName006_2089/QName006_2089.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -261,5 +256,4 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["sunMeta/suntest.testSet/xsd001/xsd001.v01", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/suntest.testSet/xsd001/xsd001.v02", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/suntest.testSet/xsd001/xsd001.v03", W3C_CORPUS_REASONS.needsTriage],
-  ["boeingMeta/BoeingXSDTestSet.testSet/ipo6/ipo_1", W3C_CORPUS_REASONS.choiceDocumentOrder],
 ]);

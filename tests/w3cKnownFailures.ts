@@ -39,7 +39,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ComplexType/ctA002/ctA002.v", REASONS.libxmlRejectsSerialized],
   ["ComplexType/ctA003/ctA003.v", REASONS.libxmlRejectsSerialized],
   ["ComplexType/ctL022/ctL022.v", REASONS.libxmlRejectsSerialized],
-  ["ComplexType/ctZ007/ctZ007.v", REASONS.requiredArrayEmpty],
   ["CType/basetd00101m1/Positive", REASONS.simpleContentShape],
   ["CType/basetd00101m2/Positive", REASONS.simpleContentShape],
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
