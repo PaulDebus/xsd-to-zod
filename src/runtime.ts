@@ -17,6 +17,7 @@ import {
   type XsdStructuredValue,
 } from "./xsdDateTime.js";
 import { collapseWhiteSpace } from "./xsdLexicals.js";
+import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 import { xsdPattern } from "./xsdPattern.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
@@ -1303,7 +1304,9 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
-  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
+  const parsed = parser.parse(
+    decodeTagNameCharRefs(normalizeAttributeWhitespace(xml)),
+  ) as Record<string, unknown>;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);

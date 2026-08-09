@@ -5,6 +5,7 @@ import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
 import { childOrderOf, createOutputBuilder } from "./runtime.js";
+import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -407,7 +408,7 @@ const readSchema = (
   formDefaults: SchemaFormDefaults;
 } => {
   const xml = expandInternalEntities(readXmlFile(filePath));
-  const parsed = parser.parse(xml) as Record<string, AnyNode>;
+  const parsed = parser.parse(normalizeAttributeWhitespace(xml)) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {
     throw new Xsd2ZodError("no-schema-root", `No schema root found in ${filePath}`, {

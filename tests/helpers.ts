@@ -82,6 +82,12 @@ export const withTempDirAsync = async (
 // package root so the bare `zod` import and the `xsd-to-zod` self-reference
 // resolve (self-reference does not work from inside node_modules), and the
 // worktree stays clean (the dotdir is gitignored).
+//
+// The file name carries a per-process counter: the module runner caches by
+// path and a recycled mkdtemp suffix would otherwise resurrect the *stale*
+// module of an earlier test whose temp dir was already deleted (observed as
+// "no generated root schema matches" flakes with another case's roots).
+let schemaModuleCounter = 0;
 export async function importGeneratedSchemas(
   schemasCode: string,
 ): Promise<Record<string, unknown>> {
@@ -89,7 +95,7 @@ export async function importGeneratedSchemas(
   fs.mkdirSync(baseDir, { recursive: true });
   const dir = fs.mkdtempSync(path.join(baseDir, "schema-"));
   try {
-    const file = path.join(dir, "schema.zod.ts");
+    const file = path.join(dir, `schema-${schemaModuleCounter++}.zod.ts`);
     fs.writeFileSync(file, schemasCode);
     return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
   } finally {
