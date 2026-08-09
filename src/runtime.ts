@@ -160,7 +160,16 @@ const escapeXml = (value: string): string =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
+    .replaceAll("'", "&apos;")
+    // A literal CR never survives a parse round-trip (line-ending
+    // normalization maps it to LF) — it must be a character reference.
+    .replaceAll("\r", "&#xD;");
+
+// Attribute-value normalization additionally maps literal TAB and LF to
+// spaces, so attribute text needs those as character references too. Applied
+// post-escape: escapeXml never introduces raw TAB/LF.
+const escapeXmlAttrChars = (escaped: string): string =>
+  escaped.replaceAll("\t", "&#x9;").replaceAll("\n", "&#xA;");
 
 export const decodeXmlEntities = (xml: string): string =>
   xml
@@ -613,10 +622,55 @@ const lexicalStore = new WeakMap<object, LexicalRecord>();
 // re-emits the member tag instead of the head's.
 const substQNameStore = new WeakMap<object, LexicalRecord>();
 
+// Prefix→URI bindings in scope for QName/NOTATION-typed values (see
+// XmlFieldMeta.qnameValue), keyed like the lexicals above: field key →
+// bindings, or one entry per occurrence for repeated fields. The serializer
+// re-declares these so a QName value's prefix is never dangling.
+type QNameNsRecord = Map<string, Record<string, string> | (Record<string, string> | undefined)[]>;
+const qnameNsStore = new WeakMap<object, QNameNsRecord>();
+
+// Prefixes used by a QName lexical (one per whitespace-separated token for
+// list values), resolved against the in-scope namespace context.
+const qnameBindingsOf = (
+  lexical: string,
+  namespaceContext: Record<string, string>,
+): Record<string, string> | undefined => {
+  let bindings: Record<string, string> | undefined;
+  for (const token of lexical.trim().split(/\s+/)) {
+    const prefix = splitQName(token).prefix;
+    if (!prefix) {
+      continue;
+    }
+    const uri = namespaceContext[prefix];
+    if (uri === undefined) {
+      continue;
+    }
+    bindings ??= {};
+    bindings[prefix] = uri;
+  }
+  return bindings;
+};
+
+const recordQNameNs = (
+  container: object,
+  key: string,
+  bindings: Record<string, string> | (Record<string, string> | undefined)[],
+): void => {
+  let record = qnameNsStore.get(container);
+  if (record === undefined) {
+    record = new Map();
+    qnameNsStore.set(container, record);
+  }
+  record.set(key, bindings);
+};
+
 // Simple-typed roots have no containing object — keyed by the root schema,
 // guarded by the parsed value so a stale entry can never attach to a
 // different document.
-const rootLexicals = new Map<AnySchema, { data: unknown; lexical: string }>();
+const rootLexicals = new Map<
+  AnySchema,
+  { data: unknown; lexical: string; qnameNs?: Record<string, string> | undefined }
+>();
 
 const recordInto = (
   store: WeakMap<object, LexicalRecord>,
@@ -658,6 +712,11 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
       store.delete(walked);
       store.set(parsed, record);
     }
+  }
+  const qnameRecord = qnameNsStore.get(walked);
+  if (qnameRecord !== undefined) {
+    qnameNsStore.delete(walked);
+    qnameNsStore.set(parsed, qnameRecord);
   }
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
@@ -873,7 +932,7 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
-    const { present, value, lexical, substQNames } = readField(
+    const { present, value, lexical, substQNames, qnameNs } = readField(
       fieldMeta,
       fieldSchema,
       node,
@@ -887,6 +946,9 @@ const readObject = (
       }
       if (substQNames !== undefined) {
         recordInto(substQNameStore, result, key, substQNames);
+      }
+      if (qnameNs !== undefined) {
+        recordQNameNs(result, key, qnameNs);
       }
     }
   }
@@ -1055,7 +1117,11 @@ const readOccurrence = (
   fieldMeta: XmlFieldMeta,
   entry: unknown,
   namespaceContext: Record<string, string>,
-): { value: unknown; lexical?: string | undefined } => {
+): {
+  value: unknown;
+  lexical?: string | undefined;
+  qnameNs?: Record<string, string> | undefined;
+} => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
     const childContext = withNamespaceContext(namespaceContext, childNode);
@@ -1094,6 +1160,10 @@ const readOccurrence = (
           ? undefined
           : coerceLexical(text ?? "", field.itemSchema),
       lexical: text === undefined ? undefined : String(text),
+      qnameNs:
+        fieldMeta.qnameValue && text !== undefined && text !== ""
+          ? qnameBindingsOf(String(text), childContext)
+          : undefined,
     };
   }
 
@@ -1110,7 +1180,14 @@ const readOccurrence = (
   if (hasObjectShape(field.itemSchema)) {
     return { value: readObject(field.itemSchema, { "#text": entry }, namespaceContext) };
   }
-  return { value: coerceLexical(entry, field.itemSchema), lexical: String(entry) };
+  return {
+    value: coerceLexical(entry, field.itemSchema),
+    lexical: String(entry),
+    qnameNs:
+      fieldMeta.qnameValue && entry !== ""
+        ? qnameBindingsOf(String(entry), namespaceContext)
+        : undefined,
+  };
 };
 
 type FieldRead = {
@@ -1119,6 +1196,7 @@ type FieldRead = {
   lexical?: string | (string | undefined)[] | undefined;
   /** Member qname per occurrence — set only where it differs from the head. */
   substQNames?: string | (string | undefined)[] | undefined;
+  qnameNs?: Record<string, string> | (Record<string, string> | undefined)[] | undefined;
 };
 
 const readField = (
@@ -1154,7 +1232,12 @@ const readField = (
       }
       return { present: false, value: undefined };
     }
-    return { present: true, value: coerceLexical(raw, field.itemSchema), lexical: String(raw) };
+    return {
+      present: true,
+      value: coerceLexical(raw, field.itemSchema),
+      lexical: String(raw),
+      qnameNs: fieldMeta.qnameValue ? qnameBindingsOf(String(raw), namespaceContext) : undefined,
+    };
   }
 
   if (fieldMeta.kind === "text") {
@@ -1192,11 +1275,13 @@ const readField = (
   const substituted = qnames.some((q) => q !== undefined);
   if (field.isArray) {
     const lexicals = occurrences.map((o) => o.lexical);
+    const qnameNs = occurrences.map((o) => o.qnameNs);
     return {
       present: true,
       value: occurrences.map((o) => o.value),
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
       substQNames: substituted ? qnames : undefined,
+      qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
     };
   }
   if (occurrences.length > 0) {
@@ -1205,6 +1290,7 @@ const readField = (
       value: occurrences[0]!.value,
       lexical: occurrences[0]!.lexical,
       substQNames: qnames[0],
+      qnameNs: occurrences[0]!.qnameNs,
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
@@ -1253,7 +1339,11 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
       ? undefined
       : coerceLexical(text ?? "", typeSchema);
   if (text !== undefined) {
-    rootLexicals.set(schema, { data: value, lexical: String(text) });
+    rootLexicals.set(schema, {
+      data: value,
+      lexical: String(text),
+      qnameNs: meta.qnameValue ? qnameBindingsOf(String(text), namespaceContext) : undefined,
+    });
   }
   return value;
 };
@@ -1283,28 +1373,82 @@ const openWalk = (
 // Writing: data → XML, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
-const choosePrefix = (uri: string, prefixMap: Map<string, string>): string => {
-  if (prefixMap.has(uri)) {
-    const existing = prefixMap.get(uri);
-    if (existing) {
-      return existing;
-    }
+const choosePrefix = (
+  uri: string,
+  prefixMap: Map<string, string>,
+  reserved?: ReadonlyMap<string, string>,
+): string => {
+  const existing = prefixMap.get(uri);
+  if (existing) {
+    return existing;
   }
-  const next = `ns${prefixMap.size}`;
+  const used = new Set(prefixMap.values());
+  let n = prefixMap.size;
+  let next = `ns${n}`;
+  while (used.has(next) || reserved?.has(next)) {
+    next = `ns${++n}`;
+  }
   prefixMap.set(uri, next);
   return next;
 };
 
-const elementName = (qname: string, prefixMap: Map<string, string>): string => {
+const elementName = (
+  qname: string,
+  prefixMap: Map<string, string>,
+  reserved?: ReadonlyMap<string, string>,
+): string => {
   const { namespace, local } = splitClark(qname);
   if (!namespace) {
     return local;
   }
-  return `${choosePrefix(namespace, prefixMap)}:${local}`;
+  return `${choosePrefix(namespace, prefixMap, reserved)}:${local}`;
 };
 
 type SerializeCtx = {
   prefixMap: Map<string, string>;
+  // Explicit prefix→URI declarations for QName/NOTATION value lexicals
+  // (recorded at parse time), emitted at the root alongside prefixMap decls.
+  qnameNs: Map<string, string>;
+};
+
+// Re-declare the prefix bindings a QName/NOTATION lexical relies on, returning
+// the lexical untouched — or rewritten to a fresh prefix when the original
+// prefix is already bound to a different URI in the output document.
+const declareQNamePrefixes = (
+  lexical: string,
+  bindings: Record<string, string> | undefined,
+  ctx: SerializeCtx,
+): string => {
+  if (bindings === undefined) {
+    return lexical;
+  }
+  // choosePrefix reserves these prefixes (see the reserved argument), so only
+  // prefixes already allocated — before the binding was seen — collide.
+  const prefixTaken = (prefix: string): boolean =>
+    ctx.qnameNs.has(prefix) || [...ctx.prefixMap.values()].includes(prefix);
+  return lexical
+    .split(/(\s+)/)
+    .map((token) => {
+      const { prefix, local } = splitQName(token);
+      const uri = prefix ? bindings[prefix] : undefined;
+      if (!prefix || uri === undefined) {
+        return token;
+      }
+      if (ctx.qnameNs.get(prefix) === uri) {
+        return token;
+      }
+      if (!prefixTaken(prefix)) {
+        ctx.qnameNs.set(prefix, uri);
+        return token;
+      }
+      let fresh = `qns${ctx.qnameNs.size}`;
+      while (prefixTaken(fresh)) {
+        fresh = `${fresh}x`;
+      }
+      ctx.qnameNs.set(fresh, uri);
+      return `${fresh}:${local}`;
+    })
+    .join("");
 };
 
 // XSD namespace-constraint check ('##any', '##other', '##targetNamespace',
@@ -1356,10 +1500,12 @@ const openSerialize = (
       continue;
     }
     if (key.startsWith("@")) {
-      attributes.push(`${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(entry)}"`);
+      attributes.push(
+        `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(entry))}"`,
+      );
       continue;
     }
-    const tag = elementName(key, ctx.prefixMap);
+    const tag = elementName(key, ctx.prefixMap, ctx.qnameNs);
     usesXsi = pushOpenChildren(elements, tag, entry, ctx) || usesXsi;
   }
   return { attributes, body: elements.join(""), usesXsi };
@@ -1487,7 +1633,7 @@ const writeObjectFields = (
       if (key.startsWith("@")) {
         if (hasAnyAttribute) {
           attributes.push(
-            `${elementName(key.slice(1), ctx.prefixMap)}="${serializePrimitive(value)}"`,
+            `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(value))}"`,
           );
         }
         continue;
@@ -1525,7 +1671,9 @@ const writeObjectFields = (
     }
     wildcardBuckets.delete(wildcard);
     for (const [key, value] of bucket) {
-      usesXsi = pushOpenChildren(elements, elementName(key, ctx.prefixMap), value, ctx) || usesXsi;
+      usesXsi =
+        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), value, ctx) ||
+        usesXsi;
     }
   };
 
@@ -1557,8 +1705,15 @@ const writeObjectFields = (
       if (field.hasDefault && value === field.defaultValue) {
         continue;
       }
+      const leaf = serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle);
+      const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+      const declared = declareQNamePrefixes(
+        leaf,
+        typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined,
+        ctx,
+      );
       attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap)}="${serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle)}"`,
+        `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"`,
       );
       continue;
     }
@@ -1588,7 +1743,7 @@ const writeObjectFields = (
       const occurrenceQName =
         (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
       const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
-      const localName = elementName(occurrenceQName, ctx.prefixMap);
+      const localName = elementName(occurrenceQName, ctx.prefixMap, ctx.qnameNs);
       if (item === null) {
         usesXsi = true;
         elements.push(`<${localName} xsi:nil="true"/>`);
@@ -1609,9 +1764,10 @@ const writeObjectFields = (
         continue;
       }
       const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
-      elements.push(
-        `<${localName}>${serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem)}</${localName}>`,
-      );
+      const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
+      const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+      const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+      elements.push(`<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`);
     }
   }
 
@@ -1693,6 +1849,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
+    qnameNs: new Map<string, string>(),
   };
 
   const typeSchema = peelOnce(schema);
@@ -1714,10 +1871,16 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   } else if (meta.fixedLexical !== undefined) {
     // Fixed root: re-emit the declared fixed lexical (see XmlFieldMeta).
     body = escapeXml(meta.fixedLexical);
+    if (meta.qnameValue) {
+      body = declareQNamePrefixes(body, rootLexicals.get(schema)?.qnameNs, ctx);
+    }
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);
     const stored = storedLexicalFor(entry?.lexical, data, typeSchema);
     body = stored === undefined ? serializeLeaf(typeSchema, data) : escapeXml(stored);
+    if (meta.qnameValue && stored !== undefined) {
+      body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
+    }
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
     const rootDatatype = meta.datatype;
@@ -1729,7 +1892,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   const nsDecls: string[] = [];
   let rootTag = rootInfo.local;
   if (rootInfo.namespace) {
-    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap);
+    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap, ctx.qnameNs);
     rootTag = `${rootPrefix}:${rootInfo.local}`;
     nsDecls.push(`xmlns:${rootPrefix}="${rootInfo.namespace}"`);
   }
@@ -1737,6 +1900,9 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     if (!uri || uri === rootInfo.namespace) {
       continue;
     }
+    nsDecls.push(`xmlns:${prefix}="${uri}"`);
+  }
+  for (const [prefix, uri] of ctx.qnameNs.entries()) {
     nsDecls.push(`xmlns:${prefix}="${uri}"`);
   }
   if (usesXsi) {

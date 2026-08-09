@@ -102,6 +102,12 @@ export type XmlFieldMeta = {
    * wildcard.
    */
   namespaceConstraint?: string;
+  /**
+   * QName/NOTATION-typed values: the lexical carries a namespace prefix, so
+   * the parser records the prefix→URI binding in scope and the serializer
+   * re-declares it — an undeclared prefix makes the output invalid.
+   */
+  qnameValue?: boolean;
 };
 
 /**
@@ -139,6 +145,8 @@ export type XmlMeta = {
    * against these to read and serialize the occurrence with the right type.
    */
   substElement?: QName;
+  /** QName/NOTATION-typed simple root — see XmlFieldMeta.qnameValue. */
+  qnameValue?: boolean;
   fields?: Record<string, XmlFieldMeta>;
 };
 

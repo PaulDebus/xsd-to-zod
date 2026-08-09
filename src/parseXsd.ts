@@ -835,14 +835,35 @@ const resolveElementTypeName = (
   return toClark(XSD_NS, "anyType");
 };
 
+// Namespace declarations local to one schema node (e.g. xmlns:imp on the
+// xsd:element itself) — QName-valued attributes resolve against these too.
+const localNsDeclarations = (node: AnyNode): Record<string, string> => {
+  const decls: Record<string, string> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "@_xmlns") {
+      decls[""] = String(value);
+    } else if (key.startsWith("@_xmlns:")) {
+      decls[key.slice("@_xmlns:".length)] = String(value);
+    }
+  }
+  return decls;
+};
+
 const collectElementRef = (
   child: AnyNode,
   ref: string,
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): void => {
-  const refQName = resolveTypeQName(ref, ctx.nsMap, ctx.diagnostics);
-  const referenced = ctx.elements[refQName];
+  const refQName = resolveTypeQName(
+    ref,
+    { ...ctx.nsMap, ...localNsDeclarations(child) },
+    ctx.diagnostics,
+  );
+  // Unprefixed refs resolve against the target namespace when no default
+  // xmlns is declared; a no-namespace imported element still matches.
+  const resolvedQName = ctx.elements[refQName] ? refQName : toClark("", clarkToLocal(refQName));
+  const referenced = ctx.elements[resolvedQName];
   if (!referenced) {
     report(
       ctx.diagnostics,
@@ -872,7 +893,7 @@ const collectElementRef = (
   scope.fields.push({
     ...buildRefField(
       effectiveCardinality,
-      refQName,
+      resolvedQName,
       referenced.typeName,
       child["@_nillable"] === true ||
         child["@_nillable"] === "true" ||
@@ -897,11 +918,12 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
   if (!name && !ref) {
     return;
   }
+  const localCtx = { ...ctx, nsMap: { ...ctx.nsMap, ...localNsDeclarations(child) } };
   if (ref) {
     collectElementRef(child, ref, ctx, scope);
     return;
   }
-  const typeName = resolveElementTypeName(child, name, ctx, scope);
+  const typeName = resolveElementTypeName(child, name, localCtx, scope);
   const effectiveCardinality = combineCardinality(
     scope.inheritedCardinality,
     parseCardinality(child),
@@ -928,8 +950,9 @@ const collectAttribute: FieldHandler = (child, ctx, scope) => {
   if (!name && !ref) {
     return;
   }
+  const localNsMap = { ...ctx.nsMap, ...localNsDeclarations(child) };
   if (ref) {
-    const refQName = resolveTypeQName(ref, ctx.nsMap, ctx.diagnostics);
+    const refQName = resolveTypeQName(ref, localNsMap, ctx.diagnostics);
     const referenced = ctx.attributes[refQName];
     if (!referenced) {
       report(
@@ -952,7 +975,7 @@ const collectAttribute: FieldHandler = (child, ctx, scope) => {
   }
   let typeName: QName;
   if (child["@_type"]) {
-    typeName = resolveTypeQName(String(child["@_type"]), ctx.nsMap, ctx.diagnostics);
+    typeName = resolveTypeQName(String(child["@_type"]), localNsMap, ctx.diagnostics);
   } else {
     const inlineSimple = nodeChildren(child).find(
       ([key]) => getNodeTagLocalName(key) === "simpleType",
@@ -1148,6 +1171,79 @@ const prependMixedTextField = (fields: IrField[], ownerNs: string): void => {
 const dedupeTextFields = (fields: IrField[]): IrField[] => {
   const firstText = fields.findIndex((f) => f.kind === "text");
   return firstText === -1 ? fields : fields.filter((f, i) => f.kind !== "text" || i === firstText);
+};
+
+// Adjacent same-name element particles (a sequence declaring the same element
+// several times) collapse into a single repeated field: the zod object shape
+// cannot hold duplicate keys. Occurrence ranges add up; the first particle's
+// value constraints win — per-position defaults are a rare corner the
+// flattened model cannot represent. A wildcard sitting between the two
+// particles (e1, xs:any, e1) blocks the collapse: the merged array would
+// swallow the wildcard's occurrences — they stay a scalar field plus
+// overflow extras instead (addB135).
+const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[]): IrField[] => {
+  const wildcardPositions = new Set(
+    wildcards.flatMap((w) => (w.position === undefined ? [] : [w.position])),
+  );
+  const merged: IrField[] = [];
+  let elementOrdinal = -1;
+  for (const field of fields) {
+    if (field.kind === "element") {
+      elementOrdinal++;
+    }
+    const prev = merged[merged.length - 1];
+    if (
+      prev &&
+      prev.kind === "element" &&
+      field.kind === "element" &&
+      !wildcardPositions.has(elementOrdinal) &&
+      field.qname === prev.qname &&
+      field.typeName === prev.typeName &&
+      field.nillable === prev.nillable &&
+      field.choiceGroup === prev.choiceGroup &&
+      field.choiceBranch === prev.choiceBranch
+    ) {
+      prev.minOccurs += field.minOccurs;
+      prev.maxOccurs =
+        prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
+          ? "unbounded"
+          : prev.maxOccurs + field.maxOccurs;
+      continue;
+    }
+    merged.push({ ...field });
+  }
+  return merged;
+};
+
+// Two fields sharing an object key (same local name, different namespaces)
+// need distinct keys — zod object keys are unique and the fields meta map is
+// keyed the same way. The first occurrence keeps the plain key.
+const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
+  const baseKey = (field: IrField): string =>
+    field.kind === "text"
+      ? "_text"
+      : field.kind === "attribute"
+        ? `@${clarkToLocal(field.qname)}`
+        : clarkToLocal(field.qname);
+  const used = new Set<string>();
+  return fields.map((field) => {
+    const key = field.fieldKey ?? baseKey(field);
+    if (!used.has(key)) {
+      used.add(key);
+      return field;
+    }
+    // Same-qname repeats share the key on purpose (see IrField.fieldKey).
+    if (field.qname === fields.find((f) => (f.fieldKey ?? baseKey(f)) === key)?.qname) {
+      return field;
+    }
+    let n = 2;
+    while (used.has(`${key}${n}`)) {
+      n++;
+    }
+    const unique = `${key}${n}`;
+    used.add(unique);
+    return { ...field, fieldKey: unique };
+  });
 };
 
 const FIELD_HANDLERS: Record<string, FieldHandler> = {
@@ -2044,7 +2140,12 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     const mergedChoiceGuards = resolveMergedChoiceGuards(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
-      fields: dedupeTextFields(resolveMergedFields(name, new Set())),
+      fields: disambiguateFieldKeys(
+        mergeRepeatedElementFields(
+          dedupeTextFields(resolveMergedFields(name, new Set())),
+          mergedWildcards,
+        ),
+      ),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedChoiceGuards ? { choiceGroupGuards: mergedChoiceGuards } : {}),
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
