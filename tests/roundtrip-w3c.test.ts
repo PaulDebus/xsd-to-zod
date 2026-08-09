@@ -4,19 +4,12 @@ import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/index.js";
 import { runRoundTrip } from "./helpers.js";
 import { discoverValidCases } from "./w3cDriver.js";
-import { REASONS } from "./w3cKnownFailures.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
 // Cases exercising XSD features xsd-to-zod does not support yet, with the
 // reason. Keyed by `<testGroup>/<instanceTest>` name.
-const KNOWN_FAILURES = new Map<string, string>([
-  // Substitution groups themselves work (salutation substitutes
-  // ipo:ExternFirstElement); what fails is the group-in-choice ordering:
-  // shipTo/billTo/singleAddress are emitted after comment/items.
-  ["ipo6/ipo_1", REASONS.choiceDocumentOrder],
-  ["ipo6/ipo_2", REASONS.choiceDocumentOrder],
-]);
+const KNOWN_FAILURES = new Map<string, string>([]);
 
 // Test groups are discovered from the .testSet metadata (#108), not hardcoded
 // directories. Test names carry the group's XSD spec anchors.

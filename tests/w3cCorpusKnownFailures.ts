@@ -6,9 +6,8 @@ export const W3C_CORPUS_REASONS = {
   choiceDocumentOrder:
     "choice: interleaved repeated branches collapse into per-element arrays; document order is lost and the serialized XML no longer validates",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
-  wildcard: "unsupported: xs:any wildcard content",
-  strictWildcardHarness:
-    "strict wildcard: extras re-serialized faithfully, but single-schema libxml2 validation cannot see cross-file declarations (harness limitation)",
+  libxmlStrictWildcardXsiType:
+    "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   needsTriage: "needs triage",
   undefinedValue: "parse: element value arrives as undefined (needs triage)",
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
@@ -18,16 +17,10 @@ export const W3C_CORPUS_REASONS = {
 } as const;
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
-  // Substitution groups themselves work (salutation substitutes
-  // ipo:ExternFirstElement); what fails is the group-in-choice ordering:
-  // shipTo/billTo/singleAddress are emitted after comment/items.
-  ["boeingMeta/BoeingXSDTestSet.testSet/ipo6/ipo_2", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Additional_w3c.xml/addB012/addB012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB067/addB067.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/Additional_w3c.xml/addB068/addB068.i", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Additional_w3c.xml/addB090/addB090.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/Additional_w3c.xml/addB135/addB135.v", W3C_CORPUS_REASONS.wildcard],
+  ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.libxmlStrictWildcardXsiType],
   ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Additional_w3c.xml/addC001/addC001.v", W3C_CORPUS_REASONS.undefinedValue],
   ["msMeta/Additional_w3c.xml/isDefault072/isDefault072.v", W3C_CORPUS_REASONS.undefinedValue],
@@ -44,20 +37,12 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Additional_w3c.xml/memberType008/memberType008.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  ["msMeta/AttributeGroup_w3c.xml/attgD019/attgD019.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/AttributeGroup_w3c.xml/attgD020/attgD020.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/AttributeGroup_w3c.xml/attgD021/attgD021.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/AttributeGroup_w3c.xml/attgD022/attgD022.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/AttributeGroup_w3c.xml/attgD025/attgD025.v", W3C_CORPUS_REASONS.strictWildcardHarness],
-  ["msMeta/AttributeGroup_w3c.xml/attgD034/attgD034.v", W3C_CORPUS_REASONS.strictWildcardHarness],
   ["msMeta/Attribute_w3c.xml/attO009/attO009.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO010/attO010.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO011/attO011.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ComplexType_w3c.xml/ctL021/ctL021.v", W3C_CORPUS_REASONS.strictWildcardHarness],
   ["msMeta/ComplexType_w3c.xml/ctL022/ctL022.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ComplexType_w3c.xml/ctZ007/ctZ007.v", W3C_CORPUS_REASONS.requiredArrayEmpty],
   [
     "msMeta/DataTypes_w3c.xml/QName006_2089/QName006_2089.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -93,11 +78,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/IdentityConstraint_w3c.xml/idF014/idF014.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idG030/idG030.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgF010/mgF010.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF011/mgF011.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF012/mgF012.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF014/mgF014.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/ModelGroups_w3c.xml/mgF019/mgF019.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
+
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ002/mgQ002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
@@ -110,7 +91,7 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Particles_w3c.xml/particlesA007/particlesA007.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  ["msMeta/Particles_w3c.xml/particlesB013/particlesB013.v", W3C_CORPUS_REASONS.wildcard],
+
   [
     "msMeta/Particles_w3c.xml/particlesEb027/particlesEb027.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -127,29 +108,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Particles_w3c.xml/particlesJs001/particlesJs001.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  ["msMeta/Particles_w3c.xml/particlesOb003/particlesOb003.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb006/particlesOb006.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb007/particlesOb007.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb012/particlesOb012.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb015/particlesOb015.v", W3C_CORPUS_REASONS.wildcard],
-  [
-    "msMeta/Particles_w3c.xml/particlesOb022/particlesOb022.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesOb042/particlesOb042.v",
-    W3C_CORPUS_REASONS.strictWildcardHarness,
-  ],
-  ["msMeta/Particles_w3c.xml/particlesOb047/particlesOb047.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb048/particlesOb048.v", W3C_CORPUS_REASONS.wildcard],
-  [
-    "msMeta/Particles_w3c.xml/particlesOb052/particlesOb052.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  ["msMeta/Particles_w3c.xml/particlesOb054/particlesOb054.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb057/particlesOb057.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb059/particlesOb059.v", W3C_CORPUS_REASONS.wildcard],
-  ["msMeta/Particles_w3c.xml/particlesOb060/particlesOb060.v", W3C_CORPUS_REASONS.wildcard],
   [
     "msMeta/Particles_w3c.xml/particlesQ013/particlesQ013.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
@@ -298,5 +256,4 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["sunMeta/suntest.testSet/xsd001/xsd001.v01", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/suntest.testSet/xsd001/xsd001.v02", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/suntest.testSet/xsd001/xsd001.v03", W3C_CORPUS_REASONS.needsTriage],
-  ["boeingMeta/BoeingXSDTestSet.testSet/ipo6/ipo_1", W3C_CORPUS_REASONS.choiceDocumentOrder],
 ]);
