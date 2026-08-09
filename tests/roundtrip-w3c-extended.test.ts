@@ -11,8 +11,8 @@ const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 // (complexType, simpleType, elements, attributes, groups) — Phase 1b of #108,
 // extended in Phase 2 with the ms schema-composition/annotation sets and a
 // nist datatype pilot (group-filtered: the nist testSet is one giant file).
-// Whole test sets for known-unsupported features (IdConstrDefs, Wildcard(s),
-// IdentityConstraint, Notations) are excluded here.
+// The IdConstrDefs/Wildcard/IdentityConstraint/Notation sets are covered by
+// the full-corpus suite instead (tests/corpus/, runs on main).
 const TEST_SETS: W3cTestSetRef[] = [
   "sunMeta/suntest.testSet",
   "sunMeta/CType.testSet",
