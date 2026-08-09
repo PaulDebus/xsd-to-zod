@@ -124,8 +124,18 @@ Features tested include:
 
 These features exist in the test corpus but are skipped because the tool doesn't support them yet:
 
-- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
 - Attribute groups
+
+## Intentionally out of scope (zod tier)
+
+- **Identity constraints** (`xs:key`, `xs:keyref`, `xs:unique`) — cross-document
+  referential checks, not shape/type validation; the libxml2 tier
+  (`xsd-to-zod/validate`) is the conformance authority and already enforces
+  them. Note the two skipped xmlschema collection fixtures
+  (`collection2`/`collection3` in `tests/roundtrip-upstream.test.ts`) are
+  inherent test-data violations — libxml2 rejects the original XML itself
+  (duplicate `xs:key` sequence, unmatched `xs:keyref`) — so they stay skipped
+  regardless of feature support.
 
 ---
 
