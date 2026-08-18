@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { parseXml, serializeXml } from "../src/index.js";
+import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for the W3C sun/ms undefinedValue bucket: XML-namespace
@@ -57,6 +57,45 @@ const EMPTY_LIST_DEFAULT_XSD = `<?xml version="1.0"?>
   <xs:element name="root">
     <xs:complexType>
       <xs:attribute name="dims" default="">
+        <xs:simpleType>
+          <xs:list itemType="xs:int" />
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+const LIST_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="dims" fixed="1 2">
+        <xs:simpleType>
+          <xs:list itemType="xs:int" />
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+const SINGLE_TOKEN_LIST_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="dims" fixed="1">
+        <xs:simpleType>
+          <xs:list itemType="xs:int" />
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+const EMPTY_LIST_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="dims" fixed="">
         <xs:simpleType>
           <xs:list itemType="xs:int" />
         </xs:simpleType>
@@ -123,5 +162,57 @@ describe("xs:list attribute defaults (#122)", () => {
   it("applies an empty list default as an empty array", async () => {
     const schema = await generate(EMPTY_LIST_DEFAULT_XSD);
     expect(parseXml(schema, "<root/>")).toEqual({ "@dims": [] });
+  });
+});
+
+describe("xs:list attribute fixed values", () => {
+  it("accepts the fixed list value as a typed array and rejects others", async () => {
+    const schema = await generate(LIST_FIXED_XSD);
+    expect(parseXml(schema, '<root dims="1 2"/>')).toEqual({ "@dims": [1, 2] });
+    expect(() => parseXml(schema, '<root dims="3 4"/>')).toThrow();
+    expect(() => parseXml(schema, '<root dims="1"/>')).toThrow();
+  });
+
+  it("accepts a single-token fixed list value as a one-element array", async () => {
+    const schema = await generate(SINGLE_TOKEN_LIST_FIXED_XSD);
+    expect(parseXml(schema, '<root dims="1"/>')).toEqual({ "@dims": [1] });
+    expect(() => parseXml(schema, '<root dims="2"/>')).toThrow();
+  });
+
+  it("accepts an empty fixed list value as an empty array", async () => {
+    const schema = await generate(EMPTY_LIST_FIXED_XSD);
+    expect(parseXml(schema, '<root dims=""/>')).toEqual({ "@dims": [] });
+    expect(() => parseXml(schema, '<root dims="1"/>')).toThrow();
+  });
+
+  it("emits a typed array literal constraint, not a scalar literal", async () => {
+    let schemas = "";
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, LIST_FIXED_XSD);
+      schemas = irToZod(parseXsd([file])).schemas;
+    });
+    expect(schemas).toContain(
+      ".refine((val) => val.length === 2 && val.every((item, i) => item === [1, 2][i]), { message: 'value does not match the fixed value' })",
+    );
+    expect(schemas).not.toContain("z.literal(NaN)");
+  });
+
+  it("substitutes the fixed list value when the attribute is absent", async () => {
+    const schema = await generate(LIST_FIXED_XSD);
+    const parsed = parseXml(schema, "<root/>");
+    expect(parsed).toEqual({ "@dims": [1, 2] });
+    const serialized = serializeXml(schema, parsed);
+    expect(serialized).toContain('dims="1 2"');
+    expect(parseXml(schema, serialized)).toEqual(parsed);
+  });
+
+  it("round-trips a fixed list attribute through parse and serialize", async () => {
+    const schema = await generate(LIST_FIXED_XSD);
+    const parsed = parseXml(schema, '<root dims="1 2"/>');
+    expect(parsed).toEqual({ "@dims": [1, 2] });
+    const serialized = serializeXml(schema, parsed);
+    expect(serialized).toContain('dims="1 2"');
+    expect(parseXml(schema, serialized)).toEqual(parsed);
   });
 });
