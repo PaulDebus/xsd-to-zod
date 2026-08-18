@@ -745,22 +745,19 @@ const withCardinality = (
     field.fixedValue === undefined
   ) {
     const listItemType = resolveListItemType(field.typeName, ir);
-    if (listItemType !== undefined) {
-      const itemSt = structured
-        ? structuredType(resolveBuiltinLocal(listItemType, ir))
-        : undefined;
-      const itemKind = resolvePrimitiveKind(listItemType, ir);
-      const items = field.defaultValue
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((token) =>
-          itemSt ? structuredLiteral(itemSt.name, token) : typedLiteral(itemKind, token),
-        );
-      result += `.default([${items.join(", ")}])`;
-    } else {
+    if (listItemType === undefined) {
       const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
       result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
+    } else {
+      const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
+      const itemKind = resolvePrimitiveKind(listItemType, ir);
+      // A trimmed empty default is an empty list; splitting it would yield a
+      // single empty token.
+      const trimmed = field.defaultValue.trim();
+      const items = (trimmed === "" ? [] : trimmed.split(/\s+/)).map((token) =>
+        itemSt ? structuredLiteral(itemSt.name, token) : typedLiteral(itemKind, token),
+      );
+      result += `.default([${items.join(", ")}])`;
     }
   }
   return result;

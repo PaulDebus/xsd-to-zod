@@ -39,6 +39,32 @@ const LIST_DEFAULT_XSD = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
+const SINGLE_TOKEN_LIST_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="dims" default="1">
+        <xs:simpleType>
+          <xs:list itemType="xs:int" />
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+const EMPTY_LIST_DEFAULT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="dims" default="">
+        <xs:simpleType>
+          <xs:list itemType="xs:int" />
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
 const generate = async (xsd: string): Promise<z.ZodType> => {
   let schema: z.ZodType | undefined;
   await withTempDirAsync(async (dir) => {
@@ -87,5 +113,15 @@ describe("xs:list attribute defaults (#122)", () => {
       "@tags": ["p", "q"],
     });
     expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
+  });
+
+  it("applies a single-token list default as a one-element array", async () => {
+    const schema = await generate(SINGLE_TOKEN_LIST_XSD);
+    expect(parseXml(schema, "<root/>")).toEqual({ "@dims": [1] });
+  });
+
+  it("applies an empty list default as an empty array", async () => {
+    const schema = await generate(EMPTY_LIST_DEFAULT_XSD);
+    expect(parseXml(schema, "<root/>")).toEqual({ "@dims": [] });
   });
 });

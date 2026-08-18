@@ -1445,6 +1445,10 @@ const declareQNamePrefixes = (
       if (!prefix || uri === undefined) {
         return token;
       }
+      // The xml prefix is bound by definition and must not be declared.
+      if (prefix === "xml") {
+        return token;
+      }
       if (ctx.qnameNs.get(prefix) === uri) {
         return token;
       }
@@ -1914,6 +1918,10 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     nsDecls.push(`xmlns:${prefix}="${uri}"`);
   }
   for (const [prefix, uri] of ctx.qnameNs.entries()) {
+    // The xml prefix is bound by definition and must not be declared.
+    if (prefix === "xml") {
+      continue;
+    }
     nsDecls.push(`xmlns:${prefix}="${uri}"`);
   }
   if (usesXsi) {

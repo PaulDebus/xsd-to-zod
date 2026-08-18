@@ -317,6 +317,29 @@ describe("datatypes: structured codegen", () => {
       },
     );
   });
+
+  it("emits structured object literals for xs:list attribute defaults", async () => {
+    await withXsd(
+      `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="cfg" type="Cfg"/>
+  <xs:complexType name="Cfg">
+    <xs:attribute name="days" default="2002-10-10 2003-11-11">
+      <xs:simpleType>
+        <xs:list itemType="xs:date"/>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+</xs:schema>`,
+      (file) => {
+        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        // Each list token becomes a structured object literal in the array.
+        expect(schemas).toContain(
+          '.default([{"year":2002,"month":10,"day":10}, {"year":2003,"month":11,"day":11}])',
+        );
+      },
+    );
+  });
 });
 
 describe("datatypes: structured runtime round-trip", () => {
@@ -423,6 +446,35 @@ describe("datatypes: structured runtime round-trip", () => {
         expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
         // A value other than the fixed one is rejected (canonical refine).
         expect(() => parseXml(schema, "<cfg><epoch>2003-01-01T00:00:00Z</epoch></cfg>")).toThrow();
+      },
+    );
+  });
+
+  it("applies a structured xs:list attribute default as an array of values", async () => {
+    await withXsd(
+      `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="cfg" type="Cfg"/>
+  <xs:complexType name="Cfg">
+    <xs:attribute name="days" default="2002-10-10 2003-11-11">
+      <xs:simpleType>
+        <xs:list itemType="xs:date"/>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+</xs:schema>`,
+      async (file) => {
+        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const mod = await importGeneratedSchemas(schemas);
+        const schema = mod["cfgSchema"] as z.ZodType;
+        const parsed = parseXml(schema, "<cfg/>");
+        expect(parsed).toEqual({
+          "@days": [
+            { year: 2002, month: 10, day: 10 },
+            { year: 2003, month: 11, day: 11 },
+          ],
+        });
+        expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
       },
     );
   });
