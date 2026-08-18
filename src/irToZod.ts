@@ -186,6 +186,25 @@ const resolveBuiltinLocal = (
   return resolveBuiltinLocal(simple.baseType, ir, seenNames);
 };
 
+// Resolve a (possibly user-defined) simple type to its xs:list item type, so a
+// list-typed fixed/default lexical is emitted as an array literal — one typed
+// item per whitespace-separated token.
+const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QName | undefined => {
+  const seenNames = seen ?? new Set<string>();
+  if (seenNames.has(typeName)) {
+    return undefined;
+  }
+  seenNames.add(typeName);
+  const simple = ir.simpleTypes[typeName];
+  if (simple?.kind === "list") {
+    return simple.itemType;
+  }
+  if (simple?.kind === "restriction") {
+    return resolveListItemType(simple.baseType, ir, seenNames);
+  }
+  return undefined;
+};
+
 const primitiveToZod = (
   typeName: QName,
   definedTypes: Set<string>,
@@ -725,8 +744,21 @@ const withCardinality = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined
   ) {
-    const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
-    result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
+    const listItemType = resolveListItemType(field.typeName, ir);
+    if (listItemType === undefined) {
+      const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
+      result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
+    } else {
+      const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
+      const itemKind = resolvePrimitiveKind(listItemType, ir);
+      // A trimmed empty default is an empty list; splitting it would yield a
+      // single empty token.
+      const trimmed = field.defaultValue.trim();
+      const items = (trimmed === "" ? [] : trimmed.split(/\s+/)).map((token) =>
+        itemSt ? structuredLiteral(itemSt.name, token) : typedLiteral(itemKind, token),
+      );
+      result += `.default([${items.join(", ")}])`;
+    }
   }
   return result;
 };

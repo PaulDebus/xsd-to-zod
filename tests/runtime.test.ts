@@ -283,4 +283,18 @@ describe("QName-typed values", () => {
     expect(serialized).not.toContain("ns0:holder");
     expect(parseXmlRuntime(schema, serialized)).toEqual(parsed);
   });
+
+  it("keeps the xml prefix undeclared for QName values", async () => {
+    // The xml prefix is bound by definition, so a QName value using it must
+    // not trigger an xmlns:xml declaration on serialization.
+    const mod = await load();
+    const schema = mod["holderSchema"] as z.ZodType;
+    const parsed = parseXmlRuntime(schema, '<holder att="xml:lang"><val>xml:space</val></holder>');
+    expect(parsed).toEqual({ "@att": "xml:lang", val: "xml:space" });
+    const serialized = serializeXmlRuntime(schema, parsed);
+    expect(serialized).toContain('att="xml:lang"');
+    expect(serialized).toContain(">xml:space</val>");
+    expect(serialized).not.toContain("xmlns:xml");
+    expect(parseXmlRuntime(schema, serialized)).toEqual(parsed);
+  });
 });
