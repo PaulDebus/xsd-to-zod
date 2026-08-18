@@ -511,6 +511,57 @@ describe("datatypes: structured runtime round-trip", () => {
     );
   });
 
+  it("substitutes a fixed xs:list of primitive items on absence", async () => {
+    await withXsd(
+      `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="cfg" type="Cfg"/>
+  <xs:complexType name="Cfg">
+    <xs:attribute name="dims" fixed="1 2">
+      <xs:simpleType>
+        <xs:list itemType="xs:int"/>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+</xs:schema>`,
+      async (file) => {
+        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const mod = await importGeneratedSchemas(schemas);
+        const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
+        const parsed = parseXml(schema, "<cfg/>");
+        expect(parsed).toEqual({ "@dims": [1, 2] });
+        expect(parseXml(schema, '<cfg dims="1 2"/>')).toEqual({ "@dims": [1, 2] });
+        expect(() => parseXml(schema, '<cfg dims="3 4"/>')).toThrow();
+        expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
+      },
+    );
+  });
+
+  it("substitutes an empty fixed xs:list of dates on absence", async () => {
+    await withXsd(
+      `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="cfg" type="Cfg"/>
+  <xs:complexType name="Cfg">
+    <xs:attribute name="days" fixed="">
+      <xs:simpleType>
+        <xs:list itemType="xs:date"/>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+</xs:schema>`,
+      async (file) => {
+        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const mod = await importGeneratedSchemas(schemas);
+        const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
+        expect(parseXml(schema, "<cfg/>")).toEqual({ "@days": [] });
+        expect(parseXml(schema, '<cfg days=""/>')).toEqual({ "@days": [] });
+        expect(() => parseXml(schema, '<cfg days="2001-01-01"/>')).toThrow();
+        expect(parseXml(schema, serializeXml(schema, { "@days": [] }))).toEqual({ "@days": [] });
+      },
+    );
+  });
+
   it("rejects invalid lexicals through the generated schema", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
       const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });

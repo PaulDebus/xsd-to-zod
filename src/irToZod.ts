@@ -272,6 +272,17 @@ const isBigIntType = (zodExpr: string): boolean => zodExpr.startsWith("z.bigint(
 // the runtime produces for the field's (resolved) primitive kind (#68, #87).
 const typedLiteral = (kind: "number" | "bigint" | "boolean" | "string", raw: string): string => {
   if (kind === "number") {
+    const trimmed = raw.trim();
+    // xs:float/xs:double special lexicals: Number() maps all three to NaN.
+    if (trimmed === "INF") {
+      return "Infinity";
+    }
+    if (trimmed === "-INF") {
+      return "-Infinity";
+    }
+    if (trimmed === "NaN") {
+      return "NaN";
+    }
     return String(Number(raw));
   }
   if (kind === "bigint") {
@@ -755,7 +766,8 @@ const withCardinality = (
         result += `.refine((val) => val.map((item) => ${itemSt.writeFn}(item)).join(" ") === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
       } else {
         const items = tokens.map((token) => typedLiteral(itemKind, token));
-        result += `.refine((val) => val.length === ${items.length} && val.every((item, i) => item === [${items.join(", ")}][i]), { message: 'value does not match the fixed value' })`;
+        // Object.is so NaN items (xs:float/xs:double specials) compare equal.
+        result += `.refine((val) => val.length === ${items.length} && val.every((item, i) => Object.is(item, [${items.join(", ")}][i])), { message: 'value does not match the fixed value' })`;
       }
     }
   }
@@ -1161,21 +1173,34 @@ const fieldsMetaFor = (
         `defaultValue: ${typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.defaultValue)}`,
       );
     }
-    if (structured && st && field.fixedValue !== undefined) {
-      // Structured fixed values cannot ride a z.literal (reference equality on
-      // objects): the constraint is a canonical-lexical refine and the runtime
-      // substitutes the lexical from here (validation transforms it).
-      parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
-    }
-    if (!structured && field.fixedValue !== undefined) {
-      // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
-      parts.push(`fixedLexical: ${JSON.stringify(field.fixedValue)}`);
-      // List-typed fixed values ride a refine, not a z.literal, so the runtime
-      // cannot read the fixed value from the schema def; substitute the typed
-      // array from the meta on absence (attributes) / present-but-empty
-      // (elements).
-      if (resolveListItemType(field.typeName, ir) !== undefined) {
-        parts.push(`fixedValue: ${listLiteral(field.typeName, ir, field.fixedValue)}`);
+    if (field.fixedValue !== undefined) {
+      const listItemType = resolveListItemType(field.typeName, ir);
+      if (listItemType !== undefined) {
+        // List-typed fixed values ride a refine, not a z.literal, so the
+        // runtime cannot read the fixed value from the schema def; substitute
+        // the typed array from the meta on absence (attributes) /
+        // present-but-empty (elements). An empty fixed lexical is an empty
+        // list: the raw "" would split into [""] and fail item validation.
+        const itemSt = structured
+          ? structuredType(resolveBuiltinLocal(listItemType, ir))
+          : undefined;
+        if (itemSt) {
+          // Structured items transform from the lexical, so the meta carries
+          // the raw lexical for the schema's preprocess to split and parse.
+          const trimmed = field.fixedValue.trim();
+          parts.push(`fixedValue: ${trimmed === "" ? "[]" : JSON.stringify(field.fixedValue)}`);
+        } else {
+          parts.push(`fixedValue: ${listLiteral(field.typeName, ir, field.fixedValue)}`);
+        }
+      } else if (structured && st) {
+        // Structured fixed values cannot ride a z.literal (reference equality
+        // on objects): the constraint is a canonical-lexical refine and the
+        // runtime substitutes the lexical from here (validation transforms it).
+        parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
+      }
+      if (!structured) {
+        // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
+        parts.push(`fixedLexical: ${JSON.stringify(field.fixedValue)}`);
       }
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
