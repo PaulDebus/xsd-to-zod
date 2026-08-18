@@ -21,6 +21,9 @@ import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 import { xsdPattern } from "./xsdPattern.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
+// Bound to the xml prefix by definition (Namespaces in XML §3); documents use
+// it without ever declaring it.
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
 type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
 type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
@@ -151,6 +154,7 @@ const withNamespaceContext = (
   baseContext: Record<string, string>,
   node: Record<string, unknown>,
 ): Record<string, string> => ({
+  xml: XML_NS,
   ...baseContext,
   ...collectNamespaceDeclarations(node),
 });
@@ -1381,6 +1385,10 @@ const choosePrefix = (
   prefixMap: Map<string, string>,
   reserved?: ReadonlyMap<string, string>,
 ): string => {
+  // The xml prefix is bound by definition — use it directly, undeclared.
+  if (uri === XML_NS) {
+    return "xml";
+  }
   const existing = prefixMap.get(uri);
   if (existing) {
     return existing;

@@ -177,6 +177,25 @@ export function findRootSchema(mod: Record<string, unknown>, xml: string): z.Zod
 
 const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 
+// libxml2 ships no built-in declarations for the XML namespace (unlike
+// Xerces' built-in xml.xsd): a schema that refs xml:* declarations (e.g.
+// ref="xml:base") while importing the namespace without a schemaLocation
+// fails to compile. Supply the standard declarations ourselves.
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+const XML_NAMESPACE_XSD = `<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="${XML_NS}">
+  <xsd:attribute name="lang" type="xsd:language"/>
+  <xsd:attribute name="space">
+    <xsd:simpleType>
+      <xsd:restriction base="xsd:NCName">
+        <xsd:enumeration value="default"/>
+        <xsd:enumeration value="preserve"/>
+      </xsd:restriction>
+    </xsd:simpleType>
+  </xsd:attribute>
+  <xsd:attribute name="base" type="xsd:anyURI"/>
+  <xsd:attribute name="id" type="xsd:ID"/>
+</xsd:schema>`;
+
 // URIs with a scheme (e.g. http://...) are absolute; the pre-errata sun tests
 // in the W3C suite use relative namespace URIs like "SType/ST_facets", which
 // libxml2 refuses to load at all ("URI is not absolute").
@@ -207,6 +226,7 @@ export async function validateXmlAgainstSchemas(
     file: string;
     targetNamespace: string;
     hasRemoteImport: boolean;
+    referencesXmlNamespace: boolean;
   }[] = [];
   const errors: string[] = [];
   const addCandidate = (xsdFile: string): void => {
@@ -222,6 +242,7 @@ export async function validateXmlAgainstSchemas(
       file: xsdFile,
       targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? "",
       hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content),
+      referencesXmlNamespace: /\bref\s*=\s*["']xml:/.test(content),
     });
   };
   for (const f of xsdFiles.map((f) => path.resolve(f))) {
@@ -276,6 +297,7 @@ export async function validateXmlAgainstSchemas(
         file,
         targetNamespace: content.match(TARGET_NS_RE)?.[1] ?? "",
         hasRemoteImport: /schemaLocation\s*=\s*["']https?:/i.test(content),
+        referencesXmlNamespace: /\bref\s*=\s*["']xml:/.test(content),
       });
     }
     if (hinted.some((c) => c.hasRemoteImport)) {
@@ -283,11 +305,29 @@ export async function validateXmlAgainstSchemas(
     }
   }
 
+  // A schema that refs xml:* declarations needs the XML namespace's attribute
+  // declarations (see XML_NAMESPACE_XSD); libxml2 resolves no others.
+  const extras: typeof candidates = [];
+  if ([...pool, ...hinted].some((c) => c.referencesXmlNamespace)) {
+    const dir = path.resolve(".xsd-to-zod-tests");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "xml-namespace.xsd");
+    if (!fs.existsSync(file) || readXmlFile(file) !== XML_NAMESPACE_XSD) {
+      fs.writeFileSync(file, XML_NAMESPACE_XSD);
+    }
+    extras.push({
+      file,
+      targetNamespace: XML_NS,
+      hasRemoteImport: false,
+      referencesXmlNamespace: false,
+    });
+  }
+
   // With more than one schema in the set, validate against the aggregate:
   // one libxml2 pass over a generated wrapper importing every entry, so
   // cross-file declarations resolve. A set that fails to COMPILE (conflicting
   // definitions across entries) falls back to per-file validation below.
-  const entries = [...pool, ...hinted];
+  const entries = [...pool, ...hinted, ...extras];
   if (entries.length > 1) {
     try {
       const result = await validateXmlAgainstSchemaSet(

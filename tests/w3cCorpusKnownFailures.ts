@@ -9,9 +9,8 @@ export const W3C_CORPUS_REASONS = {
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
-    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, xml:space ref without import) — the zod-tier round-trip succeeds",
+    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range) — the zod-tier round-trip succeeds",
   needsTriage: "needs triage",
-  undefinedValue: "parse: element value arrives as undefined (needs triage)",
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
@@ -21,12 +20,6 @@ export const W3C_CORPUS_REASONS = {
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.libxmlStrictWildcardXsiType],
   ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/Additional_w3c.xml/addC001/addC001.v", W3C_CORPUS_REASONS.undefinedValue],
-  ["msMeta/Additional_w3c.xml/isDefault072/isDefault072.v", W3C_CORPUS_REASONS.undefinedValue],
-  [
-    "msMeta/Additional_w3c.xml/isDefault078/isDefault078.v",
-    W3C_CORPUS_REASONS.libxmlGap,
-  ],
   ["msMeta/Additional_w3c.xml/isDefault079/isDefault079.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO009/attO009.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO011/attO011.v", W3C_CORPUS_REASONS.needsTriage],

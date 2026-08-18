@@ -5,12 +5,10 @@
 // same PR that lands the fix. Generated from a full vitest run, then
 // hand-maintained.
 export const REASONS = {
-  undefinedValue: "parse: element value arrives as undefined (needs triage)",
-
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
-    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, xml:space ref without import) — the zod-tier round-trip succeeds",
+    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range) — the zod-tier round-trip succeeds",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
   needsTriage: "needs triage",
   patternOnNonString:
@@ -26,9 +24,6 @@ export const REASONS = {
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB116/addB116.v", REASONS.libxmlStrictWildcardXsiType],
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
-  ["Additional/addC001/addC001.v", REASONS.undefinedValue],
-  ["Additional/isDefault072/isDefault072.v", REASONS.undefinedValue],
-  ["Additional/isDefault078/isDefault078.v", REASONS.libxmlGap],
   ["Additional/isDefault079/isDefault079.v", REASONS.needsTriage],
   ["Attribute/attO009/attO009.v", REASONS.needsTriage],
   ["Attribute/attO011/attO011.v", REASONS.needsTriage],

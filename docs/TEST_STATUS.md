@@ -108,14 +108,14 @@ Features tested include:
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187).
+- [ ] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187), XML-namespace attributes without a declaration (`xml:base`/`xml:space`; the harness supplies the standard declarations to libxml2) + `xs:list` attribute defaults (#122 `undefinedValue` bucket).
 - [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,802 passing, 97 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,805 passing, 94 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
@@ -125,12 +125,12 @@ Features tested include:
 Corpus cases that fail the round-trip are pinned as `it.fails` with a
 categorized reason: the case keeps running, and a fix that makes it pass
 turns the suite red until the pin is removed in the same PR. Two pin files:
-`tests/w3cKnownFailures.ts` (sun/ms selection, 58 pins) and
-`tests/w3cCorpusKnownFailures.ts` (full corpus, 97 pins). #122 tracks the
+`tests/w3cKnownFailures.ts` (sun/ms selection, 55 pins) and
+`tests/w3cCorpusKnownFailures.ts` (full corpus, 94 pins). #122 tracks the
 buckets with per-case triage notes; their dispositions:
 
 - **Fix in the zod tier** — genuine parse/serialize bugs: `needsTriage`
-  (20 + 20), `undefinedValue` (2 + 2), `simpleContentShape` (2 + 2), and
+  (20 + 20), `simpleContentShape` (2 + 2), and
   `patternOnNonString` (5 + 39, remaining XSD-regex translation gaps).
 - **Fix without changing the generated data model** — document-order loss
   for repeated compositors and interleaved choice branches
@@ -140,10 +140,10 @@ buckets with per-case triage notes; their dispositions:
 - **Feature decision, not a defect** — `xsi:type` on an abstract declared
   type (3 cases) needs derived-type polymorphism in codegen; design
   discussion before implementation.
-- **Won't fix (documented as pins)** — `libxmlGap` (8 + 8) and
+- **Won't fix (documented as pins)** — `libxmlGap` (7 + 7) and
   `libxmlStrictWildcardXsiType` (1 + 1): the original W3C instance/schema
   fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, `maxOccurs` beyond
-  libxml2's integer range, `xml:space` ref without import, strict-wildcard
+  libxml2's integer range, strict-wildcard
   `xsi:type` fallback). The zod-tier round-trip succeeds; the pin records the
   libxml2 tier's deviation.
 
