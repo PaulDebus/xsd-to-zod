@@ -282,3 +282,50 @@ describe("xs:list attribute fixed values", () => {
     expect(() => parseXml(schema, "<root><dims>3 4</dims></root>")).toThrow();
   });
 });
+
+describe("xs:list root element fixed/default values", () => {
+  const ROOT_LIST_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="dims" fixed="1 2">
+    <xs:simpleType>
+      <xs:list itemType="xs:int" />
+    </xs:simpleType>
+  </xs:element>
+</xs:schema>`;
+
+  const ROOT_LIST_DEFAULT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="dims" default="1 2">
+    <xs:simpleType>
+      <xs:list itemType="xs:int" />
+    </xs:simpleType>
+  </xs:element>
+</xs:schema>`;
+
+  it("emits a typed array fixed value, not a scalar literal", async () => {
+    let schemas = "";
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, ROOT_LIST_FIXED_XSD);
+      schemas = irToZod(parseXsd([file])).schemas;
+    });
+    expect(schemas).toContain("fixedValue: [1, 2]");
+    expect(schemas).not.toContain("NaN");
+  });
+
+  it("substitutes the fixed list value on a present-but-empty root", async () => {
+    const schema = await generate(ROOT_LIST_FIXED_XSD);
+    expect(parseXml(schema, "<dims/>")).toEqual([1, 2]);
+    expect(parseXml(schema, "<dims>1 2</dims>")).toEqual([1, 2]);
+    // Roots never encode the fixed constraint in the schema (same as scalar
+    // roots): present content is validated as the bare list type.
+    expect(parseXml(schema, "<dims>3 4</dims>")).toEqual([3, 4]);
+    expect(serializeXml(schema, [1, 2])).toBe("<dims>1 2</dims>");
+  });
+
+  it("substitutes the default list value on a present-but-empty root", async () => {
+    const schema = await generate(ROOT_LIST_DEFAULT_XSD);
+    expect(parseXml(schema, "<dims/>")).toEqual([1, 2]);
+    expect(parseXml(schema, "<dims>3 4</dims>")).toEqual([3, 4]);
+  });
+});
