@@ -38,9 +38,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Errata10_w3c.xml/errC001/errC001.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Group_w3c.xml/groupF009v/groupF009v.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupH009v/groupH009v.v", W3C_CORPUS_REASONS.libxmlGap],
-  ["msMeta/Group_w3c.xml/groupH014v/groupH014v.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
-  ["msMeta/Group_w3c.xml/groupH017v/groupH017v.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/Group_w3c.xml/groupH018v/groupH018v.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   ["msMeta/Group_w3c.xml/groupJ009v/groupJ009v.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupL009v/groupL009v.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupN009v/groupN009v.v", W3C_CORPUS_REASONS.libxmlGap],
@@ -53,31 +50,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
   [
-    "msMeta/Particles_w3c.xml/particlesA006/particlesA006.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesA007/particlesA007.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-
-  [
-    "msMeta/Particles_w3c.xml/particlesEb027/particlesEb027.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesEb036/particlesEb036.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesEb038/particlesEb038.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesQ013/particlesQ013.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
     "msMeta/Particles_w3c.xml/particlesQ030/particlesQ030.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
@@ -85,16 +57,8 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
     "msMeta/Particles_w3c.xml/particlesQ032/particlesQ032.v",
     W3C_CORPUS_REASONS.libxmlRejectsSerialized,
   ],
-  [
-    "msMeta/Particles_w3c.xml/particlesV003/particlesV003.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
   ["msMeta/Particles_w3c.xml/particlesZ005/particlesZ005.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Particles_w3c.xml/particlesZ012/particlesZ012.v", W3C_CORPUS_REASONS.needsTriage],
-  [
-    "msMeta/Particles_w3c.xml/particlesZ034_a1/particlesZ034_a1.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
   [
     "msMeta/Regex_w3c.xml/ArabicPresentationForms-A/ArabicPresentationForms-A.v",
     W3C_CORPUS_REASONS.patternOnNonString,

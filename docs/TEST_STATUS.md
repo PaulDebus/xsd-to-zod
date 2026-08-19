@@ -74,7 +74,7 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 **License:** W3C Document License — from [w3.org](https://www.w3.org/XML/2004/xml-schema-test-suite/)
 
-Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels (ipo6 pinned as `it.fails`: group-in-choice document order is lost); a broader valid-instance-only selection (`tests/roundtrip-w3c-extended.test.ts`: 18 sun/ms test sets, the ms schema-composition/annotation sets, and a group-filtered nist datatype pilot) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`. Invalid-instance (negative) tests (`tests/roundtrip-w3c-negative.test.ts`) assert the zod tier rejects what the suite marks invalid; where the zod tier is intentionally lenient, the libxml2 tier is the conformance authority and the leniency is recorded in `.xsd-to-zod-tests/w3c-negative-conformance.json`.
+Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels; a broader valid-instance-only selection (`tests/roundtrip-w3c-extended.test.ts`: 18 sun/ms test sets, the ms schema-composition/annotation sets, and a group-filtered nist datatype pilot) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`. Invalid-instance (negative) tests (`tests/roundtrip-w3c-negative.test.ts`) assert the zod tier rejects what the suite marks invalid; where the zod tier is intentionally lenient, the libxml2 tier is the conformance authority and the leniency is recorded in `.xsd-to-zod-tests/w3c-negative-conformance.json`.
 
 Note: the pre-errata sun tests use relative namespace URIs (e.g. `targetNamespace="SType/ST_facets"`), which libxml2 refuses to load — for those cases the libxml2 cross-validation of the serialized XML is skipped (the zod-tier round-trip still runs in full).
 
@@ -101,7 +101,7 @@ Features tested include:
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,558 passing, 57 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,572 passing, 43 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
 - [x] W3C invalid-instance (negative) tests (1,528 cases: 1,139 rejected by the zod tier, 574 accepted leniently — libxml2 confirms invalid, recorded in the negative conformance report, 7 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
@@ -115,7 +115,7 @@ Features tested include:
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,806 passing, 93 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,817 passing, 82 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
@@ -125,18 +125,20 @@ Features tested include:
 Corpus cases that fail the round-trip are pinned as `it.fails` with a
 categorized reason: the case keeps running, and a fix that makes it pass
 turns the suite red until the pin is removed in the same PR. Two pin files:
-`tests/w3cKnownFailures.ts` (sun/ms selection, 54 pins) and
-`tests/w3cCorpusKnownFailures.ts` (full corpus, 93 pins). #122 tracks the
+`tests/w3cKnownFailures.ts` (sun/ms selection, 43 pins) and
+`tests/w3cCorpusKnownFailures.ts` (full corpus, 82 pins). #122 tracks the
 buckets with per-case triage notes; their dispositions:
 
 - **Fix in the zod tier** — genuine parse/serialize bugs: `needsTriage`
-  (20 + 20), `simpleContentShape` (2 + 2), and
+  (18 + 18), `simpleContentShape` (2 + 2), and
   `patternOnNonString` (5 + 39, remaining XSD-regex translation gaps).
 - **Fix without changing the generated data model** — document-order loss
   for repeated compositors and interleaved choice branches
-  (`choiceDocumentOrder`, 3 + 3, plus the order cases in
-  `libxmlRejectsSerialized`): the fix belongs in runtime metadata (like the
-  retained-lexical store), never in the emitted zod shapes.
+  (`choiceDocumentOrder`, 1 + 1): the fix belongs in runtime metadata (like
+  the retained-lexical store), never in the emitted zod shapes. The
+  document-order preservation fix also cleared the 8 `particles*`
+  `libxmlRejectsSerialized` cases and `groupH017v` — same root cause — so
+  those pins were removed too.
 - **Feature decision, not a defect** — `xsi:type` on an abstract declared
   type (3 cases) needs derived-type polymorphism in codegen; design
   discussion before implementation.
