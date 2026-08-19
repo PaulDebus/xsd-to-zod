@@ -1132,6 +1132,76 @@ const isQNameTyped = (typeName: QName, ir: XsdIr, seen?: Set<string>): boolean =
   return false;
 };
 
+// List-aware fixed-value meta emission shared by fields and roots: a list
+// lexical is whitespace-separated items, so the meta carries a typed array
+// (or the raw lexical for structured items) instead of a scalar literal.
+// Roots additionally carry the coerced scalar for plain types and the fixed
+// lexical in every mode — their schema never encodes the fixed constraint
+// (no z.literal / refine), so the runtime reads it from the meta alone.
+const fixedValueMetaParts = (
+  typeName: QName,
+  fixedValue: string,
+  ir: XsdIr,
+  structured: boolean,
+  root = false,
+): string[] => {
+  const parts: string[] = [];
+  const listItemType = resolveListItemType(typeName, ir);
+  if (listItemType !== undefined) {
+    // List-typed fixed values ride a refine, not a z.literal, so the
+    // runtime cannot read the fixed value from the schema def; substitute
+    // the typed array from the meta on absence (attributes) /
+    // present-but-empty (elements). An empty fixed lexical is an empty
+    // list: the raw "" would split into [""] and fail item validation.
+    const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
+    if (itemSt) {
+      // Structured items transform from the lexical, so the meta carries
+      // the raw lexical for the schema's preprocess to split and parse.
+      const trimmed = fixedValue.trim();
+      parts.push(`fixedValue: ${trimmed === "" ? "[]" : JSON.stringify(fixedValue)}`);
+    } else {
+      parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue)}`);
+    }
+  } else if (structured && structuredTypeOfTypeName(typeName, ir)) {
+    // Structured fixed values cannot ride a z.literal (reference equality
+    // on objects): the constraint is a canonical-lexical refine and the
+    // runtime substitutes the lexical from here (validation transforms it).
+    parts.push(`fixedValue: ${JSON.stringify(fixedValue)}`);
+  } else if (root) {
+    // Plain-typed roots: the schema is the bare type, so the runtime needs
+    // the coerced value in the meta (fields read it from z.literal).
+    parts.push(`fixedValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), fixedValue)}`);
+  }
+  if (!structured || root) {
+    // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
+    parts.push(`fixedLexical: ${JSON.stringify(fixedValue)}`);
+  }
+  return parts;
+};
+
+// List-aware default-value meta emission shared by fields and roots: a list
+// lexical is whitespace-separated items, so the meta carries a typed array
+// (or the raw lexical for structured items) instead of a scalar literal.
+const defaultValueMetaParts = (
+  typeName: QName,
+  defaultValue: string,
+  ir: XsdIr,
+  structured: boolean,
+): string[] => {
+  const listItemType = resolveListItemType(typeName, ir);
+  if (listItemType === undefined) {
+    return [`defaultValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), defaultValue)}`];
+  }
+  const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
+  if (itemSt) {
+    // Structured items transform from the lexical, so the meta carries the
+    // raw lexical for the schema's preprocess to split and parse.
+    const trimmed = defaultValue.trim();
+    return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
+  }
+  return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+};
+
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict.
@@ -1169,39 +1239,10 @@ const fieldsMetaFor = (
       field.fixedValue === undefined &&
       (field.kind === "element" || (structured && st && field.kind === "attribute"))
     ) {
-      parts.push(
-        `defaultValue: ${typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.defaultValue)}`,
-      );
+      parts.push(...defaultValueMetaParts(field.typeName, field.defaultValue, ir, structured));
     }
     if (field.fixedValue !== undefined) {
-      const listItemType = resolveListItemType(field.typeName, ir);
-      if (listItemType !== undefined) {
-        // List-typed fixed values ride a refine, not a z.literal, so the
-        // runtime cannot read the fixed value from the schema def; substitute
-        // the typed array from the meta on absence (attributes) /
-        // present-but-empty (elements). An empty fixed lexical is an empty
-        // list: the raw "" would split into [""] and fail item validation.
-        const itemSt = structured
-          ? structuredType(resolveBuiltinLocal(listItemType, ir))
-          : undefined;
-        if (itemSt) {
-          // Structured items transform from the lexical, so the meta carries
-          // the raw lexical for the schema's preprocess to split and parse.
-          const trimmed = field.fixedValue.trim();
-          parts.push(`fixedValue: ${trimmed === "" ? "[]" : JSON.stringify(field.fixedValue)}`);
-        } else {
-          parts.push(`fixedValue: ${listLiteral(field.typeName, ir, field.fixedValue)}`);
-        }
-      } else if (structured && st) {
-        // Structured fixed values cannot ride a z.literal (reference equality
-        // on objects): the constraint is a canonical-lexical refine and the
-        // runtime substitutes the lexical from here (validation transforms it).
-        parts.push(`fixedValue: ${JSON.stringify(field.fixedValue)}`);
-      }
-      if (!structured) {
-        // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
-        parts.push(`fixedLexical: ${JSON.stringify(field.fixedValue)}`);
-      }
+      parts.push(...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured));
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
@@ -1712,14 +1753,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(
-        `defaultValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.defaultValue)}`,
+        ...defaultValueMetaParts(rootDef.typeName, rootDef.defaultValue, ir, structured),
       );
     }
     if (rootDef.fixedValue !== undefined) {
       rootMeta.push(
-        `fixedValue: ${typedLiteral(resolvePrimitiveKind(rootDef.typeName, ir), rootDef.fixedValue)}`,
+        ...fixedValueMetaParts(rootDef.typeName, rootDef.fixedValue, ir, structured, true),
       );
-      rootMeta.push(`fixedLexical: ${JSON.stringify(rootDef.fixedValue)}`);
     }
     // JSDoc on the export so IDE hover shows the docs: the element's own
     // annotation wins, otherwise fall back to the annotated type.

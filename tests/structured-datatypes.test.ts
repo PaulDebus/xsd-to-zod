@@ -562,6 +562,31 @@ describe("datatypes: structured runtime round-trip", () => {
     );
   });
 
+  it("substitutes a fixed xs:list root value as an array of values", async () => {
+    await withXsd(
+      `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="days" fixed="2002-10-10 2003-11-11">
+    <xs:simpleType>
+      <xs:list itemType="xs:date"/>
+    </xs:simpleType>
+  </xs:element>
+</xs:schema>`,
+      async (file) => {
+        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const mod = await importGeneratedSchemas(schemas);
+        const schema = (mod as { daysSchema: z.ZodType }).daysSchema;
+        const parsed = parseXml(schema, "<days/>");
+        expect(parsed).toEqual([
+          { year: 2002, month: 10, day: 10 },
+          { year: 2003, month: 11, day: 11 },
+        ]);
+        expect(parseXml(schema, "<days>2002-10-10 2003-11-11</days>")).toEqual(parsed);
+        expect(serializeXml(schema, parsed)).toBe("<days>2002-10-10 2003-11-11</days>");
+      },
+    );
+  });
+
   it("rejects invalid lexicals through the generated schema", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
       const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
