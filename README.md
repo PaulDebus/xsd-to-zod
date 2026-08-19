@@ -99,7 +99,7 @@ const xml = serializeXml(orderSchema, data);
 
 ## Features
 
-- **XSD constructs**: `sequence`, `choice` (→ per-group refine checks), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, mixed content (`mixed="true"` → optional `_text` field next to the child elements)
+- **XSD constructs**: `sequence`, `choice` (→ per-group refine checks), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, substitution groups (a head element's field becomes a union over its member elements), mixed content (`mixed="true"` → optional `_text` field next to the child elements)
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
@@ -235,10 +235,10 @@ npm test
 |----------|------:|----------------|
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
-| W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: substitution groups) |
-| W3C sun/ms/nist selection | 2,615 (2,418 ✅, 197 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
+| W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: group-in-choice document order is lost) |
+| W3C sun/ms/nist selection | 2,615 (2,558 ✅, 57 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
 | W3C negative (invalid instances) | 1,528 (1,520 ✅, 8 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
-| W3C full corpus (main + weekly) | 13,899 (11,203 ✅, 2,696 ⚠️) | All XSD 1.0 test sets via `suite.xml`; pins dominated by lexical preservation, regex translation, wildcards and substitution groups |
+| W3C full corpus (main + weekly) | 13,899 (13,806 ✅, 93 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
@@ -257,12 +257,11 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 Not supported by the generator (the conformance tier validates them anyway):
 
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
-- Substitution groups
 
 Zod-tier specifics worth knowing:
 
 - Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip
-- `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped, not validated (lax tier)
+- `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped; namespace constraints (`##other`, `##targetNamespace`, …) are enforced, but wildcard content itself is not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)
 - `xs:float`/`xs:double` specials `INF`/`-INF`/`NaN` are rejected
