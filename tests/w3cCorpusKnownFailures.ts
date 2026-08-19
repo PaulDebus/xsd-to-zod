@@ -26,14 +26,8 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ComplexType_w3c.xml/ctL022/ctL022.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  [
-    "msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v",
-    W3C_CORPUS_REASONS.libxmlGap,
-  ],
-  [
-    "msMeta/DataTypes_w3c.xml/gMonth004_2063/gMonth004_2063.v",
-    W3C_CORPUS_REASONS.libxmlGap,
-  ],
+  ["msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v", W3C_CORPUS_REASONS.libxmlGap],
+  ["msMeta/DataTypes_w3c.xml/gMonth004_2063/gMonth004_2063.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Element_w3c.xml/QFE1700c2/QFE1700c2.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Errata10_w3c.xml/errC001/errC001.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Group_w3c.xml/groupF009v/groupF009v.v", W3C_CORPUS_REASONS.libxmlGap],

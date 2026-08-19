@@ -158,7 +158,8 @@ describe("document order of interleaved repeated compositors", () => {
   });
 
   it("substitution-group members keep their document order", async () => {
-    const schema = await namedSchemaFor(`<?xml version="1.0"?>
+    const schema = await namedSchemaFor(
+      `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:complexType name="T">
     <xs:sequence>
@@ -168,7 +169,9 @@ describe("document order of interleaved repeated compositors", () => {
   <xs:element name="head" type="xs:string"/>
   <xs:element name="member" substitutionGroup="head" type="xs:string"/>
   <xs:element name="t" type="T"/>
-</xs:schema>`, "tSchema");
+</xs:schema>`,
+      "tSchema",
+    );
     const xml = "<t><head>1</head><member>2</member><head>3</head></t>";
     expect(serializeXml(schema, parseXml(schema, xml))).toBe(xml);
   });
