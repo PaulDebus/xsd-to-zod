@@ -14,11 +14,11 @@
 XSD files ──► parseXsd() ──► IR ──► irToZod()
                                         │
                                         ▼
-                    one .zod.ts: Zod schemas + xmlRegistry entries
+            one .zod.ts: Zod schemas + xmlRegistry entries
                                         │
                                         ▼
-                    parseXml / safeParseXml / serializeXml   (zod tier)
-                    validateXml                              (libxml2 tier, optional)
+            parseXml / safeParseXml / serializeXml   (zod tier)
+            validateXml                              (libxml2 tier, optional)
 ```
 
 ## Quick look: XSD → Zod → typed data
@@ -153,7 +153,7 @@ Bundle all imports and includes into a single self-contained XSD:
 ```sh
 xsd-to-zod bundle main.xsd                         # → main.bundled.xsd
 xsd-to-zod bundle main.xsd -o dist/schema.xsd      # → dist/schema.xsd
-xsd-to-zod bundle main.xsd --format                 # formatted output
+xsd-to-zod bundle main.xsd --format                # formatted output
 ```
 
 Validate an XML document:
