@@ -9,6 +9,7 @@ Published on npm as `xsd-to-zod`.
 
 - **Branching**: all PRs must branch from `origin/main` into a new branch. No direct pushes to `main`.
 - **Style**: be concise. Prefer short, focused edits over verbose explanations.
+- **Delegation**: hand clear-cut, well-defined tasks (small fixes, mechanical edits, docs touch-ups) to the `coder-simple` subagent (DeepSeek free tier). Reserve the main agent for analysis, design, and ambiguous work.
 - **Testing**: all PRs must pass the full testsuite before they can be submitted for review, including test coverage check. Use `npm run test:quick` for the dev loop (skips the heavy upstream/W3C corpus round-trips).
 - Dont amend commits unless it is not pushed and the change was missing from it. commits show the progress
 
