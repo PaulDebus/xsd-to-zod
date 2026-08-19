@@ -70,7 +70,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Particles/particlesZ034_a1/particlesZ034_a1.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE065/stE065.v", REASONS.libxmlRejectsSerialized],
   ["SimpleType/stE066/stE066.v", REASONS.libxmlRejectsSerialized],
-  ["SimpleType/stZ072/stZ072.v", REASONS.needsTriage],
   ["SType/st_name00401m/ST_name00401m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.needsTriage],
