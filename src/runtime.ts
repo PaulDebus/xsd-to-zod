@@ -634,6 +634,13 @@ const substQNameStore = new WeakMap<object, LexicalRecord>();
 type QNameNsRecord = Map<string, Record<string, string> | (Record<string, string> | undefined)[]>;
 const qnameNsStore = new WeakMap<object, QNameNsRecord>();
 
+// Element children of a parsed object in document order: [result key, index
+// within that key's value array] per occurrence, recorded by readObject from
+// the parser's attachment order (childOrderOf) and consulted by
+// writeObjectFields. Without it, interleaved repeated compositor branches
+// collapse into per-field arrays and the round-trip reorders the document.
+const documentOrderStore = new WeakMap<object, [string, number][]>();
+
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
 const qnameBindingsOf = (
@@ -723,6 +730,14 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
     qnameNsStore.delete(walked);
     qnameNsStore.set(parsed, qnameRecord);
   }
+  // Document order is index-based, so it transfers verbatim: zod's rebuild
+  // preserves array positions (added defaults are caught by the serializer's
+  // staleness check).
+  const documentOrder = documentOrderStore.get(walked);
+  if (documentOrder !== undefined) {
+    documentOrderStore.delete(walked);
+    documentOrderStore.set(parsed, documentOrder);
+  }
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
       const n = Math.min(walked.length, parsed.length);
@@ -802,9 +817,9 @@ const findElementValues = (
   qname: string,
   namespaceContext: Record<string, string>,
   substitutes: readonly QName[] = [],
-): { value: unknown; qname: QName }[] => {
+): { value: unknown; qname: QName; rawKey: string }[] => {
   const expected = [qname, ...substitutes].map((q) => splitClark(q));
-  const matches: { value: unknown; qname: QName }[] = [];
+  const matches: { value: unknown; qname: QName; rawKey: string }[] = [];
   for (const [key, value] of Object.entries(node)) {
     if (key.startsWith("@_") || key === "#text" || key === "#cdata") {
       continue;
@@ -831,7 +846,7 @@ const findElementValues = (
             (e.namespace === "" && !prefix)),
       );
       if (match !== undefined) {
-        matches.push({ value: item, qname: `{${match.namespace}}${match.local}` });
+        matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
       }
     }
   }
@@ -914,6 +929,75 @@ const extractRoot = (
 // Reading: XML nodes → data, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
+// Record the result object's element children in document order (see
+// documentOrderStore). Field claims map each raw occurrence to its slot in
+// the result; unclaimed children (and overflow occurrences of scalar fields)
+// are wildcard extras keyed by their clark name when an xs:any sweep captured
+// them, otherwise dropped from the data and the recording alike.
+const recordDocumentOrder = (
+  result: Record<string, unknown>,
+  node: Record<string, unknown>,
+  elementReads: {
+    key: string;
+    isArray: boolean;
+    claimed: { rawKey: string; rawValue: unknown; index: number }[];
+  }[],
+  hasAny: boolean,
+  namespaceContext: Record<string, string>,
+): void => {
+  const order = childOrderOf(node);
+  if (order === undefined) {
+    return;
+  }
+  // Claims per raw node key, FIFO per raw value: within one tag, both the
+  // field scan and the order walk follow document order.
+  const claims = new Map<string, Map<unknown, [key: string, index: number, isArray: boolean][]>>();
+  for (const read of elementReads) {
+    for (const claim of read.claimed) {
+      let byValue = claims.get(claim.rawKey);
+      if (byValue === undefined) {
+        byValue = new Map();
+        claims.set(claim.rawKey, byValue);
+      }
+      const queue = byValue.get(claim.rawValue) ?? [];
+      queue.push([read.key, claim.index, read.isArray]);
+      byValue.set(claim.rawValue, queue);
+    }
+  }
+  const context = withNamespaceContext(namespaceContext, node);
+  const extraCounts = new Map<string, number>();
+  const retained: [string, number][] = [];
+  for (const [rawKey, rawValue] of order) {
+    if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
+      continue;
+    }
+    const claim = claims.get(rawKey)?.get(rawValue)?.shift();
+    if (claim !== undefined && (claim[2] || claim[1] === 0)) {
+      retained.push([claim[0], claim[1]]);
+      continue;
+    }
+    if (!hasAny) {
+      continue;
+    }
+    // Wildcard extra (or scalar overflow, which the sweep captures as one) —
+    // resolve the clark key exactly as walkChildren does.
+    const { prefix, local } = splitQName(rawKey);
+    const itemNode =
+      rawValue !== null && typeof rawValue === "object"
+        ? (rawValue as Record<string, unknown>)
+        : undefined;
+    const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+    const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
+    const clarkKey = `{${namespace}}${local}`;
+    const index = extraCounts.get(clarkKey) ?? 0;
+    extraCounts.set(clarkKey, index + 1);
+    retained.push([clarkKey, index]);
+  }
+  if (retained.length > 0) {
+    documentOrderStore.set(result, retained);
+  }
+};
+
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
@@ -932,18 +1016,26 @@ const readObject = (
   // Null prototype: an XSD element named __proto__ must become an own property,
   // not a silent prototype mutation (#84).
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const elementReads: {
+    key: string;
+    isArray: boolean;
+    claimed: { rawKey: string; rawValue: unknown; index: number }[];
+  }[] = [];
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {
       continue;
     }
-    const { present, value, lexical, substQNames, qnameNs } = readField(
+    const { present, value, lexical, substQNames, qnameNs, claimed } = readField(
       fieldMeta,
       fieldSchema,
       node,
       namespaceContext,
       exactElementQNames,
     );
+    if (claimed !== undefined && claimed.length > 0) {
+      elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
+    }
     if (present) {
       result[key] = value;
       if (lexical !== undefined) {
@@ -976,6 +1068,7 @@ const readObject = (
       scalarElements,
     });
   }
+  recordDocumentOrder(result, node, elementReads, hasAny, namespaceContext);
   return result;
 };
 
@@ -1202,6 +1295,11 @@ type FieldRead = {
   /** Member qname per occurrence — set only where it differs from the head. */
   substQNames?: string | (string | undefined)[] | undefined;
   qnameNs?: Record<string, string> | (Record<string, string> | undefined)[] | undefined;
+  /**
+   * Raw parser-node occurrences the field claimed, index-aligned with the
+   * produced value(s) — readObject maps them onto document-order positions.
+   */
+  claimed?: { rawKey: string; rawValue: unknown; index: number }[];
 };
 
 const readField = (
@@ -1278,6 +1376,11 @@ const readField = (
   });
   const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
   const substituted = qnames.some((q) => q !== undefined);
+  const claimed = matched.map((entry, index) => ({
+    rawKey: entry.rawKey,
+    rawValue: entry.value,
+    index,
+  }));
   if (field.isArray) {
     const lexicals = occurrences.map((o) => o.lexical);
     const qnameNs = occurrences.map((o) => o.qnameNs);
@@ -1287,6 +1390,7 @@ const readField = (
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
       substQNames: substituted ? qnames : undefined,
       qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
+      claimed,
     };
   }
   if (occurrences.length > 0) {
@@ -1296,6 +1400,7 @@ const readField = (
       lexical: occurrences[0]!.lexical,
       substQNames: qnames[0],
       qnameNs: occurrences[0]!.qnameNs,
+      claimed,
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
@@ -1619,6 +1724,56 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
   return serializeDatatypeValue(datatype, value);
 };
 
+// The retained document order describes the data as parsed. It is honored
+// only while it still does: every declared element field and every wildcard
+// extra must hold exactly as many values as the recording — added, removed,
+// or re-parented values (and defaults zod filled after the walk) break the
+// correspondence, and objects with mixed content keep the schema-order path
+// since text interleaving is not modeled. Anything else falls back to
+// schema-order emission.
+const usableDocumentOrder = (
+  obj: Record<string, unknown>,
+  fields: Record<string, XmlFieldMeta>,
+  hasElementWildcard: boolean,
+): [string, number][] | undefined => {
+  const retained = documentOrderStore.get(obj);
+  if (retained === undefined) {
+    return undefined;
+  }
+  const countOf = (value: unknown): number =>
+    value === undefined ? 0 : Array.isArray(value) ? value.length : 1;
+  const counts = new Map<string, number>();
+  for (const [key] of retained) {
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const [key, fieldMeta] of Object.entries(fields)) {
+    if (fieldMeta.kind === "text") {
+      return undefined;
+    }
+    if (fieldMeta.kind !== "element") {
+      continue;
+    }
+    if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {
+      return undefined;
+    }
+    counts.delete(key);
+  }
+  // Remaining retained keys are wildcard extras (clark keys): they must match
+  // the data's extras one-to-one, with none left over on either side.
+  if (hasElementWildcard) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key in fields || value === undefined || key.startsWith("@")) {
+        continue;
+      }
+      if (counts.get(key) !== countOf(value)) {
+        return undefined;
+      }
+      counts.delete(key);
+    }
+  }
+  return counts.size === 0 ? retained : undefined;
+};
+
 const writeObjectFields = (
   schema: AnySchema,
   obj: Record<string, unknown>,
@@ -1692,6 +1847,132 @@ const writeObjectFields = (
     }
   };
 
+  // Emit one attribute field (order-insignificant).
+  const emitAttribute = (key: string, fieldMeta: XmlFieldMeta, fieldSchema: AnySchema): void => {
+    const value = obj[key];
+    if (value === undefined) {
+      return;
+    }
+    const field = analyzeField(fieldSchema);
+    // XSD: an attribute equal to its default need not be written.
+    if (field.hasDefault && value === field.defaultValue) {
+      return;
+    }
+    const stored = lexicals?.get(key);
+    const storedSingle = typeof stored === "string" ? stored : undefined;
+    const leaf = serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle);
+    const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+    const declared = declareQNamePrefixes(
+      leaf,
+      typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined,
+      ctx,
+    );
+    attributes.push(
+      `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"`,
+    );
+  };
+
+  // Build one element-field occurrence (index i into the field's value
+  // array), honoring retained lexicals and substitution-group member tags.
+  // Returns the element string, or undefined for a hole in the value array.
+  const emitElementOccurrence = (
+    key: string,
+    fieldMeta: XmlFieldMeta,
+    fieldSchema: AnySchema,
+    i: number,
+  ): string | undefined => {
+    const field = analyzeField(fieldSchema);
+    const value = obj[key];
+    const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
+    const item = values[i];
+    if (item === undefined) {
+      return undefined;
+    }
+    const stored = lexicals?.get(key);
+    const storedSingle = typeof stored === "string" ? stored : undefined;
+    const storedQNames = substQNames?.get(key);
+    // A substituted occurrence re-emits its member tag and serializes with
+    // the member's own type schema; head occurrences use the field qname.
+    const occurrenceQName =
+      (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
+    const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
+    const localName = elementName(occurrenceQName, ctx.prefixMap, ctx.qnameNs);
+    if (item === null) {
+      usesXsi = true;
+      return `<${localName} xsi:nil="true"/>`;
+    }
+    if (fieldMeta.open) {
+      const inner = openSerialize(item, ctx);
+      usesXsi = usesXsi || inner.usesXsi;
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+      return `<${localName}${attrStr}>${inner.body}</${localName}>`;
+    }
+    if (hasObjectShape(itemSchema) && typeof item === "object" && !Array.isArray(item)) {
+      const inner = writeObjectFields(itemSchema, item as Record<string, unknown>, ctx);
+      usesXsi = usesXsi || inner.usesXsi;
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+      return `<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`;
+    }
+    const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
+    const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
+    const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+    const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+    return `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
+  };
+
+  const documentOrder = usableDocumentOrder(obj, fields, anyWildcards.length > 0);
+  if (documentOrder !== undefined) {
+    // Parsed data that still matches its parse-time recording: replay the
+    // children in document order (wildcard extras included) so interleaved
+    // repeated compositors survive the round-trip. Occurrences are built in
+    // schema order and only assembled in document order, so namespace prefix
+    // allocation observes the same field sequence as the schema-order path.
+    const buffered = new Map<string, (string | undefined)[]>();
+    for (const [key, fieldMeta] of Object.entries(fields)) {
+      const fieldSchema = shape[key];
+      if (!fieldSchema) {
+        continue;
+      }
+      if (fieldMeta.kind === "attribute") {
+        emitAttribute(key, fieldMeta, fieldSchema);
+        continue;
+      }
+      if (fieldMeta.kind !== "element") {
+        continue;
+      }
+      const value = obj[key];
+      if (value === undefined) {
+        continue;
+      }
+      const field = analyzeField(fieldSchema);
+      const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
+      buffered.set(
+        key,
+        values.map((_, i) => emitElementOccurrence(key, fieldMeta, fieldSchema, i)),
+      );
+    }
+    for (const [key, index] of documentOrder) {
+      const built = buffered.get(key);
+      if (built !== undefined) {
+        const emitted = built[index];
+        if (emitted !== undefined) {
+          elements.push(emitted);
+        }
+        continue;
+      }
+      // Wildcard extra, recorded under its clark key.
+      const value = obj[key];
+      const item = Array.isArray(value) ? value[index] : value;
+      if (item === undefined) {
+        continue;
+      }
+      usesXsi =
+        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx) ||
+        usesXsi;
+    }
+    return { attributes, elements, usesXsi };
+  }
+
   let elementOrdinal = 0;
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
@@ -1708,28 +1989,8 @@ const writeObjectFields = (
       }
       elementOrdinal++;
     }
-    const field = analyzeField(fieldSchema);
-    const stored = lexicals?.get(key);
-    const storedSingle = typeof stored === "string" ? stored : undefined;
-
     if (fieldMeta.kind === "attribute") {
-      if (value === undefined) {
-        continue;
-      }
-      // XSD: an attribute equal to its default need not be written.
-      if (field.hasDefault && value === field.defaultValue) {
-        continue;
-      }
-      const leaf = serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle);
-      const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
-      const declared = declareQNamePrefixes(
-        leaf,
-        typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined,
-        ctx,
-      );
-      attributes.push(
-        `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"`,
-      );
+      emitAttribute(key, fieldMeta, fieldSchema);
       continue;
     }
 
@@ -1737,6 +1998,9 @@ const writeObjectFields = (
       if (value === undefined) {
         continue;
       }
+      const field = analyzeField(fieldSchema);
+      const stored = lexicals?.get(key);
+      const storedSingle = typeof stored === "string" ? stored : undefined;
       elements.push(serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle));
       continue;
     }
@@ -1746,43 +2010,13 @@ const writeObjectFields = (
     }
     // Elements are always written when present in the data — even when equal
     // to their default/fixed, which are parse-time concerns only (#66).
+    const field = analyzeField(fieldSchema);
     const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
-    const storedQNames = substQNames?.get(key);
     for (let i = 0; i < values.length; i++) {
-      const item = values[i];
-      if (item === undefined) {
-        continue;
+      const emitted = emitElementOccurrence(key, fieldMeta, fieldSchema, i);
+      if (emitted !== undefined) {
+        elements.push(emitted);
       }
-      // A substituted occurrence re-emits its member tag and serializes with
-      // the member's own type schema; head occurrences use the field qname.
-      const occurrenceQName =
-        (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
-      const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
-      const localName = elementName(occurrenceQName, ctx.prefixMap, ctx.qnameNs);
-      if (item === null) {
-        usesXsi = true;
-        elements.push(`<${localName} xsi:nil="true"/>`);
-        continue;
-      }
-      if (fieldMeta.open) {
-        const inner = openSerialize(item, ctx);
-        usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
-        elements.push(`<${localName}${attrStr}>${inner.body}</${localName}>`);
-        continue;
-      }
-      if (hasObjectShape(itemSchema) && typeof item === "object" && !Array.isArray(item)) {
-        const inner = writeObjectFields(itemSchema, item as Record<string, unknown>, ctx);
-        usesXsi = usesXsi || inner.usesXsi;
-        const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
-        elements.push(`<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`);
-        continue;
-      }
-      const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
-      const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
-      const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
-      const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
-      elements.push(`<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`);
     }
   }
 
