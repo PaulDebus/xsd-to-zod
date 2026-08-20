@@ -634,12 +634,17 @@ const substQNameStore = new WeakMap<object, LexicalRecord>();
 type QNameNsRecord = Map<string, Record<string, string> | (Record<string, string> | undefined)[]>;
 const qnameNsStore = new WeakMap<object, QNameNsRecord>();
 
-// Element children of a parsed object in document order: [result key, index
-// within that key's value array] per occurrence, recorded by readObject from
-// the parser's attachment order (childOrderOf) and consulted by
-// writeObjectFields. Without it, interleaved repeated compositor branches
-// collapse into per-field arrays and the round-trip reorders the document.
-const documentOrderStore = new WeakMap<object, [string, number][]>();
+/** Raw parser-node occurrence claimed by a field, index-aligned with the field's value array. */
+type ClaimedOccurrence = { rawKey: string; rawValue: unknown; index: number };
+/** One element child in document order: result key + index within that key's value array. */
+type DocumentOrderEntry = [key: string, index: number];
+
+// Element children of a parsed object in document order (a DocumentOrderEntry
+// per occurrence), recorded by readObject from the parser's attachment order
+// (childOrderOf) and consulted by writeObjectFields. Without it, interleaved
+// repeated compositor branches collapse into per-field arrays and the
+// round-trip reorders the document.
+const documentOrderStore = new WeakMap<object, DocumentOrderEntry[]>();
 
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
@@ -937,11 +942,7 @@ const extractRoot = (
 const recordDocumentOrder = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
-  elementReads: {
-    key: string;
-    isArray: boolean;
-    claimed: { rawKey: string; rawValue: unknown; index: number }[];
-  }[],
+  elementReads: { key: string; isArray: boolean; claimed: ClaimedOccurrence[] }[],
   hasAny: boolean,
   namespaceContext: Record<string, string>,
 ): void => {
@@ -949,9 +950,11 @@ const recordDocumentOrder = (
   if (order === undefined) {
     return;
   }
-  // Claims per raw node key, FIFO per raw value: within one tag, both the
-  // field scan and the order walk follow document order.
-  const claims = new Map<string, Map<unknown, [key: string, index: number, isArray: boolean][]>>();
+  // Claims per raw node key, FIFO per raw value. The invariant the queue
+  // relies on: findElementValues (field scan) and childOrderOf (order walk)
+  // both iterate a given raw tag's occurrences in document order.
+  type PendingClaim = [key: string, index: number, isArray: boolean];
+  const claims = new Map<string, Map<unknown, PendingClaim[]>>();
   for (const read of elementReads) {
     for (const claim of read.claimed) {
       let byValue = claims.get(claim.rawKey);
@@ -966,29 +969,27 @@ const recordDocumentOrder = (
   }
   const context = withNamespaceContext(namespaceContext, node);
   const extraCounts = new Map<string, number>();
-  const retained: [string, number][] = [];
+  const retained: DocumentOrderEntry[] = [];
   for (const [rawKey, rawValue] of order) {
     if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
       continue;
     }
     const claim = claims.get(rawKey)?.get(rawValue)?.shift();
-    if (claim !== undefined && (claim[2] || claim[1] === 0)) {
-      retained.push([claim[0], claim[1]]);
-      continue;
+    if (claim !== undefined) {
+      const [key, index, isArray] = claim;
+      if (isArray || index === 0) {
+        retained.push([key, index]);
+        continue;
+      }
     }
     if (!hasAny) {
       continue;
     }
-    // Wildcard extra (or scalar overflow, which the sweep captures as one) —
-    // resolve the clark key exactly as walkChildren does.
-    const { prefix, local } = splitQName(rawKey);
-    const itemNode =
-      rawValue !== null && typeof rawValue === "object"
-        ? (rawValue as Record<string, unknown>)
-        : undefined;
-    const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-    const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-    const clarkKey = `{${namespace}}${local}`;
+    // Wildcard extra (or scalar overflow, which the sweep captures as one).
+    // The retained-first-occurrence rule must stay in lockstep with
+    // sweepWildcards' scalar-overflow capture — both count occurrences in the
+    // same scan order.
+    const clarkKey = rawChildClarkKey(rawKey, rawValue, context);
     const index = extraCounts.get(clarkKey) ?? 0;
     extraCounts.set(clarkKey, index + 1);
     retained.push([clarkKey, index]);
@@ -1016,11 +1017,7 @@ const readObject = (
   // Null prototype: an XSD element named __proto__ must become an own property,
   // not a silent prototype mutation (#84).
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  const elementReads: {
-    key: string;
-    isArray: boolean;
-    claimed: { rawKey: string; rawValue: unknown; index: number }[];
-  }[] = [];
+  const elementReads: { key: string; isArray: boolean; claimed: ClaimedOccurrence[] }[] = [];
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {
@@ -1050,6 +1047,7 @@ const readObject = (
     }
   }
   const fieldList = Object.values(fields);
+  const hasTextField = fieldList.some((f) => f.kind === "text");
   const hasAny = fieldList.some((f) => f.kind === "any");
   const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
   if (hasAny || hasAnyAttribute) {
@@ -1068,7 +1066,11 @@ const readObject = (
       scalarElements,
     });
   }
-  recordDocumentOrder(result, node, elementReads, hasAny, namespaceContext);
+  // Mixed-content objects always take the schema-order path (usableDocumentOrder
+  // rejects them), so recording their order is dead work.
+  if (!hasTextField) {
+    recordDocumentOrder(result, node, elementReads, hasAny, namespaceContext);
+  }
   return result;
 };
 
@@ -1077,6 +1079,23 @@ const readObject = (
 type ChildAccept = {
   attribute?: (namespace: string, local: string) => boolean;
   element?: (namespace: string, local: string, prefix: string) => boolean;
+};
+
+// Clark key of a raw child entry: per-item namespace context, since repeated
+// siblings may redeclare prefixes.
+const rawChildClarkKey = (
+  rawKey: string,
+  rawValue: unknown,
+  context: Record<string, string>,
+): string => {
+  const { prefix, local } = splitQName(rawKey);
+  const itemNode =
+    rawValue !== null && typeof rawValue === "object"
+      ? (rawValue as Record<string, unknown>)
+      : undefined;
+  const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+  const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
+  return `{${namespace}}${local}`;
 };
 
 // Shared walk over a parsed node's content entries, into the normalized open
@@ -1120,7 +1139,7 @@ const walkChildren = (
       if (accept.element?.(namespace, local, prefix) === false) {
         continue;
       }
-      const childKey = `{${namespace}}${local}`;
+      const childKey = rawChildClarkKey(key, item, context);
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = target[childKey];
       if (existing === undefined) {
@@ -1299,7 +1318,7 @@ type FieldRead = {
    * Raw parser-node occurrences the field claimed, index-aligned with the
    * produced value(s) — readObject maps them onto document-order positions.
    */
-  claimed?: { rawKey: string; rawValue: unknown; index: number }[];
+  claimed?: ClaimedOccurrence[];
 };
 
 const readField = (
@@ -1727,16 +1746,18 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
 
 // The retained document order describes the data as parsed. It is honored
 // only while it still does: every declared element field and every wildcard
-// extra must hold exactly as many values as the recording — added, removed,
-// or re-parented values (and defaults zod filled after the walk) break the
-// correspondence, and objects with mixed content keep the schema-order path
-// since text interleaving is not modeled. Anything else falls back to
-// schema-order emission.
+// extra must hold exactly as many values as the recording. The check is
+// cardinality-only (counts per field/extra), not value identity — a value
+// swapped between two equal-count fields is still replayed at its recorded
+// position. Added, removed, or re-parented values (and defaults zod filled
+// after the walk) break the correspondence, and objects with mixed content
+// keep the schema-order path since text interleaving is not modeled. Anything
+// else falls back to schema-order emission.
 const usableDocumentOrder = (
   obj: Record<string, unknown>,
   fields: Record<string, XmlFieldMeta>,
   hasElementWildcard: boolean,
-): [string, number][] | undefined => {
+): DocumentOrderEntry[] | undefined => {
   const retained = documentOrderStore.get(obj);
   if (retained === undefined) {
     return undefined;
