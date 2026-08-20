@@ -5,7 +5,6 @@ import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
 import { childOrderOf, createOutputBuilder } from "./runtime.js";
-import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -20,6 +19,7 @@ import type {
   WildcardDef,
   XsdIr,
 } from "./types.js";
+import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
