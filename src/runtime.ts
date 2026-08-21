@@ -6,7 +6,7 @@ import {
 } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
-import { splitClark, splitQName } from "./qname.js";
+import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { QName } from "./types.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
@@ -21,6 +21,10 @@ import { collapseWhiteSpace } from "./xsdLexicals.js";
 import { xsdPattern } from "./xsdPattern.js";
 
 const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
+// Synthetic discriminant field of polymorphic (xsi:type) slots. Codegen emits
+// it into variant object shapes; the runtime injects it on parse and strips
+// it (re-emitted as the xsi:type attribute) on serialize.
+const XSI_TYPE_FIELD = "xsiType";
 // Bound to the xml prefix by definition (Namespaces in XML §3); documents use
 // it without ever declaring it.
 const XML_NS = "http://www.w3.org/XML/1998/namespace";
@@ -646,6 +650,30 @@ type DocumentOrderEntry = [key: string, index: number];
 // round-trip reorders the document.
 const documentOrderStore = new WeakMap<object, DocumentOrderEntry[]>();
 
+// Lossless capture for xsi:type QNames outside the generated union (open
+// world): the occurrence is read with the declared variant, and everything
+// that variant would strip is kept here, keyed by the occurrence's value
+// object. The serializer re-attaches the original xsi:type attribute and the
+// captured content. The channel is deliberately opaque: it never shows up in
+// the generated TS types, and the captured extras are the normalized open
+// shape (same representation as the xs:any lax tier).
+type XsiTypeCapture = {
+  /** Original xsi:type of the occurrence, Clark notation. */
+  typeQName: QName;
+  /**
+   * Declared-field entries and captured extras interleaved in document order:
+   * [result field key | extra Clark key, occurrence index]. Empty when the
+   * declared variant has wildcards (extras then live in the value itself via
+   * the wildcard sweep) or carries mixed content (order not modeled there).
+   */
+  order: DocumentOrderEntry[];
+  /** Captured extra child elements by Clark key, in occurrence order. */
+  extras: Record<string, unknown[]>;
+  /** Undeclared attributes of the slot element: [Clark qname, lexical]. */
+  attributes: [string, string][];
+};
+const xsiCaptureStore = new WeakMap<object, XsiTypeCapture>();
+
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
 const qnameBindingsOf = (
@@ -742,6 +770,11 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   if (documentOrder !== undefined) {
     documentOrderStore.delete(walked);
     documentOrderStore.set(parsed, documentOrder);
+  }
+  const xsiCapture = xsiCaptureStore.get(walked);
+  if (xsiCapture !== undefined) {
+    xsiCaptureStore.delete(walked);
+    xsiCaptureStore.set(parsed, xsiCapture);
   }
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
@@ -893,6 +926,173 @@ const substitutionSchemaFor = (tagQName: string, headSchema: AnySchema): AnySche
     }
   }
   return headSchema;
+};
+
+// ---------------------------------------------------------------------------
+// xsi:type polymorphism. Codegen emits a slot (element field or root element)
+// whose declared complex type is abstract or has known derived types as
+// z.discriminatedUnion("xsiType", [declaredVariant, ...derivedVariants]).
+// Each variant is the type's object schema extended with a synthetic xsiType
+// literal property and registered with the type's qname. The runtime reads
+// the xsi:type attribute to pick the variant, injects the xsiType field so
+// validation dispatches, and never serializes that field as content.
+// ---------------------------------------------------------------------------
+
+const xsiTypeUnionDef = (schema: AnySchema): z.core.$ZodDiscriminatedUnionDef | undefined => {
+  const def = unwrapModifiers(schema)._zod.def;
+  if (def.type !== "union" || !("discriminator" in def)) {
+    return undefined;
+  }
+  return def.discriminator === XSI_TYPE_FIELD
+    ? (def as z.core.$ZodDiscriminatedUnionDef)
+    : undefined;
+};
+
+// Type qname of a union variant, from its xmlRegistry entry.
+const xsiTypeOptionQName = (option: AnySchema): QName | undefined => findObjectMeta(option)?.qname;
+
+// The xsi:type attribute of an element node, resolved against the element's
+// in-scope namespace map to Clark notation. Unresolvable prefixes yield
+// undefined (treated as no xsi:type).
+const readXsiTypeAttr = (
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+): QName | undefined => {
+  const raw = findAttributeValue(node, `{${XSI_NS}}type`, namespaceContext);
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const { prefix, local } = splitQName(raw.trim());
+  // An unprefixed value resolves through the default namespace; with none in
+  // scope that is the empty namespace (Clark `{}local`), not "unresolvable".
+  const namespace = prefix ? namespaceContext[prefix] : (namespaceContext[""] ?? "");
+  return namespace === undefined ? undefined : `{${namespace}}${local}`;
+};
+
+// Read one occurrence of a polymorphic slot: dispatch on xsi:type to the
+// matching variant schema (options[0] is the declared type). An absent or
+// declared-type xsi:type reads as the declared type; the discriminant is
+// injected only for known derived types. An unknown xsi:type also reads as
+// the declared type, but the original QName and the content the declared
+// variant strips are captured for lossless re-serialization (XsiTypeCapture).
+const readXsiTypeOccurrence = (
+  unionDef: z.core.$ZodDiscriminatedUnionDef,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+): Record<string, unknown> => {
+  const options = unionDef.options as readonly AnySchema[];
+  const declared = options[0]!;
+  const xsiType = readXsiTypeAttr(node, namespaceContext);
+  const derived =
+    xsiType === undefined
+      ? undefined
+      : options.slice(1).find((option) => xsiTypeOptionQName(option) === xsiType);
+  const value = readObject(derived ?? declared, node, namespaceContext);
+  if (derived !== undefined && xsiType !== undefined) {
+    value[XSI_TYPE_FIELD] = xsiType;
+    return value;
+  }
+  if (xsiType !== undefined && xsiType !== xsiTypeOptionQName(declared)) {
+    captureUnknownXsiType(declared, node, namespaceContext, value, xsiType);
+  }
+  return value;
+};
+
+// Capture what the declared variant stripped from an unknown-xsi:type
+// occurrence (see XsiTypeCapture): undeclared attributes, and extra child
+// elements in the normalized open shape, interleaved with the declared
+// fields in document order. When the declared variant has wildcards, extras
+// already live in the value via the wildcard sweep — capturing them again
+// would double them, so only the xsi:type QName is recorded.
+const captureUnknownXsiType = (
+  declared: AnySchema,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+  value: Record<string, unknown>,
+  typeQName: QName,
+): void => {
+  const fields = findFieldsMeta(declared) ?? {};
+  const fieldList = Object.values(fields);
+  if (fieldList.some((f) => f.kind === "any" || f.kind === "anyAttribute")) {
+    xsiCaptureStore.set(value, { typeQName, order: [], extras: {}, attributes: [] });
+    return;
+  }
+  const context = withNamespaceContext(namespaceContext, node);
+  // The declared element field (result key) owning a raw child tag, with the
+  // same leniency as findElementValues: an unqualified field also matches
+  // unprefixed elements in the inherited default namespace.
+  const elementFields = Object.entries(fields).filter(([, f]) => f.kind === "element");
+  const fieldKeyFor = (clark: string, prefix: string): string | undefined => {
+    const actual = splitClark(clark);
+    for (const [key, fieldMeta] of elementFields) {
+      for (const candidate of [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])]) {
+        const expected = splitClark(candidate);
+        if (
+          actual.local === expected.local &&
+          (actual.namespace === expected.namespace || (expected.namespace === "" && prefix === ""))
+        ) {
+          return key;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const knownAttributes = new Set(
+    fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
+  );
+  const attributes: [string, string][] = [];
+  for (const [key, raw] of Object.entries(node)) {
+    if (!key.startsWith("@_") || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
+      continue;
+    }
+    const { prefix, local } = splitQName(key.slice(2));
+    const namespace = prefix ? (context[prefix] ?? "") : "";
+    // xsi:* attributes are processor directives; xsi:type is re-emitted from
+    // typeQName.
+    if (namespace === XSI_NS) {
+      continue;
+    }
+    const clark = `{${namespace}}${local}`;
+    if (!knownAttributes.has(clark as QName)) {
+      attributes.push([clark, String(raw)]);
+    }
+  }
+
+  // Merge the declared fields' document-order recording (a subsequence of the
+  // node's children) with the captured extras into one sequence.
+  const retained = documentOrderStore.get(value) ?? [];
+  let retainedIndex = 0;
+  const order: DocumentOrderEntry[] = [];
+  const extras: Record<string, unknown[]> = {};
+  for (const [rawKey, rawValue] of childOrderOf(node) ?? Object.entries(node)) {
+    if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
+      continue;
+    }
+    const { prefix } = splitQName(rawKey);
+    for (const item of toArray(rawValue)) {
+      const clark = rawChildClarkKey(rawKey, item, context);
+      const key = fieldKeyFor(clark, prefix);
+      if (key === undefined) {
+        const list = extras[clark] ?? [];
+        extras[clark] = list;
+        const itemNode =
+          item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
+        const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
+        list.push(itemNode ? openWalk(itemNode, itemContext) : item);
+        order.push([clark, list.length - 1]);
+        continue;
+      }
+      const retainedEntry = retained[retainedIndex];
+      if (retainedEntry !== undefined && retainedEntry[0] === key) {
+        order.push(retainedEntry);
+        retainedIndex++;
+      }
+      // Otherwise the occurrence was claimed but dropped from the value
+      // (e.g. overflow of a scalar field) — it stays dropped.
+    }
+  }
+  xsiCaptureStore.set(value, { typeQName, order, extras, attributes });
 };
 
 const extractRoot = (
@@ -1246,6 +1446,10 @@ const readOccurrence = (
     if (nilValue === "true" || nilValue === "1") {
       return { value: null };
     }
+    const xsiUnion = xsiTypeUnionDef(field.itemSchema);
+    if (xsiUnion !== undefined) {
+      return { value: readXsiTypeOccurrence(xsiUnion, childNode, childContext) };
+    }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
       const text = textOf(childNode);
@@ -1293,6 +1497,19 @@ const readOccurrence = (
   }
   if (fieldMeta.open) {
     return { value: entry };
+  }
+  const scalarXsiUnion = xsiTypeUnionDef(field.itemSchema);
+  if (scalarXsiUnion !== undefined) {
+    // Empty element at a polymorphic slot: the parser yields it as a bare
+    // string. A scalar node has no attributes, so no xsi:type — read it as
+    // the declared type (options[0]).
+    return {
+      value: readObject(
+        scalarXsiUnion.options[0] as AnySchema,
+        { "#text": entry },
+        namespaceContext,
+      ),
+    };
   }
   if (hasObjectShape(field.itemSchema)) {
     return { value: readObject(field.itemSchema, { "#text": entry }, namespaceContext) };
@@ -1448,6 +1665,10 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
   }
 
   const typeSchema = peelOnce(schema);
+  const xsiUnion = xsiTypeUnionDef(typeSchema);
+  if (xsiUnion !== undefined) {
+    return readXsiTypeOccurrence(xsiUnion, rootNode, namespaceContext);
+  }
   if (hasObjectShape(typeSchema)) {
     return readObject(typeSchema, rootNode, namespaceContext);
   }
@@ -1731,6 +1952,42 @@ const serializeDatatypeValue = (datatype: XsdDatatypeName, value: unknown): stri
     typeof value === "string" ? value : writeXsdDatatype(datatype, value as XsdStructuredValue),
   );
 
+// Pick the variant schema to serialize a polymorphic-slot value with, plus
+// the xsi:type attribute to emit — omitted when the discriminant is absent or
+// matches the declared type (options[0]). A discriminant naming no known
+// variant serializes with the declared type but keeps its xsi:type attribute:
+// the value claims a type outside the closed union.
+const xsiTypeVariantFor = (
+  unionDef: z.core.$ZodDiscriminatedUnionDef,
+  value: Record<string, unknown>,
+  ctx: SerializeCtx,
+): { option: AnySchema; xsiTypeAttr?: string } => {
+  const options = unionDef.options as readonly AnySchema[];
+  const declared = options[0]!;
+  const raw = value[XSI_TYPE_FIELD];
+  const xsiType =
+    typeof raw === "string" && trySplitClark(raw) !== undefined ? (raw as QName) : undefined;
+  if (xsiType === undefined || xsiType === xsiTypeOptionQName(declared)) {
+    return { option: declared };
+  }
+  const match = options.slice(1).find((option) => xsiTypeOptionQName(option) === xsiType);
+  return {
+    option: match ?? declared,
+    xsiTypeAttr: `xsi:type="${elementName(xsiType, ctx.prefixMap, ctx.qnameNs)}"`,
+  };
+};
+
+// The xsi:type attribute re-attaching an unknown-xsi:type capture (undefined
+// when there is no capture): the original QName, prefixed for the output
+// document.
+const xsiTypeAttrFor = (
+  capture: XsiTypeCapture | undefined,
+  ctx: SerializeCtx,
+): string | undefined =>
+  capture === undefined
+    ? undefined
+    : `xsi:type="${elementName(capture.typeQName, ctx.prefixMap, ctx.qnameNs)}"`;
+
 // Leaf serialization honoring the field's structured datatype meta; list
 // values canonicalize per item.
 const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: unknown): string => {
@@ -1757,6 +2014,7 @@ const usableDocumentOrder = (
   obj: Record<string, unknown>,
   fields: Record<string, XmlFieldMeta>,
   hasElementWildcard: boolean,
+  shape: Record<string, AnySchema>,
 ): DocumentOrderEntry[] | undefined => {
   const retained = documentOrderStore.get(obj);
   if (retained === undefined) {
@@ -1787,6 +2045,11 @@ const usableDocumentOrder = (
       if (key in fields || value === undefined || key.startsWith("@")) {
         continue;
       }
+      // Synthetic xsi:type discriminant: never serialized, invisible to the
+      // document-order correspondence check.
+      if (key === XSI_TYPE_FIELD && XSI_TYPE_FIELD in shape) {
+        continue;
+      }
       if (counts.get(key) !== countOf(value)) {
         return undefined;
       }
@@ -1794,6 +2057,42 @@ const usableDocumentOrder = (
     }
   }
   return counts.size === 0 ? retained : undefined;
+};
+
+// A captured unknown-xsi:type order replay (see XsiTypeCapture) is honored
+// under the same rule as usableDocumentOrder: every declared element field
+// and every captured extra must still hold exactly as many values as the
+// recording. Otherwise the value was mutated and the caller falls back to
+// schema-order emission with the extras appended after the declared content.
+const usableXsiCaptureOrder = (
+  capture: XsiTypeCapture,
+  obj: Record<string, unknown>,
+  fields: Record<string, XmlFieldMeta>,
+): DocumentOrderEntry[] | undefined => {
+  const countOf = (value: unknown): number =>
+    value === undefined ? 0 : Array.isArray(value) ? value.length : 1;
+  const counts = new Map<string, number>();
+  for (const [key] of capture.order) {
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const [key, fieldMeta] of Object.entries(fields)) {
+    if (fieldMeta.kind === "text") {
+      return undefined;
+    }
+    if (fieldMeta.kind !== "element") {
+      continue;
+    }
+    if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {
+      return undefined;
+    }
+    counts.delete(key);
+  }
+  for (const [key, count] of counts) {
+    if ((capture.extras[key]?.length ?? 0) !== count) {
+      return undefined;
+    }
+  }
+  return capture.order;
 };
 
 const writeObjectFields = (
@@ -1808,6 +2107,17 @@ const writeObjectFields = (
   let usesXsi = false;
   const lexicals = lexicalStore.get(obj);
   const substQNames = substQNameStore.get(obj);
+  // Unknown-xsi:type capture (XsiTypeCapture): re-attach the undeclared
+  // attributes here; the xsi:type attribute itself is added by the caller,
+  // which knows the slot.
+  const xsiCapture = xsiCaptureStore.get(obj);
+  if (xsiCapture !== undefined) {
+    for (const [clark, lexical] of xsiCapture.attributes) {
+      attributes.push(
+        `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
+      );
+    }
+  }
 
   // Wildcard extras: data keys captured by the wildcard sweep that no declared
   // field owns. Attribute extras ride anyAttribute; element extras flush at
@@ -1820,6 +2130,11 @@ const writeObjectFields = (
   if (anyWildcards.length > 0 || hasAnyAttribute) {
     for (const [key, value] of Object.entries(obj)) {
       if (key in fields || value === undefined) {
+        continue;
+      }
+      // The synthetic xsi:type discriminant is never content — not even a
+      // wildcard extra.
+      if (key === XSI_TYPE_FIELD && XSI_TYPE_FIELD in shape) {
         continue;
       }
       if (key.startsWith("@")) {
@@ -1929,6 +2244,20 @@ const writeObjectFields = (
       const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
       return `<${localName}${attrStr}>${inner.body}</${localName}>`;
     }
+    const xsiUnion = xsiTypeUnionDef(itemSchema);
+    if (xsiUnion !== undefined && typeof item === "object" && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      const { option, xsiTypeAttr } = xsiTypeVariantFor(xsiUnion, record, ctx);
+      // Unknown-xsi:type capture: re-attach the original xsi:type.
+      const captureAttr =
+        xsiTypeAttr === undefined ? xsiTypeAttrFor(xsiCaptureStore.get(record), ctx) : undefined;
+      const typeAttr = xsiTypeAttr ?? captureAttr;
+      const inner = writeObjectFields(option, record, ctx);
+      usesXsi = usesXsi || inner.usesXsi || typeAttr !== undefined;
+      const attrs = typeAttr === undefined ? inner.attributes : [...inner.attributes, typeAttr];
+      const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
+      return `<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`;
+    }
     if (hasObjectShape(itemSchema) && typeof item === "object" && !Array.isArray(item)) {
       const inner = writeObjectFields(itemSchema, item as Record<string, unknown>, ctx);
       usesXsi = usesXsi || inner.usesXsi;
@@ -1942,7 +2271,10 @@ const writeObjectFields = (
     return `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
   };
 
-  const documentOrder = usableDocumentOrder(obj, fields, anyWildcards.length > 0);
+  const documentOrder =
+    xsiCapture === undefined
+      ? usableDocumentOrder(obj, fields, anyWildcards.length > 0, shape)
+      : usableXsiCaptureOrder(xsiCapture, obj, fields);
   if (documentOrder !== undefined) {
     // Parsed data that still matches its parse-time recording: replay the
     // children in document order (wildcard extras included) so interleaved
@@ -1982,8 +2314,9 @@ const writeObjectFields = (
         }
         continue;
       }
-      // Wildcard extra, recorded under its clark key.
-      const value = obj[key];
+      // Wildcard extra (or unknown-xsi:type capture), recorded under its
+      // clark key.
+      const value = obj[key] ?? xsiCapture?.extras[key];
       const item = Array.isArray(value) ? value[index] : value;
       if (item === undefined) {
         continue;
@@ -2046,6 +2379,19 @@ const writeObjectFields = (
   // e.g. hand-written schemas): their extras serialize last.
   for (const wildcard of anyWildcards) {
     flushWildcard(wildcard);
+  }
+
+  // Unknown-xsi:type capture whose recorded order does not match the value
+  // (mutated data, or no order was recorded): extras append after the
+  // declared content rather than being dropped.
+  if (xsiCapture !== undefined) {
+    for (const [clark, values] of Object.entries(xsiCapture.extras)) {
+      for (const extra of values) {
+        usesXsi =
+          pushOpenChildren(elements, elementName(clark, ctx.prefixMap, ctx.qnameNs), extra, ctx) ||
+          usesXsi;
+      }
+    }
   }
 
   return { attributes, elements, usesXsi };
@@ -2124,6 +2470,10 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   };
 
   const typeSchema = peelOnce(schema);
+  const xsiUnion =
+    data !== null && data !== undefined && typeof data === "object" && !Array.isArray(data)
+      ? xsiTypeUnionDef(typeSchema)
+      : undefined;
   let body = "";
   let attributes: string[] = [];
   let usesXsi = false;
@@ -2134,6 +2484,22 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.body;
+  } else if (xsiUnion !== undefined) {
+    const { option, xsiTypeAttr } = xsiTypeVariantFor(
+      xsiUnion,
+      data as Record<string, unknown>,
+      ctx,
+    );
+    // Unknown-xsi:type capture at the root: re-attach the original xsi:type.
+    const typeAttr =
+      xsiTypeAttr ?? xsiTypeAttrFor(xsiCaptureStore.get(data as Record<string, unknown>), ctx);
+    const inner = writeObjectFields(option, data as Record<string, unknown>, ctx);
+    attributes = inner.attributes;
+    usesXsi = inner.usesXsi || typeAttr !== undefined;
+    body = inner.elements.join("");
+    if (typeAttr !== undefined) {
+      attributes.push(typeAttr);
+    }
   } else if (hasObjectShape(typeSchema)) {
     const inner = writeObjectFields(typeSchema, data as Record<string, unknown>, ctx);
     attributes = inner.attributes;

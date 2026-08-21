@@ -61,6 +61,14 @@ export type ChoiceGroupGuard = { group: string; branch: string };
 export type ComplexTypeDef = {
   name: QName;
   baseType?: QName;
+  /**
+   * complexContent/xs:restriction base, when the type derives by restriction.
+   * Unlike baseType (extension), the restriction declares its own fields, so
+   * nothing is merged — the edge only feeds the xsi:type derived-types index.
+   */
+  restrictionBase?: QName;
+  /** xs:complexType abstract="true" — instances must carry xsi:type. */
+  abstract?: boolean;
   fields: IrField[];
   description?: string;
   choiceGroups?: Record<string, Cardinality>;
