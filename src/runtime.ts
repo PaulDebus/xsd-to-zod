@@ -287,7 +287,8 @@ const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta 
 };
 
 const findRootMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.root);
-const findObjectMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.fields);
+const findObjectMeta = (schema: AnySchema): XmlMeta | undefined =>
+  findMeta(schema, (m) => m.fields);
 const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined =>
   findObjectMeta(schema)?.fields;
 
@@ -811,7 +812,10 @@ const findAttributeValue = (
       continue;
     }
     const { prefix, local } = splitQName(key.slice(2));
-    if (local === expected.local && nsForAttribute(prefix, namespaceContext) === expected.namespace) {
+    if (
+      local === expected.local &&
+      nsForAttribute(prefix, namespaceContext) === expected.namespace
+    ) {
       return value;
     }
   }
@@ -834,9 +838,7 @@ const findElementValues = (
     for (const item of toArray(value)) {
       const namespace = nsForElement(prefix, contextFor(item, namespaceContext));
       const match = expected.find(
-        (e) =>
-          e.local === local &&
-          (namespace === e.namespace || (e.namespace === "" && !prefix)),
+        (e) => e.local === local && (namespace === e.namespace || (e.namespace === "" && !prefix)),
       );
       if (match !== undefined) {
         matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
@@ -1050,7 +1052,9 @@ const extractRoot = (
         : {};
     const namespaceContext = withNamespaceContext({}, node);
     const { prefix, local } = splitQName(key);
-    return local === expected.local && nsForElement(prefix, namespaceContext) === expected.namespace;
+    return (
+      local === expected.local && nsForElement(prefix, namespaceContext) === expected.namespace
+    );
   });
   if (!entry) {
     throw new Error(`Root element '${expectedQName}' not found in XML payload`);
@@ -1222,10 +1226,7 @@ const nsForElement = (prefix: string, ctx: Record<string, string>): string =>
 const nsForAttribute = (prefix: string, ctx: Record<string, string>): string =>
   prefix ? (ctx[prefix] ?? "") : "";
 
-const contextFor = (
-  rawValue: unknown,
-  base: Record<string, string>,
-): Record<string, string> => {
+const contextFor = (rawValue: unknown, base: Record<string, string>): Record<string, string> => {
   const itemNode =
     rawValue !== null && typeof rawValue === "object"
       ? (rawValue as Record<string, unknown>)
@@ -1274,7 +1275,9 @@ const walkChildren = (
     }
     const { prefix, local } = splitQName(key);
     for (const item of toArray(value)) {
-      if (accept.element?.(nsForElement(prefix, contextFor(item, context)), local, prefix) === false) {
+      if (
+        accept.element?.(nsForElement(prefix, contextFor(item, context)), local, prefix) === false
+      ) {
         continue;
       }
       const childKey = rawChildClarkKey(key, item, context);
@@ -1296,7 +1299,6 @@ const walkChildren = (
 };
 
 // xs:any / xs:anyAttribute (lax tier): unmatched children captured in open shape.
-// Namespace constraints unenforced — libxml2 tier is the conformance authority.
 const sweepWildcards = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
@@ -1313,35 +1315,27 @@ const sweepWildcards = (
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
   );
   const consumed = new Map<string, number>();
-  // Unqualified fields also match unprefixed elements in the inherited default
-  // namespace (same leniency as findElementValues) — not extras.
+  const scalarQNameOf = (ns: string, local: string, prefix: string): string | undefined => {
+    if (wildcards.scalarElements === undefined) return undefined;
+    const exact = `{${ns}}${local}`;
+    if (wildcards.scalarElements.has(exact)) return exact;
+    const unq = `{}${local}`;
+    return prefix === "" && wildcards.scalarElements.has(unq) ? unq : undefined;
+  };
   walkChildren(result, node, namespaceContext, {
     attribute: wildcards.anyAttribute
-      ? (namespace, local) => !knownAttributes.has(`{${namespace}}${local}`)
+      ? (ns, local) => !knownAttributes.has(`{${ns}}${local}`)
       : () => false,
     element: wildcards.any
-      ? (namespace, local, prefix) => {
-          const scalarQName =
-            wildcards.scalarElements === undefined
-              ? undefined
-              : (() => {
-                  const exact = `{${namespace}}${local}`;
-                  if (wildcards.scalarElements.has(exact)) {
-                    return exact;
-                  }
-                  const unqualified = `{}${local}`;
-                  return prefix === "" && wildcards.scalarElements.has(unqualified)
-                    ? unqualified
-                    : undefined;
-                })();
-          if (scalarQName !== undefined) {
-            // First occurrence feeds the scalar field; overflow is extra.
-            const seen = (consumed.get(scalarQName) ?? 0) + 1;
-            consumed.set(scalarQName, seen);
+      ? (ns, local, prefix) => {
+          const sq = scalarQNameOf(ns, local, prefix);
+          if (sq !== undefined) {
+            const seen = (consumed.get(sq) ?? 0) + 1;
+            consumed.set(sq, seen);
             return seen > 1;
           }
           return (
-            !knownElements.has(`{${namespace}}${local}`) &&
+            !knownElements.has(`{${ns}}${local}`) &&
             (prefix !== "" || !knownElements.has(`{}${local}`))
           );
         }
@@ -1349,21 +1343,14 @@ const sweepWildcards = (
   });
 };
 
-// Present-but-empty element: XSD applies default/fixed here (#66).
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
 ): { substituted: boolean; value?: unknown } => {
-  if (field.hasFixed) {
-    return { substituted: true, value: field.fixedValue };
-  }
-  // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
-  if (fieldMeta.fixedValue !== undefined) {
-    return { substituted: true, value: fieldMeta.fixedValue };
-  }
-  if (fieldMeta.defaultValue !== undefined) {
+  if (field.hasFixed) return { substituted: true, value: field.fixedValue };
+  if (fieldMeta.fixedValue !== undefined) return { substituted: true, value: fieldMeta.fixedValue };
+  if (fieldMeta.defaultValue !== undefined)
     return { substituted: true, value: fieldMeta.defaultValue };
-  }
   return { substituted: false };
 };
 

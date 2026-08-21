@@ -456,7 +456,8 @@ const applyOrderFacet = (
           : facet.kind === "minExclusive"
             ? ">"
             : "<";
-    const bound = kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
+    const bound =
+      kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
     return `${result}.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
   }
   return `${result} /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
@@ -941,7 +942,11 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       const keys = choiceSubtreeFields(type, group).map(keyOf);
       return { check: "true", any: keys.length > 0 ? `[${keys.join(", ")}].some(has)` : "false" };
     }
-    const { required: requiredChoice, repeated: repeatedChoice, branches } = choiceFlags(type, group);
+    const {
+      required: requiredChoice,
+      repeated: repeatedChoice,
+      branches,
+    } = choiceFlags(type, group);
     if (repeatedChoice && !requiredChoice) {
       return { check: "true", any: "false" };
     }

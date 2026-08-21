@@ -94,7 +94,10 @@ export const discoverDependencies = (entryFile: string, visited = new Set<string
   const content = readFileSync(resolved, "utf8");
   const files: string[] = [resolved];
 
-  const re = new RegExp(`${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*schemaLocation=["']([^"']+)["']`, "g");
+  const re = new RegExp(
+    `${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*schemaLocation=["']([^"']+)["']`,
+    "g",
+  );
   for (const m of content.matchAll(re)) {
     const depPath = resolve(dirname(resolved), m[1] ?? "");
     if (existsSync(depPath)) {

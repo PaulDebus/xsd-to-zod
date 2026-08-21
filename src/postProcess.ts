@@ -24,7 +24,10 @@ const run = (command: string, args: string[], cwd: string): void => {
 // .cmd shim there (spawned with shell in run()).
 // Walks up from cwd so a tool installed at a monorepo root is still found
 // when the CLI runs in a package subdirectory.
-const walkUp = (start: string, test: (dir: string) => string | boolean | undefined): string | boolean | undefined => {
+const walkUp = (
+  start: string,
+  test: (dir: string) => string | boolean | undefined,
+): string | boolean | undefined => {
   let dir = start;
   for (;;) {
     const hit = test(dir);
@@ -97,11 +100,13 @@ export const runPostGenerationFormatting = (
   const jsTsFiles = generatedFiles.filter((file) => JS_TS_RE.test(file));
 
   const runBiome = (): boolean => {
-    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd)) return false;
+    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd))
+      return false;
     runTool("biome", ["lint", "--write", ...jsTsFiles], cwd);
     return true;
   };
-  const runPrettier = (): boolean => jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
+  const runPrettier = (): boolean =>
+    jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
 
   // A tool with a project config wins over one that would run on defaults, so
   // the output matches the project's style. Biome and Prettier both format

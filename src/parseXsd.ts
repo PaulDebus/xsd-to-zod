@@ -439,9 +439,7 @@ const readSchema = (
   return { schemaNode, nsMap, targetNs, formDefaults };
 };
 
-const collectChildren = (
-  entries: Iterable<[string, unknown]>,
-): [string, AnyNode][] => {
+const collectChildren = (entries: Iterable<[string, unknown]>): [string, AnyNode][] => {
   const out: [string, AnyNode][] = [];
   for (const [key, value] of entries) {
     if (key.startsWith("@_") || key === "#text") continue;
@@ -460,7 +458,9 @@ const nodeChildren = (node: AnyNode): [string, AnyNode][] => collectChildren(Obj
 // Falls back to the grouped iteration for programmatically built nodes.
 const nodeChildrenOrdered = (node: AnyNode): [string, AnyNode][] => {
   const order = childOrderOf(node);
-  return order === undefined ? nodeChildren(node) : collectChildren(order as Iterable<[string, unknown]>);
+  return order === undefined
+    ? nodeChildren(node)
+    : collectChildren(order as Iterable<[string, unknown]>);
 };
 
 const pushChild = (node: AnyNode, tag: string, child: AnyNode): void => {
@@ -474,12 +474,7 @@ const pushChild = (node: AnyNode, tag: string, child: AnyNode): void => {
   }
 };
 
-// xs:redefine semantics: a ref inside a redefining group/attributeGroup that
-// names the redefined component points at the ORIGINAL definition. Expand
-// those self-refs with the original's children before the override replaces
-// the registry entry — otherwise the self-ref resolves to the override itself
-// and field collection recurses without end. A self-ref with no original is
-// genuinely circular (invalid XSD) and is dropped with a diagnostic.
+// Expand xs:redefine self-refs to the original definition before override.
 const expandRedefineSelfRefs = (
   node: AnyNode,
   refTag: "group" | "attributeGroup",
@@ -528,14 +523,7 @@ const expandRedefineSelfRefs = (
   return rebuild(structuredClone(node));
 };
 
-// A simple type may not take part in a derivation cycle: a union may not have
-// itself as a member and a restriction/list may not derive from itself, even
-// transitively. Such schemas are invalid XSD, and keeping the edge would make
-// codegen emit a const that references itself before initialization, crashing
-// at module load. Break every cycle with a diagnostic: drop the union member
-// that closes it, or — when the closing edge is a restriction base or a list
-// item type — drop the offending type; references to a dropped type fall back
-// to z.unknown() at codegen.
+// Break simple-type derivation cycles (invalid XSD) so codegen doesn't emit self-referencing consts.
 const dropCircularSimpleTypeRefs = (
   simpleTypes: Record<string, SimpleTypeDef>,
   diagnostics: Diagnostic[],
@@ -1151,9 +1139,7 @@ const isMixedComplexType = (node: AnyNode): boolean => {
   return mixed === true || mixed === "true";
 };
 
-// Mixed content surfaces as an optional `_text` field of xs:string — the same
-// shape simpleContent uses. The XML parser concatenates an element's character
-// data segments, so their interleaving with child elements is not preserved.
+// Mixed content: optional `_text` field (parser concatenates text segments).
 const prependMixedTextField = (fields: IrField[], ownerNs: string): void => {
   if (fields.some((f) => f.kind === "text")) {
     return;
@@ -1167,21 +1153,13 @@ const prependMixedTextField = (fields: IrField[], ownerNs: string): void => {
   });
 };
 
-// Merging a mixed type's fields with a base/override that is mixed itself
-// would carry `_text` twice; keep the first occurrence.
+// Keep first `_text` only when merging mixed types.
 const dedupeTextFields = (fields: IrField[]): IrField[] => {
   const firstText = fields.findIndex((f) => f.kind === "text");
   return firstText === -1 ? fields : fields.filter((f, i) => f.kind !== "text" || i === firstText);
 };
 
-// Adjacent same-name element particles (a sequence declaring the same element
-// several times) collapse into a single repeated field: the zod object shape
-// cannot hold duplicate keys. Occurrence ranges add up; the first particle's
-// value constraints win — per-position defaults are a rare corner the
-// flattened model cannot represent. A wildcard sitting between the two
-// particles (e1, xs:any, e1) blocks the collapse: the merged array would
-// swallow the wildcard's occurrences — they stay a scalar field plus
-// overflow extras instead (addB135).
+// Collapse adjacent same-name element particles into one repeated field.
 const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[]): IrField[] => {
   const wildcardPositions = new Set(
     wildcards.flatMap((w) => (w.position === undefined ? [] : [w.position])),
@@ -1419,48 +1397,18 @@ type ScannedFile = {
   formDefaults: SchemaFormDefaults;
 };
 
-// Read the entry points plus every schema reachable via schemaLocation and
-// return them in dependency order (topological sort of the schemaLocation
-// graph) so a redefining/including schema is processed after the schemas it
-// builds on.
+// Read entry points plus every schema reachable via schemaLocation and
+// return them in dependency order (depth-first, dependencies first).
 const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFile[] => {
-  const depGraph = new Map<string, string[]>();
-  const addDependency = (from: string, to: string): void => {
-    const resolvedFrom = path.resolve(from);
-    const resolvedTo = path.resolve(to);
-    if (!depGraph.has(resolvedFrom)) {
-      depGraph.set(resolvedFrom, []);
-    }
-    depGraph.get(resolvedFrom)?.push(resolvedTo);
-  };
-
   const allFiles: ScannedFile[] = [];
-
-  // Composite scan keys (file + inherited namespace) so chameleon schemas
-  // included by multiple schemas with different target namespaces are scanned
-  // once per distinct inherited namespace rather than once globally.
   const scanKey = (file: string, inheritedTargetNs?: string): string =>
     `${file}|${inheritedTargetNs ?? ""}`;
-
-  const pending = new Map<string, QueueEntry>();
-  for (const file of files) {
-    const entry: QueueEntry = { file: path.resolve(file), entryPoint: true };
-    pending.set(scanKey(entry.file), entry);
-  }
   const scanned = new Set<string>();
 
-  while (pending.size > 0) {
-    const firstKey = pending.keys().next().value as string;
-    const entry = pending.get(firstKey);
-    if (!entry) {
-      continue;
-    }
-    pending.delete(firstKey);
-    const entryKey = scanKey(entry.file, entry.inheritedTargetNs);
-    if (scanned.has(entryKey)) {
-      continue;
-    }
-    scanned.add(entryKey);
+  const visit = (entry: QueueEntry): void => {
+    const key = scanKey(entry.file, entry.inheritedTargetNs);
+    if (scanned.has(key)) return;
+    scanned.add(key);
 
     let schemaNode: AnyNode;
     let nsMap: Record<string, string>;
@@ -1470,24 +1418,15 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
       const result = readSchema(entry.file);
       ({ schemaNode, nsMap, targetNs, formDefaults } = result);
     } catch (err) {
-      if (entry.entryPoint) {
-        throw err;
-      }
+      if (entry.entryPoint) throw err;
       report(diagnostics, "unresolved-import", `unable to read schema "${entry.file}"`, entry.file);
-      continue;
+      return;
     }
-    allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
 
     for (const [tag, child] of nodeChildren(schemaNode)) {
       const localTag = getNodeTagLocalName(tag);
       const schemaLocation = child["@_schemaLocation"] ? String(child["@_schemaLocation"]) : "";
-      if (!schemaLocation) {
-        continue;
-      }
-
-      // schemaLocation is only a hint: remote URLs are never read as local
-      // files (and "must not resolve" tests rely on that). Skip with a
-      // diagnostic instead of crashing.
+      if (!schemaLocation) continue;
       if (/^https?:/i.test(schemaLocation)) {
         report(
           diagnostics,
@@ -1497,51 +1436,16 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
         );
         continue;
       }
-
+      if (localTag !== "import" && localTag !== "include" && localTag !== "redefine") continue;
       const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
-      addDependency(entry.file, resolved);
-
-      if (localTag === "import" || localTag === "include" || localTag === "redefine") {
-        const ns = localTag === "include" ? targetNs || entry.inheritedTargetNs || "" : undefined;
-        const depKey = scanKey(resolved, ns);
-        if (scanned.has(depKey)) {
-          continue;
-        }
-
-        if (!pending.has(depKey)) {
-          pending.set(depKey, {
-            file: resolved,
-            ...optProp("inheritedTargetNs", ns),
-          });
-        }
-      }
+      const ns = localTag === "include" ? targetNs || entry.inheritedTargetNs || "" : undefined;
+      visit({ file: resolved, ...optProp("inheritedTargetNs", ns) });
     }
-  }
 
-  const sorted: string[] = [];
-  const permanent = new Set<string>();
-  const temporary = new Set<string>();
-  const visit = (node: string): void => {
-    if (permanent.has(node) || temporary.has(node)) {
-      return;
-    }
-    temporary.add(node);
-    for (const dep of depGraph.get(node) || []) {
-      visit(dep);
-    }
-    temporary.delete(node);
-    permanent.add(node);
-    sorted.push(node);
+    allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
   };
-  for (const f of allFiles) {
-    visit(f.entry.file);
-  }
 
-  allFiles.sort((a, b) => {
-    const ai = sorted.indexOf(a.entry.file);
-    const bi = sorted.indexOf(b.entry.file);
-    return (ai === -1 ? 9999 : ai) - (bi === -1 ? 9999 : bi);
-  });
+  for (const file of files) visit({ file: path.resolve(file), entryPoint: true });
   return allFiles;
 };
 
