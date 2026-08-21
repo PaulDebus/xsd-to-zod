@@ -58,13 +58,15 @@ const parser = new XMLParser({
 // with a cycle guard.
 const expandInternalEntities = (xml: string): string => {
   const doctype = /<!DOCTYPE[^>[]*\[([\s\S]*?)\]\s*>/.exec(xml);
-  if (!doctype || doctype.index === undefined) {
+  const subset = doctype?.[1];
+  if (subset === undefined) {
     return xml;
   }
   const entities = new Map<string, string>();
-  for (const m of doctype[1]!.matchAll(/<!ENTITY\s+([^\s%]+)\s+"([^"]*)"\s*>/g)) {
-    if (!entities.has(m[1]!)) {
-      entities.set(m[1]!, m[2]!);
+  for (const m of subset.matchAll(/<!ENTITY\s+([^\s%]+)\s+"([^"]*)"\s*>/g)) {
+    const name = m[1];
+    if (name !== undefined && !entities.has(name)) {
+      entities.set(name, m[2] ?? "");
     }
   }
   if (entities.size === 0) {
@@ -78,7 +80,8 @@ const expandInternalEntities = (xml: string): string => {
       }
       return expand(replacement, new Set(seen).add(name));
     });
-  const head = xml.slice(0, doctype.index + doctype[0].length);
+  const doctypeStart = doctype?.index ?? 0;
+  const head = xml.slice(0, doctypeStart + (doctype?.[0].length ?? 0));
   return head + expand(xml.slice(head.length), new Set());
 };
 
@@ -286,6 +289,20 @@ type SyntheticTypeContext = {
   complexTypes: Record<string, ComplexTypeDef>;
 };
 
+const uniqueSyntheticLocal = (
+  base: string,
+  targetNs: string,
+  simpleTypes: Record<string, SimpleTypeDef>,
+  complexTypes: Record<string, ComplexTypeDef>,
+): string => {
+  let candidate = base;
+  let n = 2;
+  while (simpleTypes[toClark(targetNs, candidate)] || complexTypes[toClark(targetNs, candidate)]) {
+    candidate = `${base}_${n++}`;
+  }
+  return candidate;
+};
+
 // Register an inline xs:simpleType under a synthetic name. nameHint (an
 // element/attribute name) gives readable names at schema level, where names
 // are unique; nested occurrences get a counter-based name instead.
@@ -305,16 +322,14 @@ const synthesizeInlineSimpleType = (
   } else {
     local = `anonymous_${sanitizeTsIdentifier(nameHint)}_SimpleType`;
   }
-  let candidate = local;
-  let collisionIdx = 2;
-  while (
-    ctx.simpleTypes[toClark(ctx.targetNs, candidate)] ||
-    ctx.complexTypes[toClark(ctx.targetNs, candidate)]
-  ) {
-    candidate = `${local}_${collisionIdx++}`;
-  }
-  const syntheticName = toClark(ctx.targetNs, candidate);
-  return resolveInlineSimpleType(inlineSimple, nsMap, ctx.simpleTypes, syntheticName, diagnostics);
+  const candidate = uniqueSyntheticLocal(local, ctx.targetNs, ctx.simpleTypes, ctx.complexTypes);
+  return resolveInlineSimpleType(
+    inlineSimple,
+    nsMap,
+    ctx.simpleTypes,
+    toClark(ctx.targetNs, candidate),
+    diagnostics,
+  );
 };
 
 const OCCURS_LEXICAL = /^\d+$/;
@@ -788,14 +803,12 @@ const registerInlineComplexType = (
     ctx.syntheticTypes.counter.value++;
     local = `anonymous_Type${ctx.syntheticTypes.counter.value}`;
   }
-  let candidate = local;
-  let collisionIdx = 2;
-  while (
-    ctx.complexTypes[toClark(ctx.syntheticTypes.targetNs, candidate)] ||
-    ctx.syntheticTypes.simpleTypes[toClark(ctx.syntheticTypes.targetNs, candidate)]
-  ) {
-    candidate = `${local}_${collisionIdx++}`;
-  }
+  const candidate = uniqueSyntheticLocal(
+    local,
+    ctx.syntheticTypes.targetNs,
+    ctx.syntheticTypes.simpleTypes,
+    ctx.complexTypes,
+  );
   const syntheticName = toClark(ctx.syntheticTypes.targetNs, candidate);
   ctx.complexTypes[syntheticName] = { name: syntheticName, fields: [] };
   ctx.deferredSyntheticTypes.push({

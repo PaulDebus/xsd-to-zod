@@ -275,13 +275,11 @@ const objectDefOf = (schema: AnySchema): z.core.$ZodObjectDef | undefined =>
 
 const hasObjectShape = (schema: AnySchema): boolean => objectDefOf(schema) !== undefined;
 
-// Walk the wrapper chain until a schema carries registry meta with a `root`
-// qname — root exports register it on their outermost wrapper.
-const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
+const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta | undefined => {
   let current = schema;
   for (;;) {
     const meta = xmlRegistry.get(current);
-    if (meta?.root) {
+    if (meta !== undefined && pick(meta)) {
       return meta;
     }
     const next = peelOnce(current);
@@ -292,24 +290,8 @@ const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
   }
 };
 
-// Walk the wrapper chain until a schema carries registry meta with a `fields`
-// map — type schemas register it on the lazy wrapper, which may sit below a
-// root export wrapper or array/optional cardinality wrappers.
-const findObjectMeta = (schema: AnySchema): XmlMeta | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.fields) {
-      return meta;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
-
+const findRootMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.root);
+const findObjectMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.fields);
 const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined =>
   findObjectMeta(schema)?.fields;
 
@@ -333,47 +315,41 @@ const analyzeField = (schema: AnySchema): FieldAnalysis => {
   let fixedValue: unknown;
   for (;;) {
     const def = current._zod.def;
-    const optional = defAs<z.core.$ZodOptionalDef>(def, "optional");
-    if (optional) {
-      current = optional.innerType;
+    const as = <T extends AnyDef>(t: T["type"]): T | undefined => defAs<T>(def, t);
+    const opt = as<z.core.$ZodOptionalDef>("optional");
+    if (opt) {
+      current = opt.innerType;
       continue;
     }
-    const nullable = defAs<z.core.$ZodNullableDef>(def, "nullable");
-    if (nullable) {
-      current = nullable.innerType;
+    const nul = as<z.core.$ZodNullableDef>("nullable");
+    if (nul) {
+      current = nul.innerType;
       continue;
     }
-    const readonly = defAs<z.core.$ZodReadonlyDef>(def, "readonly");
-    if (readonly) {
-      current = readonly.innerType;
+    const ro = as<z.core.$ZodReadonlyDef>("readonly");
+    if (ro) {
+      current = ro.innerType;
       continue;
     }
-    const array = defAs<z.core.$ZodArrayDef>(def, "array");
-    if (array) {
+    const arr = as<z.core.$ZodArrayDef>("array");
+    if (arr) {
       isArray = true;
-      current = array.element;
+      current = arr.element;
       continue;
     }
-    const dfault = defAs<z.core.$ZodDefaultDef>(def, "default");
-    if (dfault) {
+    const dflt = as<z.core.$ZodDefaultDef>("default");
+    if (dflt) {
       hasDefault = true;
-      defaultValue = dfault.defaultValue;
-      current = dfault.innerType;
+      defaultValue = dflt.defaultValue;
+      current = dflt.innerType;
       continue;
     }
-    const literal = defAs<z.core.$ZodLiteralDef<z.core.util.Literal>>(def, "literal");
-    if (literal) {
+    const lit = as<z.core.$ZodLiteralDef<z.core.util.Literal>>("literal");
+    if (lit) {
       hasFixed = true;
-      fixedValue = literal.values[0];
+      fixedValue = lit.values[0];
     }
-    return {
-      itemSchema: current,
-      isArray,
-      hasDefault,
-      defaultValue,
-      hasFixed,
-      fixedValue,
-    };
+    return { itemSchema: current, isArray, hasDefault, defaultValue, hasFixed, fixedValue };
   }
 };
 
@@ -535,22 +511,8 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
 // the serializer consults the retained lexicals recorded by the read path.
 // ---------------------------------------------------------------------------
 
-// Walk the wrapper chain until a schema carries registry meta with lexical
-// facets — simple types register them on their type schema.
-const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.facets) {
-      return meta.facets;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
+const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined =>
+  findMeta(schema, (m) => m.facets)?.facets;
 
 const applyWhiteSpace = (
   lexical: string,
@@ -907,23 +869,8 @@ const findElementValues = (
   return matches;
 };
 
-// Walk the wrapper chain until a schema carries registry meta with a
-// `substElement` qname — substitution-group union options register it on
-// their lazy wrapper.
-const findSubstElementMeta = (schema: AnySchema): QName | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.substElement) {
-      return meta.substElement;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
+const findSubstElementMeta = (schema: AnySchema): QName | undefined =>
+  findMeta(schema, (m) => m.substElement)?.substElement;
 
 // The schema to read or serialize one element occurrence with. A
 // substitution-group head field's schema is a union of per-element options,

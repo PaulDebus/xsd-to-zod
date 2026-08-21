@@ -122,6 +122,15 @@ const XSD_BIGINT_BOUNDS: ReadonlyMap<string, { min?: string; max?: string }> = n
   ["positiveInteger", { min: "1n" }],
 ]);
 
+const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | undefined => {
+  const s = seen ?? new Set<string>();
+  if (s.has(name)) {
+    return undefined;
+  }
+  s.add(name);
+  return s;
+};
+
 // Resolve a (possibly user-defined) simple type to its builtin base kind, so
 // fixed/default values are coerced to the JS type the runtime produces (#87).
 const resolvePrimitiveKind = (
@@ -142,11 +151,10 @@ const resolvePrimitiveKind = (
     }
     return parts.local === "boolean" ? "boolean" : "string";
   }
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return "string";
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
   if (!simple) {
     return "string";
@@ -157,7 +165,7 @@ const resolvePrimitiveKind = (
       : simple.kind === "list"
         ? simple.itemType
         : simple.memberTypes[0];
-  return base ? resolvePrimitiveKind(base, ir, seenNames) : "string";
+  return base ? resolvePrimitiveKind(base, ir, next) : "string";
 };
 
 // The XSD builtin local name a (possibly user-defined) simple type derives
@@ -174,35 +182,31 @@ const resolveBuiltinLocal = (
   if (parts.ns === XSD_NS) {
     return parts.local;
   }
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
-  if (simple?.kind !== "restriction") {
-    return undefined;
-  }
-  return resolveBuiltinLocal(simple.baseType, ir, seenNames);
+  return simple?.kind === "restriction"
+    ? resolveBuiltinLocal(simple.baseType, ir, next)
+    : undefined;
 };
 
 // Resolve a (possibly user-defined) simple type to its xs:list item type, so a
 // list-typed fixed/default lexical is emitted as an array literal — one typed
 // item per whitespace-separated token.
 const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QName | undefined => {
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
   if (simple?.kind === "list") {
     return simple.itemType;
   }
-  if (simple?.kind === "restriction") {
-    return resolveListItemType(simple.baseType, ir, seenNames);
-  }
-  return undefined;
+  return simple?.kind === "restriction"
+    ? resolveListItemType(simple.baseType, ir, next)
+    : undefined;
 };
 
 const primitiveToZod = (
@@ -352,18 +356,16 @@ const resolveBaseStructure = (
   ir: XsdIr,
   seen?: Set<string>,
 ): "list" | "union" | undefined => {
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
-  if (simple === undefined) {
-    return undefined;
-  }
-  return simple.kind === "restriction"
-    ? resolveBaseStructure(simple.baseType, ir, seenNames)
-    : simple.kind;
+  return simple === undefined
+    ? undefined
+    : simple.kind === "restriction"
+      ? resolveBaseStructure(simple.baseType, ir, next)
+      : simple.kind;
 };
 
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
@@ -922,6 +924,20 @@ const choiceOptionalGroups = (type: ComplexTypeDef): Set<string> => {
   return optional;
 };
 
+const choiceFlags = (
+  type: ComplexTypeDef,
+  group: string,
+): { required: boolean; repeated: boolean; flat: IrField[]; branches: [string, IrField[]][] } => {
+  const map = choiceBranchMap(type, group);
+  const entries: [string, IrField[]][] = [...map.entries()];
+  const flat = entries.flatMap(([, fields]) => fields);
+  const card = type.choiceGroups?.[group];
+  const repeated = card !== undefined && (card.maxOccurs === "unbounded" || card.maxOccurs > 1);
+  const required =
+    flat.length > 0 ? flat.every((f) => f.minOccurs > 0) : card === undefined || card.minOccurs > 0;
+  return { required, repeated, flat, branches: entries };
+};
+
 const choiceRefines = (type: ComplexTypeDef): string[] => {
   const keyOf = (field: IrField): string => `val[${JSON.stringify(toFieldKey(field))}]`;
   // A choice with a wildcard branch is always satisfiable through it: wildcard
@@ -938,20 +954,7 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       const keys = choiceSubtreeFields(type, group).map(keyOf);
       return { check: "true", any: keys.length > 0 ? `[${keys.join(", ")}].some(has)` : "false" };
     }
-    const branches = [...choiceBranchMap(type, group).entries()];
-    const flatFields = branches.flatMap(([, fields]) => fields);
-    // A choice group is only required when it is not emptiable: a single
-    // branch with minOccurs="0" makes the whole group match empty (verified
-    // against libxml2). Field minOccurs already folds in the choice particle's
-    // own minOccurs (combineCardinality multiplies); a group of only nested
-    // choices has no own fields and falls back to its particle cardinality.
-    const groupCard = type.choiceGroups?.[group];
-    const requiredChoice =
-      flatFields.length > 0
-        ? flatFields.every((f) => f.minOccurs > 0)
-        : groupCard === undefined || groupCard.minOccurs > 0;
-    const repeatedChoice =
-      groupCard !== undefined && (groupCard.maxOccurs === "unbounded" || groupCard.maxOccurs > 1);
+    const { required: requiredChoice, repeated: repeatedChoice, branches } = choiceFlags(type, group);
     if (repeatedChoice && !requiredChoice) {
       return { check: "true", any: "false" };
     }
@@ -1045,15 +1048,7 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
     if (wildcardGroups.has(group)) {
       continue;
     }
-    const branches = [...choiceBranchMap(type, group).values()];
-    const flatFields = branches.flat();
-    const groupCard = type.choiceGroups?.[group];
-    const repeatedChoice =
-      groupCard !== undefined && (groupCard.maxOccurs === "unbounded" || groupCard.maxOccurs > 1);
-    const requiredChoice =
-      flatFields.length > 0
-        ? flatFields.every((f) => f.minOccurs > 0)
-        : groupCard === undefined || groupCard.minOccurs > 0;
+    const { required: requiredChoice, repeated: repeatedChoice } = choiceFlags(type, group);
     if (repeatedChoice && !requiredChoice) {
       continue;
     }
