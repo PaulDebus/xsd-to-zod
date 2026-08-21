@@ -48,10 +48,8 @@ const childOrderStore = new WeakMap<object, [string, unknown][]>();
 export const childOrderOf = (node: object): [string, unknown][] | undefined =>
   childOrderStore.get(node);
 
-// CompactBuilder with the same grouping semantics plus order tracking in
-// childOrderStore. _addChildTo is the single choke point every child
-// attachment goes through; it is not part of the upstream type declarations,
-// so the grouping logic is mirrored here.
+// CompactBuilder with order tracking in childOrderStore. _addChildTo is the
+// single choke point every child attachment goes through.
 class OrderTrackingCompactBuilder extends CompactBuilder {
   _addChildTo(
     key: string,
@@ -229,9 +227,7 @@ export const decodeTagNameCharRefs = (xml: string): string => {
 };
 
 // ---------------------------------------------------------------------------
-// zod def walking — the single place that touches zod internals. All wrapper
-// unwrapping and def narrowing lives here, so a zod upgrade means one module
-// to review, not a codebase to grep.
+// zod def walking
 // ---------------------------------------------------------------------------
 
 type AnyDef = z.core.$ZodTypeDef;
@@ -503,12 +499,7 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
 };
 
 // ---------------------------------------------------------------------------
-// Lexical preservation. Coercion discards the original XML text, but two
-// consumers still need it: the lexical-space facets (XSD evaluates pattern
-// against the lexical, and exact decimal boundaries outlive a double) and the
-// serializer (libxml2 validates the serialized document, so `007` must not
-// come back as `7`). Facet checks run here, at the single coercion point;
-// the serializer consults the retained lexicals recorded by the read path.
+// Lexical preservation
 // ---------------------------------------------------------------------------
 
 const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined =>
@@ -1083,10 +1074,7 @@ const extractRoot = (
 // ---------------------------------------------------------------------------
 
 // Record the result object's element children in document order (see
-// documentOrderStore). Field claims map each raw occurrence to its slot in
-// the result; unclaimed children (and overflow occurrences of scalar fields)
-// are wildcard extras keyed by their clark name when an xs:any sweep captured
-// them, otherwise dropped from the data and the recording alike.
+// Records element children in document order for round-trip replay.
 const recordDocumentOrder = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
@@ -1307,10 +1295,8 @@ const walkChildren = (
   return wrote;
 };
 
-// xs:any / xs:anyAttribute (lax tier): unmatched child elements/attributes are
-// captured in the normalized open shape (see openWalk). Namespace constraints
-// and processContents are deliberately unenforced — the libxml2 tier is the
-// conformance authority.
+// xs:any / xs:anyAttribute (lax tier): unmatched children captured in open shape.
+// Namespace constraints unenforced — libxml2 tier is the conformance authority.
 const sweepWildcards = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
@@ -1950,15 +1936,7 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
   return serializeDatatypeValue(datatype, value);
 };
 
-// The retained document order describes the data as parsed. It is honored
-// only while it still does: every declared element field and every wildcard
-// extra must hold exactly as many values as the recording. The check is
-// cardinality-only (counts per field/extra), not value identity — a value
-// swapped between two equal-count fields is still replayed at its recorded
-// position. Added, removed, or re-parented values (and defaults zod filled
-// after the walk) break the correspondence, and objects with mixed content
-// keep the schema-order path since text interleaving is not modeled. Anything
-// else falls back to schema-order emission.
+// Retained document order: honored while count matches per field/extra.
 const usableDocumentOrder = (
   obj: Record<string, unknown>,
   fields: Record<string, XmlFieldMeta>,

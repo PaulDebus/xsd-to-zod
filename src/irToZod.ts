@@ -347,10 +347,7 @@ const withDescription = (expr: string, description: string | undefined): string 
 
 type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 
-// The structure a (possibly chained) restriction ultimately derives from.
-// Enumeration facets on list and union bases cannot be checked by the
-// generated schema (the value is an array / a union member), so they route to
-// the runtime's lexical-facet meta.
+// The structure a restriction ultimately derives from (list/union → lexical meta).
 const resolveBaseStructure = (
   typeName: QName,
   ir: XsdIr,
@@ -820,19 +817,7 @@ const withCardinality = (
   return result;
 };
 
-// Choice groups with more than one branch: mutual exclusion is not expressible
-// as a plain zod type (and discriminated unions only scale to one group per
-// type), so branch fields become optional plus a refine per group (#73).
-// Branches come from the IR's choiceBranch: a group ref or nested compositor
-// keeps its fields together as one branch (ipo-style shipTo+billTo vs
-// singleAddress). Single-branch groups need no check — exactly-one-of-one is
-// the field cardinality itself.
-//
-// A branch may carry no fields of its own and consist only of a nested choice
-// (the inner fields bear the inner group's tag, so the branch is invisible in
-// the field list). The IR's choiceGroupGuards link such inner groups to their
-// enclosing branch: the branch map below materializes those branches, and the
-// inner group's own refine is gated on the branch actually being selected.
+// Choice groups: multi-branch groups get optional fields + refine.
 const choiceBranchMap = (type: ComplexTypeDef, group: string): Map<string, IrField[]> => {
   const byBranch = new Map<string, IrField[]>();
   for (const field of type.fields) {
