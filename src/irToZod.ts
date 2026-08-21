@@ -1311,15 +1311,24 @@ const substitutionMembersByHead = (ir: XsdIr): Map<QName, ElementDef[]> => {
 // without abstract types) emit exactly the same code as before.
 // ---------------------------------------------------------------------------
 
+// Known derivation bases of a complex type (extension or restriction where the
+// base is a known complex type).
+const knownDerivationBases = (type: ComplexTypeDef, ir: XsdIr): QName[] => {
+  const bases: QName[] = [];
+  for (const base of [type.baseType, type.restrictionBase]) {
+    if (base !== undefined && ir.complexTypes[base] !== undefined && base !== type.name) {
+      bases.push(base);
+    }
+  }
+  return bases;
+};
+
 // Base type qname → direct derived type qnames, in declaration order. Only
 // edges whose base is a known complex type count.
 const derivationIndex = (ir: XsdIr): Map<QName, QName[]> => {
   const index = new Map<QName, QName[]>();
   for (const type of Object.values(ir.complexTypes)) {
-    for (const base of [type.baseType, type.restrictionBase]) {
-      if (base === undefined || ir.complexTypes[base] === undefined || base === type.name) {
-        continue;
-      }
+    for (const base of knownDerivationBases(type, ir)) {
       const list = index.get(base) ?? [];
       if (!list.includes(type.name)) {
         list.push(type.name);
@@ -1596,18 +1605,12 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // eager object const (the discriminatedUnion options must be real object
   // schemas) plus a variant const extended with the xsiType discriminant.
   const derivedIndex = derivationIndex(ir);
-  const derivedTypeNames = new Set<QName>();
-  for (const type of Object.values(ir.complexTypes)) {
-    for (const base of [type.baseType, type.restrictionBase]) {
-      if (base !== undefined && ir.complexTypes[base] !== undefined && base !== type.name) {
-        derivedTypeNames.add(type.name);
-      }
-    }
-  }
+  const derivedTypeNames = new Set<QName>([...derivedIndex.values()].flat());
   const variantSets = new Map<QName, QName[]>();
   for (const type of Object.values(ir.complexTypes)) {
-    if (type.abstract === true || derivedIndex.has(type.name)) {
-      variantSets.set(type.name, [type.name, ...derivedClosure(type.name, derivedIndex)]);
+    const closure = derivedClosure(type.name, derivedIndex);
+    if (closure.length > 0) {
+      variantSets.set(type.name, [type.name, ...closure]);
     }
   }
   const familyTypes = new Set<QName>([...variantSets.values()].flat());

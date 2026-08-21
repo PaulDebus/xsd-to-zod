@@ -1271,14 +1271,13 @@ const collectFields = (
   }
 };
 
-// Extract the base type of a complexContent/xs:extension derivation, if any.
+// Extract the base type of a complexContent or simpleContent derivation, if any.
 const extractExtensionBase = (
   container: AnyNode,
   nsMap: Record<string, string>,
   diagnostics: Diagnostic[],
 ): QName | undefined => extractDerivationBase(container, "extension", nsMap, diagnostics);
 
-// Extract the base type of a complexContent/xs:restriction derivation, if any.
 const extractRestrictionBase = (
   container: AnyNode,
   nsMap: Record<string, string>,
@@ -1291,11 +1290,12 @@ const extractDerivationBase = (
   nsMap: Record<string, string>,
   diagnostics: Diagnostic[],
 ): QName | undefined => {
-  const complexContent = nodeChildren(container).find(
-    ([key]) => getNodeTagLocalName(key) === "complexContent",
-  )?.[1];
-  const derivationNode = complexContent
-    ? nodeChildren(complexContent).find(([key]) => getNodeTagLocalName(key) === kind)?.[1]
+  const contentNode = nodeChildren(container).find(([key]) => {
+    const local = getNodeTagLocalName(key);
+    return local === "complexContent" || local === "simpleContent";
+  })?.[1];
+  const derivationNode = contentNode
+    ? nodeChildren(contentNode).find(([key]) => getNodeTagLocalName(key) === kind)?.[1]
     : undefined;
   return derivationNode?.["@_base"]
     ? resolveTypeQName(String(derivationNode["@_base"]), nsMap, diagnostics)
