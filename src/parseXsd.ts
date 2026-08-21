@@ -1271,21 +1271,41 @@ const collectFields = (
   }
 };
 
-// Extract the base type of a complexContent/xs:extension derivation, if any.
+// Extract the base type of a complexContent or simpleContent derivation, if any.
 const extractExtensionBase = (
   container: AnyNode,
   nsMap: Record<string, string>,
   diagnostics: Diagnostic[],
+): QName | undefined => extractDerivationBase(container, "extension", nsMap, diagnostics);
+
+const extractRestrictionBase = (
+  container: AnyNode,
+  nsMap: Record<string, string>,
+  diagnostics: Diagnostic[],
+): QName | undefined => extractDerivationBase(container, "restriction", nsMap, diagnostics);
+
+const extractDerivationBase = (
+  container: AnyNode,
+  kind: "extension" | "restriction",
+  nsMap: Record<string, string>,
+  diagnostics: Diagnostic[],
 ): QName | undefined => {
-  const complexContent = nodeChildren(container).find(
-    ([key]) => getNodeTagLocalName(key) === "complexContent",
-  )?.[1];
-  const extensionNode = complexContent
-    ? nodeChildren(complexContent).find(([key]) => getNodeTagLocalName(key) === "extension")?.[1]
+  const contentNode = nodeChildren(container).find(([key]) => {
+    const local = getNodeTagLocalName(key);
+    return local === "complexContent" || local === "simpleContent";
+  })?.[1];
+  const derivationNode = contentNode
+    ? nodeChildren(contentNode).find(([key]) => getNodeTagLocalName(key) === kind)?.[1]
     : undefined;
-  return extensionNode?.["@_base"]
-    ? resolveTypeQName(String(extensionNode["@_base"]), nsMap, diagnostics)
+  return derivationNode?.["@_base"]
+    ? resolveTypeQName(String(derivationNode["@_base"]), nsMap, diagnostics)
     : undefined;
+};
+
+// xs:complexType abstract="true".
+const isAbstractComplexType = (node: AnyNode): boolean => {
+  const abstract = node["@_abstract"];
+  return abstract === true || abstract === "true";
 };
 
 type DeferredInlineType = {
@@ -1859,6 +1879,10 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
         parentTypeName: clarkToLocal(qname),
       });
       const baseType = extractExtensionBase(child, resolveNsMap, state.diagnostics);
+      const restrictionBase =
+        baseType === undefined
+          ? extractRestrictionBase(child, resolveNsMap, state.diagnostics)
+          : undefined;
       const description = extractDocumentation(child);
       if (isMixedComplexType(child)) {
         prependMixedTextField(fields, effectiveNs);
@@ -1868,6 +1892,8 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
         name: qname,
         fields,
         ...optProp("baseType", baseType),
+        ...optProp("restrictionBase", restrictionBase),
+        ...(isAbstractComplexType(child) ? { abstract: true } : {}),
         ...optProp("description", description),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
         ...choiceGuardsMeta(fCtx.choiceGroupGuards),
@@ -1913,6 +1939,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
       const choiceGroupMeta = choiceGroupsMeta(fCtx.choiceGroupCardinality);
       const choiceGuardMeta = choiceGuardsMeta(fCtx.choiceGroupGuards);
       const effectiveBaseType = baseType === override.qname ? undefined : baseType;
+      const abstract = isAbstractComplexType(override.node);
       if (isMixedComplexType(override.node)) {
         prependMixedTextField(fields, override.targetNs);
       }
@@ -1932,6 +1959,8 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             name: override.qname,
             fields: dedupeTextFields([...original.fields, ...fields]),
             ...optProp("baseType", original.baseType),
+            ...optProp("restrictionBase", original.restrictionBase),
+            ...(abstract || original.abstract === true ? { abstract: true } : {}),
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...choiceGuardsMeta(mergedChoiceGuards),
@@ -1942,6 +1971,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             name: override.qname,
             fields,
             ...optProp("baseType", effectiveBaseType),
+            ...(abstract ? { abstract: true } : {}),
             ...optProp("description", description),
             ...choiceGroupMeta,
             ...choiceGuardMeta,
@@ -1953,6 +1983,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           name: override.qname,
           fields,
           ...optProp("baseType", effectiveBaseType),
+          ...(abstract ? { abstract: true } : {}),
           ...optProp("description", description),
           ...choiceGroupMeta,
           ...choiceGuardMeta,
@@ -2021,6 +2052,10 @@ const processDeferredType = (
     parentTypeName: clarkToLocal(typeName),
   });
   const baseType = extractExtensionBase(container, nsMap, state.diagnostics);
+  const restrictionBase =
+    baseType === undefined
+      ? extractRestrictionBase(container, nsMap, state.diagnostics)
+      : undefined;
   if (isMixedComplexType(container)) {
     prependMixedTextField(fields, ownerNs);
   }
@@ -2028,6 +2063,8 @@ const processDeferredType = (
     name: typeName,
     fields,
     ...optProp("baseType", baseType),
+    ...optProp("restrictionBase", restrictionBase),
+    ...(isAbstractComplexType(container) ? { abstract: true } : {}),
     ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
     ...choiceGuardsMeta(fCtx.choiceGroupGuards),
     ...(wildcards.length > 0 ? { wildcards } : {}),

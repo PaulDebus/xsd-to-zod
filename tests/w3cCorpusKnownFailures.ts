@@ -23,9 +23,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Additional_w3c.xml/isDefault079/isDefault079.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO009/attO009.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Attribute_w3c.xml/attO011/attO011.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/ComplexType_w3c.xml/ctA002/ctA002.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ComplexType_w3c.xml/ctA003/ctA003.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ComplexType_w3c.xml/ctL022/ctL022.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/DataTypes_w3c.xml/gMonth004_2063/gMonth004_2063.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Element_w3c.xml/QFE1700c2/QFE1700c2.v", W3C_CORPUS_REASONS.needsTriage],
@@ -97,7 +94,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/SimpleType_w3c.xml/stE065/stE065.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/SimpleType_w3c.xml/stE066/stE066.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["sunMeta/CType.testSet/basetd00101m1/Positive", W3C_CORPUS_REASONS.simpleContentShape],
-  ["sunMeta/CType.testSet/basetd00101m2/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   [

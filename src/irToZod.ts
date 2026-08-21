@@ -1303,6 +1303,61 @@ const substitutionMembersByHead = (ir: XsdIr): Map<QName, ElementDef[]> => {
 };
 
 // ---------------------------------------------------------------------------
+// xsi:type polymorphism: a slot (element field or root element) whose
+// declared complex type is abstract or has known derived types is emitted as z.discriminatedUnion over per-type variant schemas, keyed on a
+// synthetic xsiType property holding the type's Clark qname. The derivation
+// index is built from the IR's complexContent extension (baseType) and
+// restriction (restrictionBase) edges; schema sets without such edges (and
+// without abstract types) emit exactly the same code as before.
+// ---------------------------------------------------------------------------
+
+// Known derivation bases of a complex type (extension or restriction where the
+// base is a known complex type).
+const knownDerivationBases = (type: ComplexTypeDef, ir: XsdIr): QName[] => {
+  const bases: QName[] = [];
+  for (const base of [type.baseType, type.restrictionBase]) {
+    if (base !== undefined && ir.complexTypes[base] !== undefined && base !== type.name) {
+      bases.push(base);
+    }
+  }
+  return bases;
+};
+
+// Base type qname → direct derived type qnames, in declaration order. Only
+// edges whose base is a known complex type count.
+const derivationIndex = (ir: XsdIr): Map<QName, QName[]> => {
+  const index = new Map<QName, QName[]>();
+  for (const type of Object.values(ir.complexTypes)) {
+    for (const base of knownDerivationBases(type, ir)) {
+      const list = index.get(base) ?? [];
+      if (!list.includes(type.name)) {
+        list.push(type.name);
+      }
+      index.set(base, list);
+    }
+  }
+  return index;
+};
+
+// All types derived from base, transitively, in breadth-first declaration
+// order. Cycle-safe (invalid XSD with derivation cycles). The worklist array
+// grows during iteration; JS array iterators observe appended elements.
+const derivedClosure = (base: QName, index: ReadonlyMap<QName, QName[]>): QName[] => {
+  const result: QName[] = [];
+  const seen = new Set<QName>([base]);
+  const worklist = [...(index.get(base) ?? [])];
+  for (const current of worklist) {
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    result.push(current);
+    worklist.push(...(index.get(current) ?? []));
+  }
+  return result;
+};
+
+// ---------------------------------------------------------------------------
 // Small emitter layer — systematic codegen helpers instead of raw string
 // concatenation.  Centralises schema-reference formatting, .register() calls,
 // with-description wrapping, and reserved-keyword / forward-ref wiring so that
@@ -1428,9 +1483,13 @@ const tsFieldLine = (
   forceOptional: boolean,
   dt: { usedTypes: Set<string> } | undefined,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
+  polymorphicSlotType?: (field: IrField) => string | undefined,
 ): string => {
   let type: string;
-  if (field.fixedValue === undefined) {
+  const polymorphicType = field.fixedValue === undefined ? polymorphicSlotType?.(field) : undefined;
+  if (polymorphicType !== undefined) {
+    type = polymorphicType;
+  } else if (field.fixedValue === undefined) {
     const headType = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
     const substMembers = membersByHead.get(field.qname) ?? [];
     // The field accepts any substitution-group member: the TS type is the
@@ -1539,6 +1598,22 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // generated modules — those names keep their historic shape).
   const exportNames = rootSchemaExportNames(ir.rootElements);
   const membersByHead = substitutionMembersByHead(ir);
+
+  // xsi:type polymorphism. variantSets maps a polymorphic declared type
+  // (abstract, or with known derived types) to [declared, ...derivedClosure].
+  // familyTypes is every type appearing in any variant set — those get an
+  // eager object const (the discriminatedUnion options must be real object
+  // schemas) plus a variant const extended with the xsiType discriminant.
+  const derivedIndex = derivationIndex(ir);
+  const derivedTypeNames = new Set<QName>([...derivedIndex.values()].flat());
+  const variantSets = new Map<QName, QName[]>();
+  for (const type of Object.values(ir.complexTypes)) {
+    const closure = derivedClosure(type.name, derivedIndex);
+    if (closure.length > 0) {
+      variantSets.set(type.name, [type.name, ...closure]);
+    }
+  }
+  const familyTypes = new Set<QName>([...variantSets.values()].flat());
   const usedNames = new Set<string>(exportNames.values());
   const alloc = (base: string): string => {
     let name = base;
@@ -1561,6 +1636,20 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     constName.set(t.name, alloc(`${local}Schema`));
     ifaceName.set(t.name, alloc(TS_TYPE_RESERVED.has(local) ? `${local}Type` : local));
   }
+  // Auxiliary consts for polymorphic families: the eager object (variant
+  // option source), the xsiType-carrying variant, and the union per
+  // polymorphic declared type.
+  const objectConstName = new Map<QName, string>();
+  const variantConstName = new Map<QName, string>();
+  const unionConstName = new Map<QName, string>();
+  for (const name of familyTypes) {
+    const local = sanitizeIdentifier(clarkToLocal(name));
+    objectConstName.set(name, alloc(`${local}ObjectSchema`));
+    variantConstName.set(name, alloc(`${local}VariantSchema`));
+  }
+  for (const name of variantSets.keys()) {
+    unionConstName.set(name, alloc(`${sanitizeIdentifier(clarkToLocal(name))}VariantsSchema`));
+  }
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   const importLineIndex = schemaLines.length;
@@ -1579,6 +1668,38 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     claimedTypeNames.add(qname);
   };
 
+  // TS type of a polymorphic slot: the declared type plus its derived types,
+  // each intersected with its xsiType discriminant. The discriminant is
+  // optional on family roots (parsed plain occurrences carry none) and
+  // required on derived types (parsed derived values always carry it; the
+  // schema's .default() fills it for hand-built input).
+  const tsVariantUnionType = (typeName: QName): string =>
+    (variantSets.get(typeName) ?? [typeName])
+      .map((variant) => {
+        const iface = ifaceName.get(variant) ?? "unknown";
+        const discriminant = JSON.stringify(variant);
+        return derivedTypeNames.has(variant)
+          ? `(${iface} & { "xsiType": ${discriminant} })`
+          : `(${iface} & { "xsiType"?: ${discriminant} | undefined })`;
+      })
+      .join(" | ");
+
+  // Polymorphic slot check, shared by the schema and the TS type emission. A
+  // field that also references a substitution-group head keeps the
+  // substitution union: tag-based member dispatch already covers it, and the
+  // two mechanisms are not combined.
+  const polymorphicVariants = (field: IrField): QName[] | undefined => {
+    if (field.kind !== "element") {
+      return undefined;
+    }
+    const variants = variantSets.get(field.typeName);
+    if (variants === undefined) {
+      return undefined;
+    }
+    const substMembers = membersByHead.get(field.qname);
+    return substMembers === undefined || substMembers.length === 0 ? variants : undefined;
+  };
+
   // Field value schema: the field's type, or — when the field references a
   // substitution-group head — a union of per-element options (head + all
   // members). Each option is a lazy wrapper registered with its element
@@ -1586,7 +1707,24 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // against these to read and serialize with the right type. Members come
   // first: they are the more specific types, so a validating member branch
   // is picked before the head's looser shape could strip member-only content.
-  const fieldTypeExpr = (field: IrField): string => {
+  //
+  // A polymorphic slot (xsi:type) instead references the discriminated union
+  // of its declared type's variants. In eager context (family object consts,
+  // evaluated at module init) every reference to a complex type or union
+  // const is lazy-wrapped so declaration order and recursion cannot bite.
+  const fieldTypeExpr = (field: IrField, eager: boolean): string => {
+    const variants = polymorphicVariants(field);
+    if (variants !== undefined) {
+      const union = unionConstName.get(field.typeName) ?? "z.unknown()";
+      if (!eager) {
+        return union;
+      }
+      // The return-type annotation breaks circular type inference between
+      // mutually recursive family object consts.
+      return opts?.js
+        ? `z.lazy(() => ${union})`
+        : `z.lazy((): z.ZodType<${tsVariantUnionType(field.typeName)}> => ${union})`;
+    }
     const headExpr = primitiveToZod(
       field.typeName,
       definedTypes,
@@ -1594,9 +1732,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       usedHelpers,
       structured,
     );
+    const eagerHeadExpr =
+      eager && ir.complexTypes[field.typeName] !== undefined && definedTypes.has(field.typeName)
+        ? `z.lazy(() => ${headExpr})`
+        : headExpr;
     const substMembers = membersByHead.get(field.qname);
     if (substMembers === undefined || substMembers.length === 0) {
-      return headExpr;
+      return eagerHeadExpr;
     }
     const option = (expr: string, qname: QName): string =>
       `z.lazy(() => ${expr}).register(xmlRegistry, { substElement: ${JSON.stringify(qname)} })`;
@@ -1610,6 +1752,28 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       option(headExpr, field.qname),
     ];
     return `z.union([${options.join(", ")}])`;
+  };
+
+  // Object shape properties of a complex type. Eager mode is for the family
+  // object consts; the main consts wrap their shape in z.lazy as before.
+  const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string => {
+    const multiBranch = choiceOptionalGroups(complexType);
+    return complexType.fields
+      .map(
+        (field) =>
+          `${JSON.stringify(toFieldKey(field))}: ${withDescription(
+            withCardinality(
+              fieldTypeExpr(field, eager),
+              field,
+              ir,
+              field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
+              structured,
+              usedHelpers,
+            ),
+            field.description,
+          )}`,
+      )
+      .join(", ");
   };
 
   // Interfaces first: exported so consumers can name the inferred types, and
@@ -1627,6 +1791,8 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
             dt,
             membersByHead,
+            (f) =>
+              polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
           ),
         )
         .join("\n");
@@ -1701,14 +1867,41 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     );
   }
 
+  // Eager object consts for polymorphic-family types: discriminatedUnion
+  // options must be object schemas, so the family members' shapes exist as
+  // standalone consts (their fields lazy-wrap complex/union references).
   for (const complexType of Object.values(ir.complexTypes)) {
+    if (!familyTypes.has(complexType.name)) {
+      continue;
+    }
+    const objectCtor =
+      complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object";
+    schemaLines.push(
+      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}})${choiceRefines(complexType).join("")};`,
+    );
+  }
+
+  for (const complexType of Object.values(ir.complexTypes)) {
+    const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
+    if (familyTypes.has(complexType.name)) {
+      // Family member: the object shape lives in its own const (shared with
+      // the xsiType variant below); the named const stays a lazy wrapper.
+      schemaLines.push(
+        `const ${constName.get(complexType.name)}${annotation} = ${registered(
+          `z.lazy(() => ${objectConstName.get(complexType.name)})`,
+          complexType.description,
+          fieldsMetaFor(complexType, ir, structured, membersByHead),
+        )};`,
+      );
+      continue;
+    }
     const multiBranch = choiceOptionalGroups(complexType);
     const props = complexType.fields
       .map(
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
             withCardinality(
-              fieldTypeExpr(field),
+              fieldTypeExpr(field, false),
               field,
               ir,
               field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
@@ -1720,13 +1913,37 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       )
       .join(", ");
 
-    const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     schemaLines.push(
       `const ${constName.get(complexType.name)}${annotation} = ${registered(
         `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${choiceRefines(complexType).join("")})`,
         complexType.description,
         fieldsMetaFor(complexType, ir, structured, membersByHead),
       )};`,
+    );
+  }
+
+  // xsiType variant schemas (object shape + discriminant property, registered
+  // with the type meta so the runtime can read occurrences through them) and
+  // the discriminated union per polymorphic declared type. unionFallback lets
+  // a discriminant-less value at a mid-chain slot (whose declared type's
+  // variant carries a default, so undefined is not among its discriminator
+  // values) still validate as the declared type.
+  for (const complexType of Object.values(ir.complexTypes)) {
+    if (!familyTypes.has(complexType.name)) {
+      continue;
+    }
+    const discriminant = JSON.stringify(complexType.name);
+    const xsiTypeProp = derivedTypeNames.has(complexType.name)
+      ? `z.literal(${discriminant}).default(${discriminant})`
+      : `z.literal(${discriminant}).optional()`;
+    schemaLines.push(
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
+    );
+  }
+  for (const [typeName, variants] of variantSets) {
+    const options = variants.map((variant) => variantConstName.get(variant)).join(", ");
+    schemaLines.push(
+      `const ${unionConstName.get(typeName)} = z.discriminatedUnion("xsiType", [${options}], { unionFallback: true });`,
     );
   }
 
@@ -1737,8 +1954,13 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     }
     // Root exports are fresh wrapper objects: registry meta is keyed by schema
     // object identity, so registering { root } on the shared type schema would
-    // clobber its type meta (and collide when two roots share one type).
-    const base = `z.lazy(() => ${primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured)})`;
+    // clobber its type meta (and collide when two roots share one type). A
+    // root whose type is polymorphic wraps the xsi:type variant union.
+    const rootTypeExpr =
+      variantSets.get(rootDef.typeName) === undefined
+        ? primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured)
+        : (unionConstName.get(rootDef.typeName) ?? "z.unknown()");
+    const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`];
     if (rootDef.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
