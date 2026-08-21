@@ -439,20 +439,20 @@ const readSchema = (
   return { schemaNode, nsMap, targetNs, formDefaults };
 };
 
-const nodeChildren = (node: AnyNode): [string, AnyNode][] => {
-  const children: [string, AnyNode][] = [];
-  for (const [key, value] of Object.entries(node)) {
-    if (key.startsWith("@_") || key === "#text") {
-      continue;
-    }
+const collectChildren = (
+  entries: Iterable<[string, unknown]>,
+): [string, AnyNode][] => {
+  const out: [string, AnyNode][] = [];
+  for (const [key, value] of entries) {
+    if (key.startsWith("@_") || key === "#text") continue;
     for (const entry of asArray(value as AnyNode | AnyNode[])) {
-      if (entry && typeof entry === "object") {
-        children.push([key, entry as AnyNode]);
-      }
+      if (entry && typeof entry === "object") out.push([key, entry as AnyNode]);
     }
   }
-  return children;
+  return out;
 };
+
+const nodeChildren = (node: AnyNode): [string, AnyNode][] => collectChildren(Object.entries(node));
 
 // Document-order children, when the parser's order tracking is available
 // (see childOrderOf): the grouped shape from nodeChildren loses cross-tag
@@ -460,19 +460,7 @@ const nodeChildren = (node: AnyNode): [string, AnyNode][] => {
 // Falls back to the grouped iteration for programmatically built nodes.
 const nodeChildrenOrdered = (node: AnyNode): [string, AnyNode][] => {
   const order = childOrderOf(node);
-  if (order === undefined) {
-    return nodeChildren(node);
-  }
-  const children: [string, AnyNode][] = [];
-  for (const [key, value] of order) {
-    if (key.startsWith("@_") || key === "#text") {
-      continue;
-    }
-    if (value && typeof value === "object") {
-      children.push([key, value as AnyNode]);
-    }
-  }
-  return children;
+  return order === undefined ? nodeChildren(node) : collectChildren(order as Iterable<[string, unknown]>);
 };
 
 const pushChild = (node: AnyNode, tag: string, child: AnyNode): void => {
@@ -1378,17 +1366,20 @@ type ParseState = {
   allowMissingImports: boolean;
 };
 
+const toRecord = <V>(entries: Map<string, V> | Record<string, V>): Record<string, V> =>
+  entries instanceof Map ? Object.fromEntries(entries) : entries;
+
 const choiceGroupsMeta = (
   entries: Map<string, Cardinality> | Record<string, Cardinality>,
 ): Pick<ComplexTypeDef, "choiceGroups"> => {
-  const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
+  const record = toRecord(entries);
   return Object.keys(record).length > 0 ? { choiceGroups: record } : {};
 };
 
 const choiceGuardsMeta = (
   entries: Map<string, ChoiceGroupGuard> | Record<string, ChoiceGroupGuard>,
 ): Pick<ComplexTypeDef, "choiceGroupGuards"> => {
-  const record = entries instanceof Map ? Object.fromEntries(entries) : entries;
+  const record = toRecord(entries);
   return Object.keys(record).length > 0 ? { choiceGroupGuards: record } : {};
 };
 

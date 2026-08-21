@@ -820,8 +820,7 @@ const findAttributeValue = (
       continue;
     }
     const { prefix, local } = splitQName(key.slice(2));
-    const namespace = prefix ? (namespaceContext[prefix] ?? "") : "";
-    if (local === expected.local && namespace === expected.namespace) {
+    if (local === expected.local && nsForAttribute(prefix, namespaceContext) === expected.namespace) {
       return value;
     }
   }
@@ -841,25 +840,12 @@ const findElementValues = (
       continue;
     }
     const { prefix, local } = splitQName(key);
-    // Match per item, with each item's own xmlns context — repeated elements
-    // may redeclare namespaces per sibling (#67).
     for (const item of toArray(value)) {
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode
-        ? withNamespaceContext(namespaceContext, itemNode)
-        : namespaceContext;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
+      const namespace = nsForElement(prefix, contextFor(item, namespaceContext));
       const match = expected.find(
         (e) =>
           e.local === local &&
-          (namespace === e.namespace ||
-            // Unqualified local elements (elementFormDefault="unqualified")
-            // belong to no namespace, yet real-world documents put them in the
-            // inherited default namespace. Accommodate them: a field in no
-            // namespace also matches unprefixed elements (lenient by design;
-            // the libxml2 tier is the strict one).
-            (e.namespace === "" && !prefix)),
+          (namespace === e.namespace || (e.namespace === "" && !prefix)),
       );
       if (match !== undefined) {
         matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
@@ -1073,8 +1059,7 @@ const extractRoot = (
         : {};
     const namespaceContext = withNamespaceContext({}, node);
     const { prefix, local } = splitQName(key);
-    const namespace = prefix ? (namespaceContext[prefix] ?? "") : (namespaceContext[""] ?? "");
-    return local === expected.local && namespace === expected.namespace;
+    return local === expected.local && nsForElement(prefix, namespaceContext) === expected.namespace;
   });
   if (!entry) {
     throw new Error(`Root element '${expectedQName}' not found in XML payload`);
@@ -1244,6 +1229,22 @@ type ChildAccept = {
   element?: (namespace: string, local: string, prefix: string) => boolean;
 };
 
+const nsForElement = (prefix: string, ctx: Record<string, string>): string =>
+  prefix ? (ctx[prefix] ?? "") : (ctx[""] ?? "");
+const nsForAttribute = (prefix: string, ctx: Record<string, string>): string =>
+  prefix ? (ctx[prefix] ?? "") : "";
+
+const contextFor = (
+  rawValue: unknown,
+  base: Record<string, string>,
+): Record<string, string> => {
+  const itemNode =
+    rawValue !== null && typeof rawValue === "object"
+      ? (rawValue as Record<string, unknown>)
+      : undefined;
+  return itemNode ? withNamespaceContext(base, itemNode) : base;
+};
+
 // Clark key of a raw child entry: per-item namespace context, since repeated
 // siblings may redeclare prefixes.
 const rawChildClarkKey = (
@@ -1252,13 +1253,7 @@ const rawChildClarkKey = (
   context: Record<string, string>,
 ): string => {
   const { prefix, local } = splitQName(rawKey);
-  const itemNode =
-    rawValue !== null && typeof rawValue === "object"
-      ? (rawValue as Record<string, unknown>)
-      : undefined;
-  const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-  const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-  return `{${namespace}}${local}`;
+  return `{${nsForElement(prefix, contextFor(rawValue, context))}}${local}`;
 };
 
 // Shared walk over a parsed node's content entries, into the normalized open
@@ -1281,28 +1276,22 @@ const walkChildren = (
     }
     if (key.startsWith("@_")) {
       const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? "") : "";
-      // xsi:* attributes are processor directives (nil/type/schemaLocation),
-      // not content; their QName values could not be re-serialized without
-      // declaring the value's prefix.
-      if (namespace === XSI_NS || accept.attribute?.(namespace, local) === false) {
+      const ns = nsForAttribute(prefix, context);
+      if (ns === XSI_NS || accept.attribute?.(ns, local) === false) {
         continue;
       }
-      target[`@${namespace ? `{${namespace}}` : ""}${local}`] =
-        value === undefined ? value : String(value);
+      target[`@${ns ? `{${ns}}` : ""}${local}`] = value === undefined ? value : String(value);
       wrote = true;
       continue;
     }
     const { prefix, local } = splitQName(key);
     for (const item of toArray(value)) {
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-      if (accept.element?.(namespace, local, prefix) === false) {
+      if (accept.element?.(nsForElement(prefix, contextFor(item, context)), local, prefix) === false) {
         continue;
       }
       const childKey = rawChildClarkKey(key, item, context);
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = target[childKey];
       if (existing === undefined) {

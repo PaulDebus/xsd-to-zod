@@ -140,26 +140,14 @@ export const isLibrary = (filePath: string): boolean => {
     }
     const start = (schemaMatch.index ?? 0) + schemaMatch[0].length;
     let depth = 1;
-    const tagRe = /<\/?(?:\w+:)?(\w+)[^>]*\/?>/g;
-    tagRe.lastIndex = start;
-    let m: RegExpExecArray | null = tagRe.exec(content);
-    while (m !== null) {
+    for (const m of content.slice(start).matchAll(/<\/?(?:\w+:)?(\w+)[^>]*\/?>/g)) {
       const tag = m[0];
-      const local = m[1];
       if (tag.startsWith("</")) {
-        depth--;
-        if (depth === 0) {
-          break;
-        }
+        if (--depth === 0) break;
       } else {
-        if (depth === 1 && local === "element") {
-          return false;
-        }
-        if (!tag.endsWith("/")) {
-          depth++;
-        }
+        if (depth === 1 && m[1] === "element") return false;
+        if (!tag.endsWith("/")) depth++;
       }
-      m = tagRe.exec(content);
     }
     return true;
   } catch {

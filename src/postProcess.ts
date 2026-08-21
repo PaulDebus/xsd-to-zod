@@ -97,28 +97,20 @@ export const runPostGenerationFormatting = (
   const jsTsFiles = generatedFiles.filter((file) => JS_TS_RE.test(file));
 
   const runBiome = (): boolean => {
-    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd)) {
-      return false;
-    }
+    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd)) return false;
     runTool("biome", ["lint", "--write", ...jsTsFiles], cwd);
     return true;
   };
-  const runPrettier = (): boolean =>
-    jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
+  const runPrettier = (): boolean => jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
 
   // A tool with a project config wins over one that would run on defaults, so
   // the output matches the project's style. Biome and Prettier both format
   // fine without a config — the binary alone is enough as a fallback; gating
   // on a config file silently skipped formatting in default setups.
-  if (hasConfig(cwd, "biome") && runBiome()) {
-    return true;
+  for (const tool of ["biome", "prettier"] as const) {
+    if (hasConfig(cwd, tool) && (tool === "biome" ? runBiome() : runPrettier())) return true;
   }
-  if (hasConfig(cwd, "prettier") && runPrettier()) {
-    return true;
-  }
-  if (runBiome() || runPrettier()) {
-    return true;
-  }
+  if (runBiome() || runPrettier()) return true;
 
   // ESLint v9 exits non-zero without a config file — only run it when one
   // exists, so a config-less project doesn't crash the CLI after the output

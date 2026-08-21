@@ -368,6 +368,103 @@ const resolveBaseStructure = (
       : simple.kind;
 };
 
+const applyPatternFacet = (
+  result: string,
+  facetValue: string,
+  st: ReturnType<typeof structuredType> | undefined,
+  usedHelpers: Set<string>,
+  ownPatterns: string[],
+): string => {
+  if (st !== undefined) {
+    usedHelpers.add(st.writeFn);
+    return `${result}.refine((val) => new RegExp(${JSON.stringify(facetValue)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
+  }
+  if (isStringType(result)) {
+    usedHelpers.add("xsdPattern");
+    return `${result}.regex(xsdPattern(${JSON.stringify(facetValue)}))`;
+  }
+  ownPatterns.push(facetValue);
+  return result;
+};
+
+const applyLengthFacet = (
+  result: string,
+  kind: Facet & { kind: "length" | "minLength" | "maxLength" },
+  builtinLocal: string | undefined,
+  st: ReturnType<typeof structuredType> | undefined,
+  usedHelpers: Set<string>,
+): string => {
+  const op = kind.kind === "length" ? "===" : kind.kind === "minLength" ? ">=" : "<=";
+  if (builtinLocal === "NOTATION" || builtinLocal === "QName") {
+    return `${result} /* facet ${kind.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
+  }
+  if (builtinLocal === "hexBinary") {
+    return `${result}.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
+  }
+  if (builtinLocal === "base64Binary") {
+    return `${result}.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
+  }
+  if (builtinLocal === "IDREFS" || builtinLocal === "NMTOKENS" || builtinLocal === "ENTITIES") {
+    return `${result}.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${kind.value}, { message: 'item count constraint violated' })`;
+  }
+  if (st !== undefined) {
+    usedHelpers.add(st.writeFn);
+    return `${result}.refine((val) => ${st.writeFn}(val).length ${op} ${kind.value}, { message: 'length constraint violated' })`;
+  }
+  if (isStringType(result)) {
+    return kind.kind === "length"
+      ? `${result}.length(${kind.value})`
+      : kind.kind === "minLength"
+        ? `${result}.min(${kind.value})`
+        : `${result}.max(${kind.value})`;
+  }
+  return `${result}.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${kind.value}, { message: 'length constraint violated' })`;
+};
+
+const applyOrderFacet = (
+  result: string,
+  facet: Facet & { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" },
+  kind: "number" | "bigint" | "boolean" | "string",
+): string => {
+  if (isNumberType(result)) {
+    const bound = String(Number(facet.value));
+    const suffix =
+      facet.kind === "minInclusive"
+        ? `.min(${bound})`
+        : facet.kind === "maxInclusive"
+          ? `.max(${bound})`
+          : facet.kind === "minExclusive"
+            ? `.gt(${bound})`
+            : `.lt(${bound})`;
+    return result + suffix;
+  }
+  if (isBigIntType(result)) {
+    const bound = typedLiteral("bigint", facet.value);
+    const suffix =
+      facet.kind === "minInclusive"
+        ? `.min(${bound})`
+        : facet.kind === "maxInclusive"
+          ? `.max(${bound})`
+          : facet.kind === "minExclusive"
+            ? `.gt(${bound})`
+            : `.lt(${bound})`;
+    return result + suffix;
+  }
+  if (kind === "number" || kind === "bigint") {
+    const op =
+      facet.kind === "minInclusive"
+        ? ">="
+        : facet.kind === "maxInclusive"
+          ? "<="
+          : facet.kind === "minExclusive"
+            ? ">"
+            : "<";
+    const bound = kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
+    return `${result}.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
+  }
+  return `${result} /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
+};
+
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the resolved primitive kind — same rule as
 // fixed/default values (#68, #84). Facets the generated schema cannot check
@@ -466,115 +563,21 @@ const withFacets = (
     for (const facet of otherFacets) {
       switch (facet.kind) {
         case "pattern":
-          // Structured date/time values have no string form of their own; the
-          // pattern applies to the canonical lexical.
-          if (st !== undefined) {
-            usedHelpers.add(st.writeFn);
-            result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
-          } else if (isStringType(result)) {
-            // The string value IS the (whiteSpace-processed) lexical, so the
-            // schema can check it — with XSD regex semantics (anchored,
-            // unicode-aware multi-character escapes).
-            usedHelpers.add("xsdPattern");
-            result += `.regex(xsdPattern(${JSON.stringify(facet.value)}))`;
-          } else {
-            // Non-string/list/union base: the pattern must be evaluated
-            // against the original lexical, which the schema cannot see.
-            ownPatterns.push(facet.value);
-          }
+          result = applyPatternFacet(result, facet.value, st, usedHelpers, ownPatterns);
           break;
         case "length":
         case "minLength":
-        case "maxLength": {
-          const op = facet.kind === "length" ? "===" : facet.kind === "minLength" ? ">=" : "<=";
-          // XSD 1.0 vacuous rule: every QName/NOTATION value satisfies any
-          // length facet — skip them (with a diagnostic) rather than reject
-          // valid values (#124 review).
-          if (builtinLocal === "NOTATION" || builtinLocal === "QName") {
-            result += ` /* facet ${facet.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
-          } else if (builtinLocal === "hexBinary") {
-            // Length unit is octets: two hex digits per octet.
-            result += `.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
-          } else if (builtinLocal === "base64Binary") {
-            // Length unit is octets: four base64 chars per three octets, less padding.
-            result += `.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
-          } else if (
-            builtinLocal === "IDREFS" ||
-            builtinLocal === "NMTOKENS" ||
-            builtinLocal === "ENTITIES"
-          ) {
-            // Length unit is list items (whitespace-separated tokens).
-            result += `.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${facet.value}, { message: 'item count constraint violated' })`;
-          } else if (st !== undefined) {
-            // Structured date/time: the length facet applies to the lexical
-            // space, so measure the canonical lexical of the parsed value.
-            usedHelpers.add(st.writeFn);
-            result += `.refine((val) => ${st.writeFn}(val).length ${op} ${facet.value}, { message: 'length constraint violated' })`;
-          } else if (isStringType(result)) {
-            result +=
-              facet.kind === "length"
-                ? `.length(${facet.value})`
-                : facet.kind === "minLength"
-                  ? `.min(${facet.value})`
-                  : `.max(${facet.value})`;
-          } else {
-            // Non-string base (type reference, enum, list): the convenience
-            // methods don't exist there — refine on the .length of strings
-            // (characters) and arrays (list items) instead (#114).
-            result += `.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${facet.value}, { message: 'length constraint violated' })`;
-          }
+        case "maxLength":
+          result = applyLengthFacet(result, facet, builtinLocal, st, usedHelpers);
           break;
-        }
         case "minInclusive":
         case "maxInclusive":
         case "minExclusive":
-        case "maxExclusive": {
-          if (isNumberType(result)) {
-            const bound = String(Number(facet.value));
-            result +=
-              facet.kind === "minInclusive"
-                ? `.min(${bound})`
-                : facet.kind === "maxInclusive"
-                  ? `.max(${bound})`
-                  : facet.kind === "minExclusive"
-                    ? `.gt(${bound})`
-                    : `.lt(${bound})`;
-          } else if (isBigIntType(result)) {
-            const bound = typedLiteral("bigint", facet.value);
-            result +=
-              facet.kind === "minInclusive"
-                ? `.min(${bound})`
-                : facet.kind === "maxInclusive"
-                  ? `.max(${bound})`
-                  : facet.kind === "minExclusive"
-                    ? `.gt(${bound})`
-                    : `.lt(${bound})`;
-          } else if (kind === "number" || kind === "bigint") {
-            // Numeric user-type reference: compare via refine, which any
-            // schema supports (#114).
-            const op =
-              facet.kind === "minInclusive"
-                ? ">="
-                : facet.kind === "maxInclusive"
-                  ? "<="
-                  : facet.kind === "minExclusive"
-                    ? ">"
-                    : "<";
-            const bound =
-              kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
-            result += `.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
-          } else {
-            // Order facets on non-numeric kinds (dates, durations) are
-            // skipped: the coerced/string value cannot be compared soundly —
-            // the libxml2 tier stays the conformance authority (#114).
-            result += ` /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
-          }
+        case "maxExclusive":
+          result = applyOrderFacet(result, facet, kind);
           break;
-        }
         case "totalDigits":
           if (kind === "bigint") {
-            // BigInt's string form is canonical (no leading zeros), so the
-            // digit count of the absolute value is exact at any precision.
             result += `.refine((val) => String(val < 0n ? -val : val).length <= ${facet.value}, { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
           } else {
             usage.totalDigits = true;
@@ -583,7 +586,6 @@ const withFacets = (
           break;
         case "fractionDigits":
           if (kind === "bigint") {
-            // Vacuous for integers: the fraction digit count is always 0.
             result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
           } else {
             usage.fractionDigits = true;
