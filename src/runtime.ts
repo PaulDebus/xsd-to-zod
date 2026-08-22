@@ -1,4 +1,8 @@
-import { type BaseOutputBuilder, BaseOutputBuilderFactory } from "@nodable/base-output-builder";
+import {
+  BaseValueParser,
+  type BaseOutputBuilder,
+  BaseOutputBuilderFactory,
+} from "@nodable/base-output-builder";
 import {
   CompactBuilder,
   CompactBuilderFactory,
@@ -9,7 +13,6 @@ import type { z } from "zod";
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { QName } from "./types.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
-import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -77,6 +80,19 @@ class OrderTrackingCompactBuilder extends CompactBuilder {
   }
 }
 
+// XML 1.0 §3.3.3: literal TAB/LF/CR in attribute values normalize to spaces
+// before the app sees them; character references (&#9; etc.) keep the control
+// character after entity expansion. The parser's AttributeProcessor already
+// handles LF/CR; this pre-entity step covers literal TAB and preserves the
+// &#9; vs literal distinction by running before "entity".
+class AttributeWhitespaceNormalizer extends BaseValueParser {
+  override parse(val: unknown): unknown {
+    return typeof val === "string" ? val.replace(/[\t\n\r]/g, " ") : val;
+  }
+}
+
+const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
+
 // Works around a declaration bug in @nodable/compact-builder@2.0.0 (#86):
 // CompactBuilder.addElement is declared as addElement(tag, matcher) while the
 // implementation — like BaseOutputBuilder.addElement — is addElement(tag),
@@ -90,7 +106,7 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   // single coercion point for elements and attributes (#65).
   private readonly inner = new CompactBuilderFactory({
     tags: { valueParsers: ["entity"] },
-    attributes: { valueParsers: ["entity"] },
+    attributes: { valueParsers: [attributeWhitespaceNormalizer, "entity"] },
   });
 
   override getInstance(...args: GetInstanceArgs): BaseOutputBuilder {
@@ -1649,10 +1665,7 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
-  const parsed = parser.parse(decodeTagNameCharRefs(normalizeAttributeWhitespace(xml))) as Record<
-    string,
-    unknown
-  >;
+  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
