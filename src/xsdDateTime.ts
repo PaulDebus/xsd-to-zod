@@ -92,6 +92,12 @@ const fail = (datatype: string, value: string): never => {
   throw new Error(`invalid xs:${datatype} lexical: ${JSON.stringify(value)}`);
 };
 
+const mustExec = (re: RegExp, value: string, datatype: string): RegExpExecArray => {
+  const m = re.exec(collapseWhiteSpace(value));
+  if (!m || m[1] === undefined) fail(datatype, value);
+  return m as RegExpExecArray;
+};
+
 // Timezone designator → minutes east of UTC; undefined when floating.
 const tzMinutes = (tz: string | undefined): number | undefined => {
   if (tz === undefined) {
@@ -168,23 +174,23 @@ const toUtcTime = (
 };
 
 export const parseXsdDate = (value: string): XsdDate => {
-  const m = DATE_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
-    return fail("date", value);
-  }
+  const m = mustExec(DATE_RE, value, "date");
+  if (m[2] === undefined || m[3] === undefined) fail("date", value);
+  const y = Number(m[1]),
+    mo = Number(m[2]),
+    d = Number(m[3]);
   const offset = tzMinutes(m[4]);
   if (offset === undefined) {
-    return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+    return { year: y, month: mo, day: d };
   }
-  const utc = toUtc(Number(m[1]), Number(m[2]), Number(m[3]), 0, 0, offset);
+  const utc = toUtc(y, mo, d, 0, 0, offset);
   return { year: utc.year, month: utc.month, day: utc.day, tzOffset: 0 };
 };
 
 export const parseXsdDateTime = (value: string): XsdDateTime => {
-  const m = DATE_TIME_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined || m[4] === undefined || m[5] === undefined || m[6] === undefined) {
-    return fail("dateTime", value);
-  }
+  const m = mustExec(DATE_TIME_RE, value, "dateTime");
+  if (m[2] === undefined || m[3] === undefined || m[4] === undefined || m[5] === undefined || m[6] === undefined)
+    fail("dateTime", value);
   const frac = fraction(m[7]);
   const utc = toUtc(
     Number(m[1]),
@@ -202,99 +208,96 @@ export const parseXsdDateTime = (value: string): XsdDateTime => {
     minute: utc.minute,
     second: Number(m[6]),
   };
-  if (frac !== undefined) {
-    result.fraction = frac;
-  }
-  if (m[8] !== undefined) {
-    result.tzOffset = 0;
-  }
+  if (frac !== undefined) result.fraction = frac;
+  if (m[8] !== undefined) result.tzOffset = 0;
   return result;
 };
 
 export const parseXsdTime = (value: string): XsdTime => {
-  const m = TIME_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
-    return fail("time", value);
-  }
+  const m = mustExec(TIME_RE, value, "time");
+  if (m[2] === undefined || m[3] === undefined) fail("time", value);
   const frac = fraction(m[4]);
   const offset = tzMinutes(m[5]);
-  // Hour 24 needs no timezone to normalize: 24:00:00 is 00:00:00.
   const utc = toUtcTime(Number(m[1]), Number(m[2]), offset ?? 0);
   const result: XsdTime = { hour: utc.hour, minute: utc.minute, second: Number(m[3]) };
-  if (frac !== undefined) {
-    result.fraction = frac;
-  }
-  if (offset !== undefined) {
-    result.tzOffset = 0;
-  }
+  if (frac !== undefined) result.fraction = frac;
+  if (offset !== undefined) result.tzOffset = 0;
   return result;
 };
 
-export const parseXsdGYear = (value: string): XsdGYear => {
-  const m = G_YEAR_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined) {
-    return fail("gYear", value);
-  }
-  const offset = tzMinutes(m[2]);
-  if (offset === undefined) {
-    return { year: Number(m[1]) };
-  }
-  return { year: toUtc(Number(m[1]), 1, 1, 0, 0, offset).year, tzOffset: 0 };
+const parseGWithTz = <T>(
+  value: string,
+  re: RegExp,
+  dt: string,
+  buildPlain: (m: RegExpExecArray) => T,
+  buildTz: (m: RegExpExecArray, offset: number) => T,
+  tzIdx: number,
+): T => {
+  const m = mustExec(re, value, dt);
+  if (tzIdx === 3 && m[2] === undefined) fail(dt, value);
+  const offset = tzMinutes(m[tzIdx]);
+  return offset === undefined ? buildPlain(m) : buildTz(m, offset);
 };
 
-export const parseXsdGYearMonth = (value: string): XsdGYearMonth => {
-  const m = G_YEAR_MONTH_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined || m[2] === undefined) {
-    return fail("gYearMonth", value);
-  }
-  const offset = tzMinutes(m[3]);
-  if (offset === undefined) {
-    return { year: Number(m[1]), month: Number(m[2]) };
-  }
-  const utc = toUtc(Number(m[1]), Number(m[2]), 1, 0, 0, offset);
-  return { year: utc.year, month: utc.month, tzOffset: 0 };
-};
+export const parseXsdGYear = (value: string): XsdGYear =>
+  parseGWithTz(
+    value,
+    G_YEAR_RE,
+    "gYear",
+    (m) => ({ year: Number(m[1]) }),
+    (m, off) => ({ year: toUtc(Number(m[1]), 1, 1, 0, 0, off).year, tzOffset: 0 }),
+    2,
+  );
+
+export const parseXsdGYearMonth = (value: string): XsdGYearMonth =>
+  parseGWithTz(
+    value,
+    G_YEAR_MONTH_RE,
+    "gYearMonth",
+    (m) => ({ year: Number(m[1]), month: Number(m[2]) }),
+    (m, off) => {
+      const utc = toUtc(Number(m[1]), Number(m[2]), 1, 0, 0, off);
+      return { year: utc.year, month: utc.month, tzOffset: 0 };
+    },
+    3,
+  );
 
 // Recurring types (gMonth/gMonthDay/gDay) shift against the leap reference
 // year 2000 so that --02-29 stays representable.
 const REFERENCE_YEAR = 2000;
 
-export const parseXsdGMonth = (value: string): XsdGMonth => {
-  const m = G_MONTH_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined) {
-    return fail("gMonth", value);
-  }
-  const offset = tzMinutes(m[2]);
-  if (offset === undefined) {
-    return { month: Number(m[1]) };
-  }
-  return { month: toUtc(REFERENCE_YEAR, Number(m[1]), 1, 0, 0, offset).month, tzOffset: 0 };
-};
+export const parseXsdGMonth = (value: string): XsdGMonth =>
+  parseGWithTz(
+    value,
+    G_MONTH_RE,
+    "gMonth",
+    (m) => ({ month: Number(m[1]) }),
+    (m, off) => ({ month: toUtc(REFERENCE_YEAR, Number(m[1]), 1, 0, 0, off).month, tzOffset: 0 }),
+    2,
+  );
 
-export const parseXsdGMonthDay = (value: string): XsdGMonthDay => {
-  const m = G_MONTH_DAY_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined || m[2] === undefined) {
-    return fail("gMonthDay", value);
-  }
-  const offset = tzMinutes(m[3]);
-  if (offset === undefined) {
-    return { month: Number(m[1]), day: Number(m[2]) };
-  }
-  const utc = toUtc(REFERENCE_YEAR, Number(m[1]), Number(m[2]), 0, 0, offset);
-  return { month: utc.month, day: utc.day, tzOffset: 0 };
-};
+export const parseXsdGMonthDay = (value: string): XsdGMonthDay =>
+  parseGWithTz(
+    value,
+    G_MONTH_DAY_RE,
+    "gMonthDay",
+    (m) => ({ month: Number(m[1]), day: Number(m[2]) }),
+    (m, off) => {
+      const utc = toUtc(REFERENCE_YEAR, Number(m[1]), Number(m[2]), 0, 0, off);
+      return { month: utc.month, day: utc.day, tzOffset: 0 };
+    },
+    3,
+  );
 
-export const parseXsdGDay = (value: string): XsdGDay => {
-  const m = G_DAY_RE.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined) {
-    return fail("gDay", value);
-  }
-  const offset = tzMinutes(m[2]);
-  if (offset === undefined) {
-    return { day: Number(m[1]) };
-  }
-  return { day: toUtc(REFERENCE_YEAR, 1, Number(m[1]), 0, 0, offset).day, tzOffset: 0 };
-};
+export const parseXsdGDay = (value: string): XsdGDay =>
+  parseGWithTz(
+    value,
+    G_DAY_RE,
+    "gDay",
+    (m) => ({ day: Number(m[1]) }),
+    (m, off) => ({ day: toUtc(REFERENCE_YEAR, 1, Number(m[1]), 0, 0, off).day, tzOffset: 0 }),
+    2,
+  );
 
 export const parseXsdDuration = (value: string): XsdDuration => {
   const collapsed = collapseWhiteSpace(value);
@@ -338,29 +341,27 @@ export const parseXsdDuration = (value: string): XsdDuration => {
 };
 
 const pad = (n: number, len = 2): string => String(n).padStart(len, "0");
-
-// Years pad to at least four digits with an explicit sign only when negative.
 const writeYear = (year: number): string => (year < 0 ? "-" : "") + pad(Math.abs(year), 4);
-
 const writeTz = (tzOffset: number | undefined): string => (tzOffset === undefined ? "" : "Z");
-
 const writeFraction = (frac: string | undefined): string => {
-  const stripped = frac?.replace(/0+$/, "");
-  return stripped ? `.${stripped}` : "";
+  const s = frac?.replace(/0+$/, "");
+  return s ? `.${s}` : "";
 };
 
+const tzUtc = <T extends { tzOffset?: number }>(v: T, toUtcFn: (v: T) => T): T =>
+  v.tzOffset === undefined ? v : toUtcFn(v);
+
 export const writeXsdDate = (v: XsdDate): string => {
-  const utc = v.tzOffset === undefined ? v : toUtc(v.year, v.month, v.day, 0, 0, v.tzOffset);
-  return `${writeYear(utc.year)}-${pad(utc.month)}-${pad(utc.day)}${writeTz(v.tzOffset)}`;
+  const u = tzUtc(v, (x) => {
+    const utc = toUtc(x.year, x.month, x.day, 0, 0, x.tzOffset!);
+    return { ...x, year: utc.year, month: utc.month, day: utc.day };
+  });
+  return `${writeYear(u.year)}-${pad(u.month)}-${pad(u.day)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdDateTime = (v: XsdDateTime): string => {
   const utc = toUtc(v.year, v.month, v.day, v.hour, v.minute, v.tzOffset ?? 0);
-  return (
-    `${writeYear(utc.year)}-${pad(utc.month)}-${pad(utc.day)}` +
-    `T${pad(utc.hour)}:${pad(utc.minute)}:${pad(v.second)}${writeFraction(v.fraction)}` +
-    writeTz(v.tzOffset)
-  );
+  return `${writeYear(utc.year)}-${pad(utc.month)}-${pad(utc.day)}T${pad(utc.hour)}:${pad(utc.minute)}:${pad(v.second)}${writeFraction(v.fraction)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdTime = (v: XsdTime): string => {
@@ -369,31 +370,36 @@ export const writeXsdTime = (v: XsdTime): string => {
 };
 
 export const writeXsdGYear = (v: XsdGYear): string => {
-  const year = v.tzOffset === undefined ? v.year : toUtc(v.year, 1, 1, 0, 0, v.tzOffset).year;
-  return `${writeYear(year)}${writeTz(v.tzOffset)}`;
+  const y = v.tzOffset === undefined ? v.year : toUtc(v.year, 1, 1, 0, 0, v.tzOffset).year;
+  return `${writeYear(y)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdGYearMonth = (v: XsdGYearMonth): string => {
-  const utc = v.tzOffset === undefined ? v : toUtc(v.year, v.month, 1, 0, 0, v.tzOffset);
-  return `${writeYear(utc.year)}-${pad(utc.month)}${writeTz(v.tzOffset)}`;
+  const u = tzUtc(v, (x) => {
+    const utc = toUtc(x.year, x.month, 1, 0, 0, x.tzOffset!);
+    return { ...x, year: utc.year, month: utc.month };
+  });
+  return `${writeYear(u.year)}-${pad(u.month)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdGMonth = (v: XsdGMonth): string => {
-  const month =
+  const m =
     v.tzOffset === undefined ? v.month : toUtc(REFERENCE_YEAR, v.month, 1, 0, 0, v.tzOffset).month;
-  return `--${pad(month)}${writeTz(v.tzOffset)}`;
+  return `--${pad(m)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdGMonthDay = (v: XsdGMonthDay): string => {
-  const utc =
-    v.tzOffset === undefined ? v : toUtc(REFERENCE_YEAR, v.month, v.day, 0, 0, v.tzOffset);
-  return `--${pad(utc.month)}-${pad(utc.day)}${writeTz(v.tzOffset)}`;
+  const u = tzUtc(v, (x) => {
+    const utc = toUtc(REFERENCE_YEAR, x.month, x.day, 0, 0, x.tzOffset!);
+    return { ...x, month: utc.month, day: utc.day };
+  });
+  return `--${pad(u.month)}-${pad(u.day)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdGDay = (v: XsdGDay): string => {
-  const day =
+  const d =
     v.tzOffset === undefined ? v.day : toUtc(REFERENCE_YEAR, 1, v.day, 0, 0, v.tzOffset).day;
-  return `---${pad(day)}${writeTz(v.tzOffset)}`;
+  return `---${pad(d)}${writeTz(v.tzOffset)}`;
 };
 
 export const writeXsdDuration = (v: XsdDuration): string => {

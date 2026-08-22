@@ -24,13 +24,12 @@ const run = (command: string, args: string[], cwd: string): void => {
 // .cmd shim there (spawned with shell in run()).
 // Walks up from cwd so a tool installed at a monorepo root is still found
 // when the CLI runs in a package subdirectory.
-const binPath = (cwd: string, binName: string): string | undefined => {
-  const fileName = process.platform === "win32" ? `${binName}.cmd` : binName;
-  let dir = cwd;
+const walkUp = <T>(start: string, test: (dir: string) => T | undefined): T | undefined => {
+  let dir = start;
   for (;;) {
-    const full = path.join(dir, "node_modules", ".bin", fileName);
-    if (fs.existsSync(full)) {
-      return full;
+    const hit = test(dir);
+    if (hit !== undefined) {
+      return hit;
     }
     const parent = path.dirname(dir);
     if (parent === dir) {
@@ -38,6 +37,14 @@ const binPath = (cwd: string, binName: string): string | undefined => {
     }
     dir = parent;
   }
+};
+
+const binPath = (cwd: string, binName: string): string | undefined => {
+  const fileName = process.platform === "win32" ? `${binName}.cmd` : binName;
+  return walkUp(cwd, (dir) => {
+    const full = path.join(dir, "node_modules", ".bin", fileName);
+    return fs.existsSync(full) ? full : undefined;
+  });
 };
 
 const runTool = (binName: string, args: string[], cwd: string): boolean => {
@@ -68,21 +75,10 @@ const CONFIG_FILES: Record<"biome" | "prettier" | "eslint", string[]> = {
   eslint: ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs"],
 };
 
-// Walks up from cwd for the same reason as binPath: configs usually live at
-// the project root, not necessarily where the CLI was invoked.
-const hasConfig = (cwd: string, tool: keyof typeof CONFIG_FILES): boolean => {
-  let dir = cwd;
-  for (;;) {
-    if (CONFIG_FILES[tool].some((name) => fs.existsSync(path.join(dir, name)))) {
-      return true;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      return false;
-    }
-    dir = parent;
-  }
-};
+const hasConfig = (cwd: string, tool: keyof typeof CONFIG_FILES): boolean =>
+  walkUp(cwd, (dir) =>
+    CONFIG_FILES[tool].some((name) => fs.existsSync(path.join(dir, name))) ? true : undefined,
+  ) !== undefined;
 
 // Biome and Prettier exit non-zero on file types they do not support (e.g.
 // the bundled .xsd), so only JS/TS output is routed to them.
@@ -101,9 +97,8 @@ export const runPostGenerationFormatting = (
   const jsTsFiles = generatedFiles.filter((file) => JS_TS_RE.test(file));
 
   const runBiome = (): boolean => {
-    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd)) {
+    if (jsTsFiles.length === 0 || !runTool("biome", ["format", "--write", ...jsTsFiles], cwd))
       return false;
-    }
     runTool("biome", ["lint", "--write", ...jsTsFiles], cwd);
     return true;
   };
@@ -114,15 +109,10 @@ export const runPostGenerationFormatting = (
   // the output matches the project's style. Biome and Prettier both format
   // fine without a config — the binary alone is enough as a fallback; gating
   // on a config file silently skipped formatting in default setups.
-  if (hasConfig(cwd, "biome") && runBiome()) {
-    return true;
+  for (const tool of ["biome", "prettier"] as const) {
+    if (hasConfig(cwd, tool) && (tool === "biome" ? runBiome() : runPrettier())) return true;
   }
-  if (hasConfig(cwd, "prettier") && runPrettier()) {
-    return true;
-  }
-  if (runBiome() || runPrettier()) {
-    return true;
-  }
+  if (runBiome() || runPrettier()) return true;
 
   // ESLint v9 exits non-zero without a config file — only run it when one
   // exists, so a config-less project doesn't crash the CLI after the output

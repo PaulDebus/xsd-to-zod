@@ -48,10 +48,8 @@ const childOrderStore = new WeakMap<object, [string, unknown][]>();
 export const childOrderOf = (node: object): [string, unknown][] | undefined =>
   childOrderStore.get(node);
 
-// CompactBuilder with the same grouping semantics plus order tracking in
-// childOrderStore. _addChildTo is the single choke point every child
-// attachment goes through; it is not part of the upstream type declarations,
-// so the grouping logic is mirrored here.
+// CompactBuilder with order tracking in childOrderStore. _addChildTo is the
+// single choke point every child attachment goes through.
 class OrderTrackingCompactBuilder extends CompactBuilder {
   _addChildTo(
     key: string,
@@ -229,9 +227,7 @@ export const decodeTagNameCharRefs = (xml: string): string => {
 };
 
 // ---------------------------------------------------------------------------
-// zod def walking — the single place that touches zod internals. All wrapper
-// unwrapping and def narrowing lives here, so a zod upgrade means one module
-// to review, not a codebase to grep.
+// zod def walking
 // ---------------------------------------------------------------------------
 
 type AnyDef = z.core.$ZodTypeDef;
@@ -275,13 +271,11 @@ const objectDefOf = (schema: AnySchema): z.core.$ZodObjectDef | undefined =>
 
 const hasObjectShape = (schema: AnySchema): boolean => objectDefOf(schema) !== undefined;
 
-// Walk the wrapper chain until a schema carries registry meta with a `root`
-// qname — root exports register it on their outermost wrapper.
-const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
+const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta | undefined => {
   let current = schema;
   for (;;) {
     const meta = xmlRegistry.get(current);
-    if (meta?.root) {
+    if (meta !== undefined && pick(meta)) {
       return meta;
     }
     const next = peelOnce(current);
@@ -292,24 +286,9 @@ const findRootMeta = (schema: AnySchema): XmlMeta | undefined => {
   }
 };
 
-// Walk the wrapper chain until a schema carries registry meta with a `fields`
-// map — type schemas register it on the lazy wrapper, which may sit below a
-// root export wrapper or array/optional cardinality wrappers.
-const findObjectMeta = (schema: AnySchema): XmlMeta | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.fields) {
-      return meta;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
-
+const findRootMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.root);
+const findObjectMeta = (schema: AnySchema): XmlMeta | undefined =>
+  findMeta(schema, (m) => m.fields);
 const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined =>
   findObjectMeta(schema)?.fields;
 
@@ -333,47 +312,41 @@ const analyzeField = (schema: AnySchema): FieldAnalysis => {
   let fixedValue: unknown;
   for (;;) {
     const def = current._zod.def;
-    const optional = defAs<z.core.$ZodOptionalDef>(def, "optional");
-    if (optional) {
-      current = optional.innerType;
+    const as = <T extends AnyDef>(t: T["type"]): T | undefined => defAs<T>(def, t);
+    const opt = as<z.core.$ZodOptionalDef>("optional");
+    if (opt) {
+      current = opt.innerType;
       continue;
     }
-    const nullable = defAs<z.core.$ZodNullableDef>(def, "nullable");
-    if (nullable) {
-      current = nullable.innerType;
+    const nul = as<z.core.$ZodNullableDef>("nullable");
+    if (nul) {
+      current = nul.innerType;
       continue;
     }
-    const readonly = defAs<z.core.$ZodReadonlyDef>(def, "readonly");
-    if (readonly) {
-      current = readonly.innerType;
+    const ro = as<z.core.$ZodReadonlyDef>("readonly");
+    if (ro) {
+      current = ro.innerType;
       continue;
     }
-    const array = defAs<z.core.$ZodArrayDef>(def, "array");
-    if (array) {
+    const arr = as<z.core.$ZodArrayDef>("array");
+    if (arr) {
       isArray = true;
-      current = array.element;
+      current = arr.element;
       continue;
     }
-    const dfault = defAs<z.core.$ZodDefaultDef>(def, "default");
-    if (dfault) {
+    const dflt = as<z.core.$ZodDefaultDef>("default");
+    if (dflt) {
       hasDefault = true;
-      defaultValue = dfault.defaultValue;
-      current = dfault.innerType;
+      defaultValue = dflt.defaultValue;
+      current = dflt.innerType;
       continue;
     }
-    const literal = defAs<z.core.$ZodLiteralDef<z.core.util.Literal>>(def, "literal");
-    if (literal) {
+    const lit = as<z.core.$ZodLiteralDef<z.core.util.Literal>>("literal");
+    if (lit) {
       hasFixed = true;
-      fixedValue = literal.values[0];
+      fixedValue = lit.values[0];
     }
-    return {
-      itemSchema: current,
-      isArray,
-      hasDefault,
-      defaultValue,
-      hasFixed,
-      fixedValue,
-    };
+    return { itemSchema: current, isArray, hasDefault, defaultValue, hasFixed, fixedValue };
   }
 };
 
@@ -527,30 +500,11 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
 };
 
 // ---------------------------------------------------------------------------
-// Lexical preservation. Coercion discards the original XML text, but two
-// consumers still need it: the lexical-space facets (XSD evaluates pattern
-// against the lexical, and exact decimal boundaries outlive a double) and the
-// serializer (libxml2 validates the serialized document, so `007` must not
-// come back as `7`). Facet checks run here, at the single coercion point;
-// the serializer consults the retained lexicals recorded by the read path.
+// Lexical preservation
 // ---------------------------------------------------------------------------
 
-// Walk the wrapper chain until a schema carries registry meta with lexical
-// facets — simple types register them on their type schema.
-const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.facets) {
-      return meta.facets;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
+const findFacetsMeta = (schema: AnySchema): XmlLexicalFacets | undefined =>
+  findMeta(schema, (m) => m.facets)?.facets;
 
 const applyWhiteSpace = (
   lexical: string,
@@ -858,8 +812,10 @@ const findAttributeValue = (
       continue;
     }
     const { prefix, local } = splitQName(key.slice(2));
-    const namespace = prefix ? (namespaceContext[prefix] ?? "") : "";
-    if (local === expected.local && namespace === expected.namespace) {
+    if (
+      local === expected.local &&
+      nsForAttribute(prefix, namespaceContext) === expected.namespace
+    ) {
       return value;
     }
   }
@@ -879,25 +835,10 @@ const findElementValues = (
       continue;
     }
     const { prefix, local } = splitQName(key);
-    // Match per item, with each item's own xmlns context — repeated elements
-    // may redeclare namespaces per sibling (#67).
     for (const item of toArray(value)) {
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode
-        ? withNamespaceContext(namespaceContext, itemNode)
-        : namespaceContext;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
+      const namespace = nsForElement(prefix, contextFor(item, namespaceContext));
       const match = expected.find(
-        (e) =>
-          e.local === local &&
-          (namespace === e.namespace ||
-            // Unqualified local elements (elementFormDefault="unqualified")
-            // belong to no namespace, yet real-world documents put them in the
-            // inherited default namespace. Accommodate them: a field in no
-            // namespace also matches unprefixed elements (lenient by design;
-            // the libxml2 tier is the strict one).
-            (e.namespace === "" && !prefix)),
+        (e) => e.local === local && (namespace === e.namespace || (e.namespace === "" && !prefix)),
       );
       if (match !== undefined) {
         matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
@@ -907,23 +848,8 @@ const findElementValues = (
   return matches;
 };
 
-// Walk the wrapper chain until a schema carries registry meta with a
-// `substElement` qname — substitution-group union options register it on
-// their lazy wrapper.
-const findSubstElementMeta = (schema: AnySchema): QName | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta?.substElement) {
-      return meta.substElement;
-    }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
-  }
-};
+const findSubstElementMeta = (schema: AnySchema): QName | undefined =>
+  findMeta(schema, (m) => m.substElement)?.substElement;
 
 // The schema to read or serialize one element occurrence with. A
 // substitution-group head field's schema is a union of per-element options,
@@ -1126,8 +1052,9 @@ const extractRoot = (
         : {};
     const namespaceContext = withNamespaceContext({}, node);
     const { prefix, local } = splitQName(key);
-    const namespace = prefix ? (namespaceContext[prefix] ?? "") : (namespaceContext[""] ?? "");
-    return local === expected.local && namespace === expected.namespace;
+    return (
+      local === expected.local && nsForElement(prefix, namespaceContext) === expected.namespace
+    );
   });
   if (!entry) {
     throw new Error(`Root element '${expectedQName}' not found in XML payload`);
@@ -1151,10 +1078,7 @@ const extractRoot = (
 // ---------------------------------------------------------------------------
 
 // Record the result object's element children in document order (see
-// documentOrderStore). Field claims map each raw occurrence to its slot in
-// the result; unclaimed children (and overflow occurrences of scalar fields)
-// are wildcard extras keyed by their clark name when an xs:any sweep captured
-// them, otherwise dropped from the data and the recording alike.
+// Records element children in document order for round-trip replay.
 const recordDocumentOrder = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
@@ -1297,6 +1221,19 @@ type ChildAccept = {
   element?: (namespace: string, local: string, prefix: string) => boolean;
 };
 
+const nsForElement = (prefix: string, ctx: Record<string, string>): string =>
+  prefix ? (ctx[prefix] ?? "") : (ctx[""] ?? "");
+const nsForAttribute = (prefix: string, ctx: Record<string, string>): string =>
+  prefix ? (ctx[prefix] ?? "") : "";
+
+const contextFor = (rawValue: unknown, base: Record<string, string>): Record<string, string> => {
+  const itemNode =
+    rawValue !== null && typeof rawValue === "object"
+      ? (rawValue as Record<string, unknown>)
+      : undefined;
+  return itemNode ? withNamespaceContext(base, itemNode) : base;
+};
+
 // Clark key of a raw child entry: per-item namespace context, since repeated
 // siblings may redeclare prefixes.
 const rawChildClarkKey = (
@@ -1305,13 +1242,7 @@ const rawChildClarkKey = (
   context: Record<string, string>,
 ): string => {
   const { prefix, local } = splitQName(rawKey);
-  const itemNode =
-    rawValue !== null && typeof rawValue === "object"
-      ? (rawValue as Record<string, unknown>)
-      : undefined;
-  const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-  const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-  return `{${namespace}}${local}`;
+  return `{${nsForElement(prefix, contextFor(rawValue, context))}}${local}`;
 };
 
 // Shared walk over a parsed node's content entries, into the normalized open
@@ -1334,28 +1265,24 @@ const walkChildren = (
     }
     if (key.startsWith("@_")) {
       const { prefix, local } = splitQName(key.slice(2));
-      const namespace = prefix ? (context[prefix] ?? "") : "";
-      // xsi:* attributes are processor directives (nil/type/schemaLocation),
-      // not content; their QName values could not be re-serialized without
-      // declaring the value's prefix.
-      if (namespace === XSI_NS || accept.attribute?.(namespace, local) === false) {
+      const ns = nsForAttribute(prefix, context);
+      if (ns === XSI_NS || accept.attribute?.(ns, local) === false) {
         continue;
       }
-      target[`@${namespace ? `{${namespace}}` : ""}${local}`] =
-        value === undefined ? value : String(value);
+      target[`@${ns ? `{${ns}}` : ""}${local}`] = value === undefined ? value : String(value);
       wrote = true;
       continue;
     }
     const { prefix, local } = splitQName(key);
     for (const item of toArray(value)) {
-      const itemNode =
-        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-      const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-      const namespace = prefix ? (itemContext[prefix] ?? "") : (itemContext[""] ?? "");
-      if (accept.element?.(namespace, local, prefix) === false) {
+      if (
+        accept.element?.(nsForElement(prefix, contextFor(item, context)), local, prefix) === false
+      ) {
         continue;
       }
       const childKey = rawChildClarkKey(key, item, context);
+      const itemNode =
+        item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = target[childKey];
       if (existing === undefined) {
@@ -1371,10 +1298,7 @@ const walkChildren = (
   return wrote;
 };
 
-// xs:any / xs:anyAttribute (lax tier): unmatched child elements/attributes are
-// captured in the normalized open shape (see openWalk). Namespace constraints
-// and processContents are deliberately unenforced — the libxml2 tier is the
-// conformance authority.
+// xs:any / xs:anyAttribute (lax tier): unmatched children captured in open shape.
 const sweepWildcards = (
   result: Record<string, unknown>,
   node: Record<string, unknown>,
@@ -1391,35 +1315,27 @@ const sweepWildcards = (
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
   );
   const consumed = new Map<string, number>();
-  // Unqualified fields also match unprefixed elements in the inherited default
-  // namespace (same leniency as findElementValues) — not extras.
+  const scalarQNameOf = (ns: string, local: string, prefix: string): string | undefined => {
+    if (wildcards.scalarElements === undefined) return undefined;
+    const exact = `{${ns}}${local}`;
+    if (wildcards.scalarElements.has(exact)) return exact;
+    const unq = `{}${local}`;
+    return prefix === "" && wildcards.scalarElements.has(unq) ? unq : undefined;
+  };
   walkChildren(result, node, namespaceContext, {
     attribute: wildcards.anyAttribute
-      ? (namespace, local) => !knownAttributes.has(`{${namespace}}${local}`)
+      ? (ns, local) => !knownAttributes.has(`{${ns}}${local}`)
       : () => false,
     element: wildcards.any
-      ? (namespace, local, prefix) => {
-          const scalarQName =
-            wildcards.scalarElements === undefined
-              ? undefined
-              : (() => {
-                  const exact = `{${namespace}}${local}`;
-                  if (wildcards.scalarElements.has(exact)) {
-                    return exact;
-                  }
-                  const unqualified = `{}${local}`;
-                  return prefix === "" && wildcards.scalarElements.has(unqualified)
-                    ? unqualified
-                    : undefined;
-                })();
-          if (scalarQName !== undefined) {
-            // First occurrence feeds the scalar field; overflow is extra.
-            const seen = (consumed.get(scalarQName) ?? 0) + 1;
-            consumed.set(scalarQName, seen);
+      ? (ns, local, prefix) => {
+          const sq = scalarQNameOf(ns, local, prefix);
+          if (sq !== undefined) {
+            const seen = (consumed.get(sq) ?? 0) + 1;
+            consumed.set(sq, seen);
             return seen > 1;
           }
           return (
-            !knownElements.has(`{${namespace}}${local}`) &&
+            !knownElements.has(`{${ns}}${local}`) &&
             (prefix !== "" || !knownElements.has(`{}${local}`))
           );
         }
@@ -1427,21 +1343,14 @@ const sweepWildcards = (
   });
 };
 
-// Present-but-empty element: XSD applies default/fixed here (#66).
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
 ): { substituted: boolean; value?: unknown } => {
-  if (field.hasFixed) {
-    return { substituted: true, value: field.fixedValue };
-  }
-  // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
-  if (fieldMeta.fixedValue !== undefined) {
-    return { substituted: true, value: fieldMeta.fixedValue };
-  }
-  if (fieldMeta.defaultValue !== undefined) {
+  if (field.hasFixed) return { substituted: true, value: field.fixedValue };
+  if (fieldMeta.fixedValue !== undefined) return { substituted: true, value: fieldMeta.fixedValue };
+  if (fieldMeta.defaultValue !== undefined)
     return { substituted: true, value: fieldMeta.defaultValue };
-  }
   return { substituted: false };
 };
 
@@ -2014,15 +1923,7 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
   return serializeDatatypeValue(datatype, value);
 };
 
-// The retained document order describes the data as parsed. It is honored
-// only while it still does: every declared element field and every wildcard
-// extra must hold exactly as many values as the recording. The check is
-// cardinality-only (counts per field/extra), not value identity — a value
-// swapped between two equal-count fields is still replayed at its recorded
-// position. Added, removed, or re-parented values (and defaults zod filled
-// after the walk) break the correspondence, and objects with mixed content
-// keep the schema-order path since text interleaving is not modeled. Anything
-// else falls back to schema-order emission.
+// Retained document order: honored while count matches per field/extra.
 const usableDocumentOrder = (
   obj: Record<string, unknown>,
   fields: Record<string, XmlFieldMeta>,

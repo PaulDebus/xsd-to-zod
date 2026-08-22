@@ -29,8 +29,11 @@ export const splitClark = (qname: string): { namespace: string; local: string } 
 
 // Strict split: undefined for input that is not in Clark notation.
 export const trySplitClark = (qname: string): { ns: string; local: string } | undefined => {
-  const match = qname.match(/^\{(.*)}(.*)$/);
-  return match ? { ns: match[1]!, local: match[2]! } : undefined;
+  if (!qname.startsWith("{")) {
+    return undefined;
+  }
+  const end = qname.indexOf("}");
+  return end === -1 ? undefined : { ns: qname.slice(1, end), local: qname.slice(end + 1) };
 };
 
 export const clarkToLocal = (qname: string): string => splitClark(qname).local;

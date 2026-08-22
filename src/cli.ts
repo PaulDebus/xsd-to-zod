@@ -27,16 +27,16 @@ const errorMessage = (e: unknown): string => {
   return e instanceof Error ? e.message : String(e);
 };
 
+import { runPostGenerationFormatting } from "./postProcess.js";
+import { readXmlFile } from "./readXmlFile.js";
+import { safeParseXml } from "./runtime.js";
+import { xmlRegistry } from "./xmlMeta.js";
+
 const warnDiagnostics = (ir: XsdIr): void => {
   for (const diagnostic of ir.diagnostics) {
     console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}`);
   }
 };
-
-import { runPostGenerationFormatting } from "./postProcess.js";
-import { readXmlFile } from "./readXmlFile.js";
-import { safeParseXml } from "./runtime.js";
-import { xmlRegistry } from "./xmlMeta.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,17 +69,13 @@ export const expandDirectories = (files: string[], visitedDirs = new Set<string>
       expanded.push(file);
       continue;
     }
-    const stat = statSync(file);
-    if (stat.isDirectory()) {
-      // Guard against symlink cycles: visit each real directory only once.
+    if (statSync(file).isDirectory()) {
       const real = realpathSync(file);
-      if (visitedDirs.has(real)) {
-        continue;
-      }
-      visitedDirs.add(real);
-      const entries = readdirSync(file);
-      for (const entry of entries) {
-        expanded.push(...expandDirectories([join(file, entry)], visitedDirs));
+      if (!visitedDirs.has(real)) {
+        visitedDirs.add(real);
+        for (const entry of readdirSync(file)) {
+          expanded.push(...expandDirectories([join(file, entry)], visitedDirs));
+        }
       }
     } else if (extname(file) === ".xsd") {
       expanded.push(file);
@@ -102,13 +98,11 @@ export const discoverDependencies = (entryFile: string, visited = new Set<string
     `${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*schemaLocation=["']([^"']+)["']`,
     "g",
   );
-  let match: RegExpExecArray | null = re.exec(content);
-  while (match !== null) {
-    const depPath = resolve(dirname(resolved), match[1] ?? "");
+  for (const m of content.matchAll(re)) {
+    const depPath = resolve(dirname(resolved), m[1] ?? "");
     if (existsSync(depPath)) {
       files.push(...discoverDependencies(depPath, visited));
     }
-    match = re.exec(content);
   }
 
   return files;
@@ -149,26 +143,14 @@ export const isLibrary = (filePath: string): boolean => {
     }
     const start = (schemaMatch.index ?? 0) + schemaMatch[0].length;
     let depth = 1;
-    const tagRe = /<\/?(?:\w+:)?(\w+)[^>]*\/?>/g;
-    tagRe.lastIndex = start;
-    let m: RegExpExecArray | null = tagRe.exec(content);
-    while (m !== null) {
+    for (const m of content.slice(start).matchAll(/<\/?(?:\w+:)?(\w+)[^>]*\/?>/g)) {
       const tag = m[0];
-      const local = m[1];
       if (tag.startsWith("</")) {
-        depth--;
-        if (depth === 0) {
-          break;
-        }
+        if (--depth === 0) break;
       } else {
-        if (depth === 1 && local === "element") {
-          return false;
-        }
-        if (!tag.endsWith("/")) {
-          depth++;
-        }
+        if (depth === 1 && m[1] === "element") return false;
+        if (!tag.endsWith("/")) depth++;
       }
-      m = tagRe.exec(content);
     }
     return true;
   } catch {

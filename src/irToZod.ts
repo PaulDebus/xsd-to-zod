@@ -122,6 +122,15 @@ const XSD_BIGINT_BOUNDS: ReadonlyMap<string, { min?: string; max?: string }> = n
   ["positiveInteger", { min: "1n" }],
 ]);
 
+const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | undefined => {
+  const s = seen ?? new Set<string>();
+  if (s.has(name)) {
+    return undefined;
+  }
+  s.add(name);
+  return s;
+};
+
 // Resolve a (possibly user-defined) simple type to its builtin base kind, so
 // fixed/default values are coerced to the JS type the runtime produces (#87).
 const resolvePrimitiveKind = (
@@ -142,11 +151,10 @@ const resolvePrimitiveKind = (
     }
     return parts.local === "boolean" ? "boolean" : "string";
   }
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return "string";
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
   if (!simple) {
     return "string";
@@ -157,7 +165,7 @@ const resolvePrimitiveKind = (
       : simple.kind === "list"
         ? simple.itemType
         : simple.memberTypes[0];
-  return base ? resolvePrimitiveKind(base, ir, seenNames) : "string";
+  return base ? resolvePrimitiveKind(base, ir, next) : "string";
 };
 
 // The XSD builtin local name a (possibly user-defined) simple type derives
@@ -174,35 +182,31 @@ const resolveBuiltinLocal = (
   if (parts.ns === XSD_NS) {
     return parts.local;
   }
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
-  if (simple?.kind !== "restriction") {
-    return undefined;
-  }
-  return resolveBuiltinLocal(simple.baseType, ir, seenNames);
+  return simple?.kind === "restriction"
+    ? resolveBuiltinLocal(simple.baseType, ir, next)
+    : undefined;
 };
 
 // Resolve a (possibly user-defined) simple type to its xs:list item type, so a
 // list-typed fixed/default lexical is emitted as an array literal — one typed
 // item per whitespace-separated token.
 const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QName | undefined => {
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
   if (simple?.kind === "list") {
     return simple.itemType;
   }
-  if (simple?.kind === "restriction") {
-    return resolveListItemType(simple.baseType, ir, seenNames);
-  }
-  return undefined;
+  return simple?.kind === "restriction"
+    ? resolveListItemType(simple.baseType, ir, next)
+    : undefined;
 };
 
 const primitiveToZod = (
@@ -343,27 +347,120 @@ const withDescription = (expr: string, description: string | undefined): string 
 
 type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 
-// The structure a (possibly chained) restriction ultimately derives from.
-// Enumeration facets on list and union bases cannot be checked by the
-// generated schema (the value is an array / a union member), so they route to
-// the runtime's lexical-facet meta.
+// The structure a restriction ultimately derives from (list/union → lexical meta).
 const resolveBaseStructure = (
   typeName: QName,
   ir: XsdIr,
   seen?: Set<string>,
 ): "list" | "union" | undefined => {
-  const seenNames = seen ?? new Set<string>();
-  if (seenNames.has(typeName)) {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
     return undefined;
   }
-  seenNames.add(typeName);
   const simple = ir.simpleTypes[typeName];
-  if (simple === undefined) {
-    return undefined;
+  return simple === undefined
+    ? undefined
+    : simple.kind === "restriction"
+      ? resolveBaseStructure(simple.baseType, ir, next)
+      : simple.kind;
+};
+
+const applyPatternFacet = (
+  result: string,
+  facetValue: string,
+  st: ReturnType<typeof structuredType> | undefined,
+  usedHelpers: Set<string>,
+  ownPatterns: string[],
+): string => {
+  if (st !== undefined) {
+    usedHelpers.add(st.writeFn);
+    return `${result}.refine((val) => new RegExp(${JSON.stringify(facetValue)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
   }
-  return simple.kind === "restriction"
-    ? resolveBaseStructure(simple.baseType, ir, seenNames)
-    : simple.kind;
+  if (isStringType(result)) {
+    usedHelpers.add("xsdPattern");
+    return `${result}.regex(xsdPattern(${JSON.stringify(facetValue)}))`;
+  }
+  ownPatterns.push(facetValue);
+  return result;
+};
+
+const applyLengthFacet = (
+  result: string,
+  kind: Facet & { kind: "length" | "minLength" | "maxLength" },
+  builtinLocal: string | undefined,
+  st: ReturnType<typeof structuredType> | undefined,
+  usedHelpers: Set<string>,
+): string => {
+  const op = kind.kind === "length" ? "===" : kind.kind === "minLength" ? ">=" : "<=";
+  if (builtinLocal === "NOTATION" || builtinLocal === "QName") {
+    return `${result} /* facet ${kind.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
+  }
+  if (builtinLocal === "hexBinary") {
+    return `${result}.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
+  }
+  if (builtinLocal === "base64Binary") {
+    return `${result}.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
+  }
+  if (builtinLocal === "IDREFS" || builtinLocal === "NMTOKENS" || builtinLocal === "ENTITIES") {
+    return `${result}.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${kind.value}, { message: 'item count constraint violated' })`;
+  }
+  if (st !== undefined) {
+    usedHelpers.add(st.writeFn);
+    return `${result}.refine((val) => ${st.writeFn}(val).length ${op} ${kind.value}, { message: 'length constraint violated' })`;
+  }
+  if (isStringType(result)) {
+    return kind.kind === "length"
+      ? `${result}.length(${kind.value})`
+      : kind.kind === "minLength"
+        ? `${result}.min(${kind.value})`
+        : `${result}.max(${kind.value})`;
+  }
+  return `${result}.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${kind.value}, { message: 'length constraint violated' })`;
+};
+
+const applyOrderFacet = (
+  result: string,
+  facet: Facet & { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" },
+  kind: "number" | "bigint" | "boolean" | "string",
+): string => {
+  if (isNumberType(result)) {
+    const bound = String(Number(facet.value));
+    const suffix =
+      facet.kind === "minInclusive"
+        ? `.min(${bound})`
+        : facet.kind === "maxInclusive"
+          ? `.max(${bound})`
+          : facet.kind === "minExclusive"
+            ? `.gt(${bound})`
+            : `.lt(${bound})`;
+    return result + suffix;
+  }
+  if (isBigIntType(result)) {
+    const bound = typedLiteral("bigint", facet.value);
+    const suffix =
+      facet.kind === "minInclusive"
+        ? `.min(${bound})`
+        : facet.kind === "maxInclusive"
+          ? `.max(${bound})`
+          : facet.kind === "minExclusive"
+            ? `.gt(${bound})`
+            : `.lt(${bound})`;
+    return result + suffix;
+  }
+  if (kind === "number" || kind === "bigint") {
+    const op =
+      facet.kind === "minInclusive"
+        ? ">="
+        : facet.kind === "maxInclusive"
+          ? "<="
+          : facet.kind === "minExclusive"
+            ? ">"
+            : "<";
+    const bound =
+      kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
+    return `${result}.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
+  }
+  return `${result} /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
 };
 
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
@@ -464,115 +561,21 @@ const withFacets = (
     for (const facet of otherFacets) {
       switch (facet.kind) {
         case "pattern":
-          // Structured date/time values have no string form of their own; the
-          // pattern applies to the canonical lexical.
-          if (st !== undefined) {
-            usedHelpers.add(st.writeFn);
-            result += `.refine((val) => new RegExp(${JSON.stringify(facet.value)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
-          } else if (isStringType(result)) {
-            // The string value IS the (whiteSpace-processed) lexical, so the
-            // schema can check it — with XSD regex semantics (anchored,
-            // unicode-aware multi-character escapes).
-            usedHelpers.add("xsdPattern");
-            result += `.regex(xsdPattern(${JSON.stringify(facet.value)}))`;
-          } else {
-            // Non-string/list/union base: the pattern must be evaluated
-            // against the original lexical, which the schema cannot see.
-            ownPatterns.push(facet.value);
-          }
+          result = applyPatternFacet(result, facet.value, st, usedHelpers, ownPatterns);
           break;
         case "length":
         case "minLength":
-        case "maxLength": {
-          const op = facet.kind === "length" ? "===" : facet.kind === "minLength" ? ">=" : "<=";
-          // XSD 1.0 vacuous rule: every QName/NOTATION value satisfies any
-          // length facet — skip them (with a diagnostic) rather than reject
-          // valid values (#124 review).
-          if (builtinLocal === "NOTATION" || builtinLocal === "QName") {
-            result += ` /* facet ${facet.kind} skipped: vacuous for xs:${builtinLocal} in XSD 1.0 */`;
-          } else if (builtinLocal === "hexBinary") {
-            // Length unit is octets: two hex digits per octet.
-            result += `.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
-          } else if (builtinLocal === "base64Binary") {
-            // Length unit is octets: four base64 chars per three octets, less padding.
-            result += `.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${facet.value}, { message: 'octet length constraint violated' })`;
-          } else if (
-            builtinLocal === "IDREFS" ||
-            builtinLocal === "NMTOKENS" ||
-            builtinLocal === "ENTITIES"
-          ) {
-            // Length unit is list items (whitespace-separated tokens).
-            result += `.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${facet.value}, { message: 'item count constraint violated' })`;
-          } else if (st !== undefined) {
-            // Structured date/time: the length facet applies to the lexical
-            // space, so measure the canonical lexical of the parsed value.
-            usedHelpers.add(st.writeFn);
-            result += `.refine((val) => ${st.writeFn}(val).length ${op} ${facet.value}, { message: 'length constraint violated' })`;
-          } else if (isStringType(result)) {
-            result +=
-              facet.kind === "length"
-                ? `.length(${facet.value})`
-                : facet.kind === "minLength"
-                  ? `.min(${facet.value})`
-                  : `.max(${facet.value})`;
-          } else {
-            // Non-string base (type reference, enum, list): the convenience
-            // methods don't exist there — refine on the .length of strings
-            // (characters) and arrays (list items) instead (#114).
-            result += `.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${facet.value}, { message: 'length constraint violated' })`;
-          }
+        case "maxLength":
+          result = applyLengthFacet(result, facet, builtinLocal, st, usedHelpers);
           break;
-        }
         case "minInclusive":
         case "maxInclusive":
         case "minExclusive":
-        case "maxExclusive": {
-          if (isNumberType(result)) {
-            const bound = String(Number(facet.value));
-            result +=
-              facet.kind === "minInclusive"
-                ? `.min(${bound})`
-                : facet.kind === "maxInclusive"
-                  ? `.max(${bound})`
-                  : facet.kind === "minExclusive"
-                    ? `.gt(${bound})`
-                    : `.lt(${bound})`;
-          } else if (isBigIntType(result)) {
-            const bound = typedLiteral("bigint", facet.value);
-            result +=
-              facet.kind === "minInclusive"
-                ? `.min(${bound})`
-                : facet.kind === "maxInclusive"
-                  ? `.max(${bound})`
-                  : facet.kind === "minExclusive"
-                    ? `.gt(${bound})`
-                    : `.lt(${bound})`;
-          } else if (kind === "number" || kind === "bigint") {
-            // Numeric user-type reference: compare via refine, which any
-            // schema supports (#114).
-            const op =
-              facet.kind === "minInclusive"
-                ? ">="
-                : facet.kind === "maxInclusive"
-                  ? "<="
-                  : facet.kind === "minExclusive"
-                    ? ">"
-                    : "<";
-            const bound =
-              kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
-            result += `.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
-          } else {
-            // Order facets on non-numeric kinds (dates, durations) are
-            // skipped: the coerced/string value cannot be compared soundly —
-            // the libxml2 tier stays the conformance authority (#114).
-            result += ` /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
-          }
+        case "maxExclusive":
+          result = applyOrderFacet(result, facet, kind);
           break;
-        }
         case "totalDigits":
           if (kind === "bigint") {
-            // BigInt's string form is canonical (no leading zeros), so the
-            // digit count of the absolute value is exact at any precision.
             result += `.refine((val) => String(val < 0n ? -val : val).length <= ${facet.value}, { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
           } else {
             usage.totalDigits = true;
@@ -581,7 +584,6 @@ const withFacets = (
           break;
         case "fractionDigits":
           if (kind === "bigint") {
-            // Vacuous for integers: the fraction digit count is always 0.
             result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
           } else {
             usage.fractionDigits = true;
@@ -816,19 +818,7 @@ const withCardinality = (
   return result;
 };
 
-// Choice groups with more than one branch: mutual exclusion is not expressible
-// as a plain zod type (and discriminated unions only scale to one group per
-// type), so branch fields become optional plus a refine per group (#73).
-// Branches come from the IR's choiceBranch: a group ref or nested compositor
-// keeps its fields together as one branch (ipo-style shipTo+billTo vs
-// singleAddress). Single-branch groups need no check — exactly-one-of-one is
-// the field cardinality itself.
-//
-// A branch may carry no fields of its own and consist only of a nested choice
-// (the inner fields bear the inner group's tag, so the branch is invisible in
-// the field list). The IR's choiceGroupGuards link such inner groups to their
-// enclosing branch: the branch map below materializes those branches, and the
-// inner group's own refine is gated on the branch actually being selected.
+// Choice groups: multi-branch groups get optional fields + refine.
 const choiceBranchMap = (type: ComplexTypeDef, group: string): Map<string, IrField[]> => {
   const byBranch = new Map<string, IrField[]>();
   for (const field of type.fields) {
@@ -922,6 +912,20 @@ const choiceOptionalGroups = (type: ComplexTypeDef): Set<string> => {
   return optional;
 };
 
+const choiceFlags = (
+  type: ComplexTypeDef,
+  group: string,
+): { required: boolean; repeated: boolean; flat: IrField[]; branches: [string, IrField[]][] } => {
+  const map = choiceBranchMap(type, group);
+  const entries: [string, IrField[]][] = [...map.entries()];
+  const flat = entries.flatMap(([, fields]) => fields);
+  const card = type.choiceGroups?.[group];
+  const repeated = card !== undefined && (card.maxOccurs === "unbounded" || card.maxOccurs > 1);
+  const required =
+    flat.length > 0 ? flat.every((f) => f.minOccurs > 0) : card === undefined || card.minOccurs > 0;
+  return { required, repeated, flat, branches: entries };
+};
+
 const choiceRefines = (type: ComplexTypeDef): string[] => {
   const keyOf = (field: IrField): string => `val[${JSON.stringify(toFieldKey(field))}]`;
   // A choice with a wildcard branch is always satisfiable through it: wildcard
@@ -938,20 +942,11 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
       const keys = choiceSubtreeFields(type, group).map(keyOf);
       return { check: "true", any: keys.length > 0 ? `[${keys.join(", ")}].some(has)` : "false" };
     }
-    const branches = [...choiceBranchMap(type, group).entries()];
-    const flatFields = branches.flatMap(([, fields]) => fields);
-    // A choice group is only required when it is not emptiable: a single
-    // branch with minOccurs="0" makes the whole group match empty (verified
-    // against libxml2). Field minOccurs already folds in the choice particle's
-    // own minOccurs (combineCardinality multiplies); a group of only nested
-    // choices has no own fields and falls back to its particle cardinality.
-    const groupCard = type.choiceGroups?.[group];
-    const requiredChoice =
-      flatFields.length > 0
-        ? flatFields.every((f) => f.minOccurs > 0)
-        : groupCard === undefined || groupCard.minOccurs > 0;
-    const repeatedChoice =
-      groupCard !== undefined && (groupCard.maxOccurs === "unbounded" || groupCard.maxOccurs > 1);
+    const {
+      required: requiredChoice,
+      repeated: repeatedChoice,
+      branches,
+    } = choiceFlags(type, group);
     if (repeatedChoice && !requiredChoice) {
       return { check: "true", any: "false" };
     }
@@ -1045,15 +1040,7 @@ const choiceRefines = (type: ComplexTypeDef): string[] => {
     if (wildcardGroups.has(group)) {
       continue;
     }
-    const branches = [...choiceBranchMap(type, group).values()];
-    const flatFields = branches.flat();
-    const groupCard = type.choiceGroups?.[group];
-    const repeatedChoice =
-      groupCard !== undefined && (groupCard.maxOccurs === "unbounded" || groupCard.maxOccurs > 1);
-    const requiredChoice =
-      flatFields.length > 0
-        ? flatFields.every((f) => f.minOccurs > 0)
-        : groupCard === undefined || groupCard.minOccurs > 0;
+    const { required: requiredChoice, repeated: repeatedChoice } = choiceFlags(type, group);
     if (repeatedChoice && !requiredChoice) {
       continue;
     }
