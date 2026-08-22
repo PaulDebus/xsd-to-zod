@@ -1,15 +1,18 @@
 import {
-  BaseValueParser,
   type BaseOutputBuilder,
   BaseOutputBuilderFactory,
+  BaseValueParser,
 } from "@nodable/base-output-builder";
-import {
-  CompactBuilder,
-  CompactBuilderFactory,
-  type FactoryOptions,
-} from "@nodable/compact-builder";
+import { CompactBuilderFactory, type FactoryOptions } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import type { z } from "zod";
+import {
+  type ClaimedOccurrence,
+  type DocumentOrderEntry,
+  documentOrderTracker,
+  type ElementRead,
+  OrderTrackingCompactBuilder,
+} from "./documentOrder.js";
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { QName } from "./types.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
@@ -35,48 +38,6 @@ const XML_NS = "http://www.w3.org/XML/1998/namespace";
 type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
 type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
 
-// Child attachment order per parsed node: the compact shape groups repeated
-// siblings under one key, which loses cross-tag document order. XSD particle
-// order (wildcard positions, compositor children) needs it, so the builder
-// records every attachment here.
-const childOrderStore = new WeakMap<object, [string, unknown][]>();
-
-/**
- * Children of a parsed node in document order, when the node came out of the
- * parser (undefined for programmatically built nodes).
- */
-export const childOrderOf = (node: object): [string, unknown][] | undefined =>
-  childOrderStore.get(node);
-
-// CompactBuilder with order tracking in childOrderStore. _addChildTo is the
-// single choke point every child attachment goes through.
-class OrderTrackingCompactBuilder extends CompactBuilder {
-  _addChildTo(
-    key: string,
-    val: unknown,
-    node: Record<string, unknown> | string,
-    forceArray: boolean,
-  ): Record<string, unknown> {
-    const target: Record<string, unknown> = typeof node === "string" ? {} : node;
-    let order = childOrderStore.get(target);
-    if (order === undefined) {
-      order = [];
-      childOrderStore.set(target, order);
-    }
-    order.push([key, val]);
-    if (Object.hasOwn(target, key)) {
-      const existing = target[key];
-      if (Array.isArray(existing)) {
-        existing.push(val);
-      } else {
-        target[key] = [existing, val];
-      }
-    } else {
-      target[key] = forceArray ? [val] : val;
-    }
-    return target;
-  }
-}
 
 // XML 1.0 §3.3.3: literal TAB/LF/CR in attribute values normalize to spaces
 // before the app sees them; character references (&#9; etc.) keep the control
@@ -608,18 +569,6 @@ const substQNameStore = new WeakMap<object, LexicalRecord>();
 type QNameNsRecord = Map<string, Record<string, string> | (Record<string, string> | undefined)[]>;
 const qnameNsStore = new WeakMap<object, QNameNsRecord>();
 
-/** Raw parser-node occurrence claimed by a field, index-aligned with the field's value array. */
-type ClaimedOccurrence = { rawKey: string; rawValue: unknown; index: number };
-/** One element child in document order: result key + index within that key's value array. */
-type DocumentOrderEntry = [key: string, index: number];
-
-// Element children of a parsed object in document order (a DocumentOrderEntry
-// per occurrence), recorded by readObject from the parser's attachment order
-// (childOrderOf) and consulted by writeObjectFields. Without it, interleaved
-// repeated compositor branches collapse into per-field arrays and the
-// round-trip reorders the document.
-const documentOrderStore = new WeakMap<object, DocumentOrderEntry[]>();
-
 // Lossless capture for xsi:type QNames outside the generated union (open
 // world): the occurrence is read with the declared variant, and everything
 // that variant would strip is kept here, keyed by the occurrence's value
@@ -733,14 +682,7 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
     qnameNsStore.delete(walked);
     qnameNsStore.set(parsed, qnameRecord);
   }
-  // Document order is index-based, so it transfers verbatim: zod's rebuild
-  // preserves array positions (added defaults are caught by the serializer's
-  // staleness check).
-  const documentOrder = documentOrderStore.get(walked);
-  if (documentOrder !== undefined) {
-    documentOrderStore.delete(walked);
-    documentOrderStore.set(parsed, documentOrder);
-  }
+  documentOrderTracker.transfer(walked, parsed);
   const xsiCapture = xsiCaptureStore.get(walked);
   if (xsiCapture !== undefined) {
     xsiCaptureStore.delete(walked);
@@ -929,7 +871,12 @@ const readXsiTypeOccurrence = (
     xsiType === undefined
       ? undefined
       : options.slice(1).find((option) => xsiTypeOptionQName(option) === xsiType);
-  const value = readObject(derived ?? declared, node, namespaceContext);
+  // An unknown xsi:type captures what the declared variant strips, merging
+  // extras into the variant's document-order recording — force it even where
+  // the gate would otherwise skip (single-field declared types).
+  const mayCapture =
+    derived === undefined && xsiType !== undefined && xsiType !== xsiTypeOptionQName(declared);
+  const value = readObject(derived ?? declared, node, namespaceContext, mayCapture);
   if (derived !== undefined && xsiType !== undefined) {
     value[XSI_TYPE_FIELD] = xsiType;
     return value;
@@ -1003,11 +950,12 @@ const captureUnknownXsiType = (
 
   // Merge the declared fields' document-order recording (a subsequence of the
   // node's children) with the captured extras into one sequence.
-  const retained = documentOrderStore.get(value) ?? [];
+  const retained = documentOrderTracker.orderOf(value) ?? [];
   let retainedIndex = 0;
   const order: DocumentOrderEntry[] = [];
   const extras: Record<string, unknown[]> = {};
-  for (const [rawKey, rawValue] of childOrderOf(node) ?? Object.entries(node)) {
+  for (const [rawKey, rawValue] of documentOrderTracker.childOrderOf(node) ??
+    Object.entries(node)) {
     if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
       continue;
     }
@@ -1020,8 +968,7 @@ const captureUnknownXsiType = (
         extras[clark] = list;
         const itemNode =
           item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
-        const itemContext = itemNode ? withNamespaceContext(context, itemNode) : context;
-        list.push(itemNode ? openWalk(itemNode, itemContext) : item);
+        list.push(itemNode === undefined ? item : openWalk(itemNode, contextFor(item, context)));
         order.push([clark, list.length - 1]);
         continue;
       }
@@ -1077,72 +1024,12 @@ const extractRoot = (
 // Reading: XML nodes → data, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
-// Record the result object's element children in document order (see
-// Records element children in document order for round-trip replay.
-const recordDocumentOrder = (
-  result: Record<string, unknown>,
-  node: Record<string, unknown>,
-  elementReads: { key: string; isArray: boolean; claimed: ClaimedOccurrence[] }[],
-  hasAny: boolean,
-  namespaceContext: Record<string, string>,
-): void => {
-  const order = childOrderOf(node);
-  if (order === undefined) {
-    return;
-  }
-  // Claims per raw node key, FIFO per raw value. The invariant the queue
-  // relies on: findElementValues (field scan) and childOrderOf (order walk)
-  // both iterate a given raw tag's occurrences in document order.
-  type PendingClaim = [key: string, index: number, isArray: boolean];
-  const claims = new Map<string, Map<unknown, PendingClaim[]>>();
-  for (const read of elementReads) {
-    for (const claim of read.claimed) {
-      let byValue = claims.get(claim.rawKey);
-      if (byValue === undefined) {
-        byValue = new Map();
-        claims.set(claim.rawKey, byValue);
-      }
-      const queue = byValue.get(claim.rawValue) ?? [];
-      queue.push([read.key, claim.index, read.isArray]);
-      byValue.set(claim.rawValue, queue);
-    }
-  }
-  const context = withNamespaceContext(namespaceContext, node);
-  const extraCounts = new Map<string, number>();
-  const retained: DocumentOrderEntry[] = [];
-  for (const [rawKey, rawValue] of order) {
-    if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
-      continue;
-    }
-    const claim = claims.get(rawKey)?.get(rawValue)?.shift();
-    if (claim !== undefined) {
-      const [key, index, isArray] = claim;
-      if (isArray || index === 0) {
-        retained.push([key, index]);
-        continue;
-      }
-    }
-    if (!hasAny) {
-      continue;
-    }
-    // Wildcard extra (or scalar overflow, which the sweep captures as one).
-    // The retained-first-occurrence rule must stay in lockstep with
-    // sweepWildcards' scalar-overflow capture — both count occurrences in the
-    // same scan order.
-    const clarkKey = rawChildClarkKey(rawKey, rawValue, context);
-    const index = extraCounts.get(clarkKey) ?? 0;
-    extraCounts.set(clarkKey, index + 1);
-    retained.push([clarkKey, index]);
-  }
-  if (retained.length > 0) {
-    documentOrderStore.set(result, retained);
-  }
-};
 
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
+  forceOrderRecording = false,
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
@@ -1157,7 +1044,24 @@ const readObject = (
   // Null prototype: an XSD element named __proto__ must become an own property,
   // not a silent prototype mutation (#84).
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  const elementReads: { key: string; isArray: boolean; claimed: ClaimedOccurrence[] }[] = [];
+  const fieldList = Object.values(fields);
+  const hasTextField = fieldList.some((f) => f.kind === "text");
+  const hasAny = fieldList.some((f) => f.kind === "any");
+  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
+  // Recording document order is dead work unless it can differ from schema
+  // order: mixed content always takes the schema-order path, and a single
+  // element field without wildcards or substitution members replays as its
+  // value array either way (substitutes parse grouped by raw tag, so the
+  // recording restores their interleaving). xsi:type slots are the exception
+  // (forceOrderRecording): an unknown xsi:type capture merges extras into the
+  // recording even for single-field declared variants.
+  const recordOrder =
+    !hasTextField &&
+    (forceOrderRecording ||
+      hasAny ||
+      fieldList.filter((f) => f.kind === "element").length > 1 ||
+      fieldList.some((f) => f.kind === "element" && (f.substitutes?.length ?? 0) > 0));
+  const elementReads: ElementRead[] = [];
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {
@@ -1170,7 +1074,7 @@ const readObject = (
       namespaceContext,
       exactElementQNames,
     );
-    if (claimed !== undefined && claimed.length > 0) {
+    if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
     }
     if (present) {
@@ -1186,10 +1090,6 @@ const readObject = (
       }
     }
   }
-  const fieldList = Object.values(fields);
-  const hasTextField = fieldList.some((f) => f.kind === "text");
-  const hasAny = fieldList.some((f) => f.kind === "any");
-  const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
   if (hasAny || hasAnyAttribute) {
     // Scalar element fields hold exactly one occurrence (readField takes the
     // first); further occurrences of their qname are wildcard extras.
@@ -1206,10 +1106,16 @@ const readObject = (
       scalarElements,
     });
   }
-  // Mixed-content objects always take the schema-order path (usableDocumentOrder
-  // rejects them), so recording their order is dead work.
-  if (!hasTextField) {
-    recordDocumentOrder(result, node, elementReads, hasAny, namespaceContext);
+  if (recordOrder) {
+    const extraContext = hasAny ? withNamespaceContext(namespaceContext, node) : undefined;
+    documentOrderTracker.record(
+      result,
+      node,
+      elementReads,
+      extraContext === undefined
+        ? undefined
+        : (rawKey, rawValue) => rawChildClarkKey(rawKey, rawValue, extraContext),
+    );
   }
   return result;
 };
@@ -1923,91 +1829,6 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
   return serializeDatatypeValue(datatype, value);
 };
 
-// Retained document order: honored while count matches per field/extra.
-const usableDocumentOrder = (
-  obj: Record<string, unknown>,
-  fields: Record<string, XmlFieldMeta>,
-  hasElementWildcard: boolean,
-  shape: Record<string, AnySchema>,
-): DocumentOrderEntry[] | undefined => {
-  const retained = documentOrderStore.get(obj);
-  if (retained === undefined) {
-    return undefined;
-  }
-  const countOf = (value: unknown): number =>
-    value === undefined ? 0 : Array.isArray(value) ? value.length : 1;
-  const counts = new Map<string, number>();
-  for (const [key] of retained) {
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  for (const [key, fieldMeta] of Object.entries(fields)) {
-    if (fieldMeta.kind === "text") {
-      return undefined;
-    }
-    if (fieldMeta.kind !== "element") {
-      continue;
-    }
-    if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {
-      return undefined;
-    }
-    counts.delete(key);
-  }
-  // Remaining retained keys are wildcard extras (clark keys): they must match
-  // the data's extras one-to-one, with none left over on either side.
-  if (hasElementWildcard) {
-    for (const [key, value] of Object.entries(obj)) {
-      if (key in fields || value === undefined || key.startsWith("@")) {
-        continue;
-      }
-      // Synthetic xsi:type discriminant: never serialized, invisible to the
-      // document-order correspondence check.
-      if (key === XSI_TYPE_FIELD && XSI_TYPE_FIELD in shape) {
-        continue;
-      }
-      if (counts.get(key) !== countOf(value)) {
-        return undefined;
-      }
-      counts.delete(key);
-    }
-  }
-  return counts.size === 0 ? retained : undefined;
-};
-
-// A captured unknown-xsi:type order replay (see XsiTypeCapture) is honored
-// under the same rule as usableDocumentOrder: every declared element field
-// and every captured extra must still hold exactly as many values as the
-// recording. Otherwise the value was mutated and the caller falls back to
-// schema-order emission with the extras appended after the declared content.
-const usableXsiCaptureOrder = (
-  capture: XsiTypeCapture,
-  obj: Record<string, unknown>,
-  fields: Record<string, XmlFieldMeta>,
-): DocumentOrderEntry[] | undefined => {
-  const countOf = (value: unknown): number =>
-    value === undefined ? 0 : Array.isArray(value) ? value.length : 1;
-  const counts = new Map<string, number>();
-  for (const [key] of capture.order) {
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  for (const [key, fieldMeta] of Object.entries(fields)) {
-    if (fieldMeta.kind === "text") {
-      return undefined;
-    }
-    if (fieldMeta.kind !== "element") {
-      continue;
-    }
-    if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {
-      return undefined;
-    }
-    counts.delete(key);
-  }
-  for (const [key, count] of counts) {
-    if ((capture.extras[key]?.length ?? 0) !== count) {
-      return undefined;
-    }
-  }
-  return capture.order;
-};
 
 const writeObjectFields = (
   schema: AnySchema,
@@ -2019,6 +1840,10 @@ const writeObjectFields = (
   const attributes: string[] = [];
   const elements: string[] = [];
   let usesXsi = false;
+  // Synthetic xsi:type discriminant: never serialized, invisible to the
+  // document-order correspondence check.
+  const isSyntheticKey = (key: string): boolean =>
+    key === XSI_TYPE_FIELD && XSI_TYPE_FIELD in shape;
   const lexicals = lexicalStore.get(obj);
   const substQNames = substQNameStore.get(obj);
   // Unknown-xsi:type capture (XsiTypeCapture): re-attach the undeclared
@@ -2048,7 +1873,7 @@ const writeObjectFields = (
       }
       // The synthetic xsi:type discriminant is never content — not even a
       // wildcard extra.
-      if (key === XSI_TYPE_FIELD && XSI_TYPE_FIELD in shape) {
+      if (isSyntheticKey(key)) {
         continue;
       }
       if (key.startsWith("@")) {
@@ -2185,16 +2010,18 @@ const writeObjectFields = (
     return `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
   };
 
+  // Parsed data that still matches its parse-time recording replays the
+  // children in document order (wildcard extras included) so interleaved
+  // repeated compositors survive the round-trip. Mutated or hand-built data
+  // falls back to schema-order emission below.
   const documentOrder =
     xsiCapture === undefined
-      ? usableDocumentOrder(obj, fields, anyWildcards.length > 0, shape)
-      : usableXsiCaptureOrder(xsiCapture, obj, fields);
+      ? documentOrderTracker.usable(obj, fields, anyWildcards.length > 0, isSyntheticKey)
+      : documentOrderTracker.usableCapture(xsiCapture.order, xsiCapture.extras, obj, fields);
   if (documentOrder !== undefined) {
-    // Parsed data that still matches its parse-time recording: replay the
-    // children in document order (wildcard extras included) so interleaved
-    // repeated compositors survive the round-trip. Occurrences are built in
-    // schema order and only assembled in document order, so namespace prefix
-    // allocation observes the same field sequence as the schema-order path.
+    // Occurrences are built in schema order and only assembled in document
+    // order, so namespace prefix allocation observes the same field sequence
+    // as the schema-order path.
     const buffered = new Map<string, (string | undefined)[]>();
     for (const [key, fieldMeta] of Object.entries(fields)) {
       const fieldSchema = shape[key];
@@ -2219,26 +2046,19 @@ const writeObjectFields = (
         values.map((_, i) => emitElementOccurrence(key, fieldMeta, fieldSchema, i)),
       );
     }
-    for (const [key, index] of documentOrder) {
-      const built = buffered.get(key);
-      if (built !== undefined) {
-        const emitted = built[index];
-        if (emitted !== undefined) {
-          elements.push(emitted);
-        }
-        continue;
-      }
+    documentOrderTracker.replay(
+      documentOrder,
+      buffered,
       // Wildcard extra (or unknown-xsi:type capture), recorded under its
       // clark key.
-      const value = obj[key] ?? xsiCapture?.extras[key];
-      const item = Array.isArray(value) ? value[index] : value;
-      if (item === undefined) {
-        continue;
-      }
-      usesXsi =
-        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx) ||
-        usesXsi;
-    }
+      (key) => obj[key] ?? xsiCapture?.extras[key],
+      (xml) => elements.push(xml),
+      (key, item) => {
+        usesXsi =
+          pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx) ||
+          usesXsi;
+      },
+    );
     return { attributes, elements, usesXsi };
   }
 

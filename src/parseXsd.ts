@@ -1,10 +1,11 @@
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
+import { childOrderOf } from "./documentOrder.js";
 import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { childOrderOf, createOutputBuilder } from "./runtime.js";
+import { createOutputBuilder } from "./runtime.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
