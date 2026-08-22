@@ -30,6 +30,28 @@ export type XmlFieldMeta = {
   qnameValue?: boolean;
 };
 
+/** One branch of an xs:choice: the result keys its fields occupy. */
+export type XmlChoiceBranchMeta = {
+  /** Branch identity (matches XmlChoiceMeta.guard.branch of nested groups). */
+  id: string;
+  keys: { key: string; required: boolean }[];
+};
+
+/** xs:choice group semantics, precomputed by codegen; enforced by the runtime. */
+export type XmlChoiceMeta = {
+  required: boolean;
+  repeated: boolean;
+  /** Precomputed user-facing message, e.g. "choice requires exactly one of: card, iban". */
+  message: string;
+  branches: XmlChoiceBranchMeta[];
+  /** Set when this group is nested inside a branch of an enclosing group. */
+  guard?: { group: string; branch: string };
+  /** Group has a wildcard branch: always satisfiable, content invisible to key checks. */
+  wildcard?: true;
+  /** Runtime enforces this group top-level (multi-branch, non-wildcard, not repeated-optional). */
+  enforce?: true;
+};
+
 /** XML knowledge attached to generated zod schemas via xmlRegistry. */
 export type XmlMeta = {
   qname?: QName;
@@ -43,6 +65,7 @@ export type XmlMeta = {
   substElement?: QName;
   qnameValue?: boolean;
   fields?: Record<string, XmlFieldMeta>;
+  choices?: Record<string, XmlChoiceMeta>;
 };
 
 /** Typed registry — globalThis singleton so generated modules and runtime share the instance. */

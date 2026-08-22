@@ -5,7 +5,8 @@ import {
 } from "@nodable/base-output-builder";
 import { CompactBuilderFactory, type FactoryOptions } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
-import type { z } from "zod";
+import { z } from "zod";
+import { choiceGroupIssues } from "./choiceCheck.js";
 import {
   type ClaimedOccurrence,
   type DocumentOrderEntry,
@@ -251,6 +252,16 @@ const findObjectMeta = (schema: AnySchema): XmlMeta | undefined =>
   findMeta(schema, (m) => m.fields);
 const findFieldsMeta = (schema: AnySchema): Record<string, XmlFieldMeta> | undefined =>
   findObjectMeta(schema)?.fields;
+const findChoicesMeta = (schema: AnySchema): XmlMeta["choices"] | undefined =>
+  findObjectMeta(schema)?.choices;
+
+// Choice-validation context threaded through the parse walk: issues collected
+// per object (choiceGroupIssues) with the object's property path, surfaced by
+// safeParseXml as a ZodError. Undefined on the validate:false fast path.
+type WalkCtx = {
+  issues: z.core.$ZodIssue[];
+  path: readonly (string | number)[];
+};
 
 type FieldAnalysis = {
   // Schema for one occurrence / the leaf. Lazy type schemas are kept intact:
@@ -862,6 +873,7 @@ const readXsiTypeOccurrence = (
   unionDef: z.core.$ZodDiscriminatedUnionDef,
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
+  walk?: WalkCtx,
 ): Record<string, unknown> => {
   const options = unionDef.options as readonly AnySchema[];
   const declared = options[0]!;
@@ -875,7 +887,7 @@ const readXsiTypeOccurrence = (
   // the gate would otherwise skip (single-field declared types).
   const mayCapture =
     derived === undefined && xsiType !== undefined && xsiType !== xsiTypeOptionQName(declared);
-  const value = readObject(derived ?? declared, node, namespaceContext, mayCapture);
+  const value = readObject(derived ?? declared, node, namespaceContext, mayCapture, walk);
   if (derived !== undefined && xsiType !== undefined) {
     value[XSI_TYPE_FIELD] = xsiType;
     return value;
@@ -1028,6 +1040,7 @@ const readObject = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
   forceOrderRecording = false,
+  walk?: WalkCtx,
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
@@ -1071,6 +1084,7 @@ const readObject = (
       node,
       namespaceContext,
       exactElementQNames,
+      walk === undefined ? undefined : { issues: walk.issues, path: [...walk.path, key] },
     );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1114,6 +1128,14 @@ const readObject = (
         ? undefined
         : (rawKey, rawValue) => rawChildClarkKey(rawKey, rawValue, extraContext),
     );
+  }
+  if (walk !== undefined) {
+    const choices = findChoicesMeta(schema);
+    if (choices !== undefined) {
+      for (const message of choiceGroupIssues(choices, result)) {
+        walk.issues.push({ code: "custom", message, path: [...walk.path], input: result });
+      }
+    }
   }
   return result;
 };
@@ -1272,6 +1294,7 @@ const readOccurrence = (
   fieldMeta: XmlFieldMeta,
   entry: unknown,
   namespaceContext: Record<string, string>,
+  walk?: WalkCtx,
 ): {
   value: unknown;
   lexical?: string | undefined;
@@ -1286,7 +1309,7 @@ const readOccurrence = (
     }
     const xsiUnion = xsiTypeUnionDef(field.itemSchema);
     if (xsiUnion !== undefined) {
-      return { value: readXsiTypeOccurrence(xsiUnion, childNode, childContext) };
+      return { value: readXsiTypeOccurrence(xsiUnion, childNode, childContext, walk) };
     }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
@@ -1300,7 +1323,7 @@ const readOccurrence = (
       return { value: openWalk(childNode, childContext) };
     }
     if (hasObjectShape(field.itemSchema)) {
-      return { value: readObject(field.itemSchema, childNode, childContext) };
+      return { value: readObject(field.itemSchema, childNode, childContext, false, walk) };
     }
     const text = textOf(childNode);
     if (text === undefined || text === "") {
@@ -1346,11 +1369,15 @@ const readOccurrence = (
         scalarXsiUnion.options[0] as AnySchema,
         { "#text": entry },
         namespaceContext,
+        false,
+        walk,
       ),
     };
   }
   if (hasObjectShape(field.itemSchema)) {
-    return { value: readObject(field.itemSchema, { "#text": entry }, namespaceContext) };
+    return {
+      value: readObject(field.itemSchema, { "#text": entry }, namespaceContext, false, walk),
+    };
   }
   return {
     value: coerceLexical(entry, field.itemSchema),
@@ -1382,6 +1409,7 @@ const readField = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
   exactElementQNames?: ReadonlySet<string>,
+  walk?: WalkCtx,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1440,11 +1468,15 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
-  const occurrences = matched.map((entry) => {
+  const occurrences = matched.map((entry, index) => {
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
+    const occWalk =
+      walk === undefined || !field.isArray
+        ? walk
+        : { issues: walk.issues, path: [...walk.path, index] };
     return {
-      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext),
+      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk),
       qname: entry.qname,
     };
   });
@@ -1482,7 +1514,7 @@ const readField = (
   return { present: false, value: undefined };
 };
 
-const walkRoot = (schema: AnySchema, xml: string): unknown => {
+const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
@@ -1502,10 +1534,10 @@ const walkRoot = (schema: AnySchema, xml: string): unknown => {
   const typeSchema = peelOnce(schema);
   const xsiUnion = xsiTypeUnionDef(typeSchema);
   if (xsiUnion !== undefined) {
-    return readXsiTypeOccurrence(xsiUnion, rootNode, namespaceContext);
+    return readXsiTypeOccurrence(xsiUnion, rootNode, namespaceContext, walk);
   }
   if (hasObjectShape(typeSchema)) {
-    return readObject(typeSchema, rootNode, namespaceContext);
+    return readObject(typeSchema, rootNode, namespaceContext, false, walk);
   }
   // Simple-typed root element: the document value is the root's text content.
   // XSD applies the root element's fixed/default to a present-but-empty root.
@@ -2159,8 +2191,11 @@ export const safeParseXml = <S extends z.ZodType>(
   opts?: ParseXmlOptions,
 ): { success: true; data: z.output<S> } | { success: false; error: unknown } => {
   let data: unknown;
+  // Choice groups are validated during the walk (registry-meta driven); the
+  // validate:false fast path skips them, exactly as it skipped the refines.
+  const walk: WalkCtx | undefined = opts?.validate === false ? undefined : { issues: [], path: [] };
   try {
-    data = walkRoot(schema, xml);
+    data = walkRoot(schema, xml, walk);
   } catch (error) {
     return { success: false, error };
   }
@@ -2168,8 +2203,18 @@ export const safeParseXml = <S extends z.ZodType>(
     return { success: true, data: data as z.output<S> };
   }
   const result = schema.safeParse(data);
+  const choiceIssues = walk?.issues ?? [];
   if (!result.success) {
-    return { success: false, error: result.error };
+    return {
+      success: false,
+      error:
+        choiceIssues.length > 0
+          ? new z.ZodError([...result.error.issues, ...choiceIssues])
+          : result.error,
+    };
+  }
+  if (choiceIssues.length > 0) {
+    return { success: false, error: new z.ZodError(choiceIssues) };
   }
   // zod rebuilt the tree during validation — re-key the retained lexicals.
   transferLexicals(data, result.data);
