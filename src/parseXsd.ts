@@ -1,10 +1,11 @@
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
+import { childOrderOf } from "./documentOrder.js";
 import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { childOrderOf, createOutputBuilder } from "./runtime.js";
+import { createOutputBuilder } from "./runtime.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -442,9 +443,13 @@ const readSchema = (
 const collectChildren = (entries: Iterable<[string, unknown]>): [string, AnyNode][] => {
   const out: [string, AnyNode][] = [];
   for (const [key, value] of entries) {
-    if (key.startsWith("@_") || key === "#text") continue;
+    if (key.startsWith("@_") || key === "#text") {
+      continue;
+    }
     for (const entry of asArray(value as AnyNode | AnyNode[])) {
-      if (entry && typeof entry === "object") out.push([key, entry as AnyNode]);
+      if (entry && typeof entry === "object") {
+        out.push([key, entry as AnyNode]);
+      }
     }
   }
   return out;
@@ -1407,7 +1412,9 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
 
   const visit = (entry: QueueEntry): void => {
     const key = scanKey(entry.file, entry.inheritedTargetNs);
-    if (scanned.has(key)) return;
+    if (scanned.has(key)) {
+      return;
+    }
     scanned.add(key);
 
     let schemaNode: AnyNode;
@@ -1418,7 +1425,9 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
       const result = readSchema(entry.file);
       ({ schemaNode, nsMap, targetNs, formDefaults } = result);
     } catch (err) {
-      if (entry.entryPoint) throw err;
+      if (entry.entryPoint) {
+        throw err;
+      }
       report(diagnostics, "unresolved-import", `unable to read schema "${entry.file}"`, entry.file);
       return;
     }
@@ -1426,7 +1435,9 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
     for (const [tag, child] of nodeChildren(schemaNode)) {
       const localTag = getNodeTagLocalName(tag);
       const schemaLocation = child["@_schemaLocation"] ? String(child["@_schemaLocation"]) : "";
-      if (!schemaLocation) continue;
+      if (!schemaLocation) {
+        continue;
+      }
       if (/^https?:/i.test(schemaLocation)) {
         report(
           diagnostics,
@@ -1436,7 +1447,9 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
         );
         continue;
       }
-      if (localTag !== "import" && localTag !== "include" && localTag !== "redefine") continue;
+      if (localTag !== "import" && localTag !== "include" && localTag !== "redefine") {
+        continue;
+      }
       const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
       const ns = localTag === "include" ? targetNs || entry.inheritedTargetNs || "" : undefined;
       visit({ file: resolved, ...optProp("inheritedTargetNs", ns) });
@@ -1445,7 +1458,9 @@ const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFil
     allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
   };
 
-  for (const file of files) visit({ file: path.resolve(file), entryPoint: true });
+  for (const file of files) {
+    visit({ file: path.resolve(file), entryPoint: true });
+  }
   return allFiles;
 };
 
