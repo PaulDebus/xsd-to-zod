@@ -88,7 +88,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
       expect(generated.schemas).toContain('"approved": z.boolean().optional()');
       // Choice: no __choice marker anymore — branch fields become optional and
-      // mutual exclusion is registry meta enforced by the runtime (#73).
+      // mutual exclusion is registry meta enforced by the runtime.
       expect(generated.schemas).toContain('"sku": z.string().optional()');
       expect(generated.schemas).toContain('"ean": z.string().optional()');
       expect(generated.schemas).toContain('"message":"choice allows at most one of: sku, ean"');

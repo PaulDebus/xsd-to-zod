@@ -263,6 +263,9 @@ type WalkCtx = {
   path: readonly (string | number)[];
 };
 
+const childWalk = (walk: WalkCtx | undefined, segment: string | number): WalkCtx | undefined =>
+  walk === undefined ? undefined : { issues: walk.issues, path: [...walk.path, segment] };
+
 type FieldAnalysis = {
   // Schema for one occurrence / the leaf. Lazy type schemas are kept intact:
   // their registry meta (the fields map) is keyed on the lazy object.
@@ -1084,7 +1087,7 @@ const readObject = (
       node,
       namespaceContext,
       exactElementQNames,
-      walk === undefined ? undefined : { issues: walk.issues, path: [...walk.path, key] },
+      childWalk(walk, key),
     );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1471,10 +1474,7 @@ const readField = (
   const occurrences = matched.map((entry, index) => {
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
-    const occWalk =
-      walk === undefined || !field.isArray
-        ? walk
-        : { issues: walk.issues, path: [...walk.path, index] };
+    const occWalk = field.isArray ? childWalk(walk, index) : walk;
     return {
       ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk),
       qname: entry.qname,
