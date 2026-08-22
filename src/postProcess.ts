@@ -24,14 +24,11 @@ const run = (command: string, args: string[], cwd: string): void => {
 // .cmd shim there (spawned with shell in run()).
 // Walks up from cwd so a tool installed at a monorepo root is still found
 // when the CLI runs in a package subdirectory.
-const walkUp = (
-  start: string,
-  test: (dir: string) => string | boolean | undefined,
-): string | boolean | undefined => {
+const walkUp = <T>(start: string, test: (dir: string) => T | undefined): T | undefined => {
   let dir = start;
   for (;;) {
     const hit = test(dir);
-    if (hit) {
+    if (hit !== undefined) {
       return hit;
     }
     const parent = path.dirname(dir);
@@ -47,7 +44,7 @@ const binPath = (cwd: string, binName: string): string | undefined => {
   return walkUp(cwd, (dir) => {
     const full = path.join(dir, "node_modules", ".bin", fileName);
     return fs.existsSync(full) ? full : undefined;
-  }) as string | undefined;
+  });
 };
 
 const runTool = (binName: string, args: string[], cwd: string): boolean => {
@@ -79,9 +76,9 @@ const CONFIG_FILES: Record<"biome" | "prettier" | "eslint", string[]> = {
 };
 
 const hasConfig = (cwd: string, tool: keyof typeof CONFIG_FILES): boolean =>
-  (walkUp(cwd, (dir) =>
-    CONFIG_FILES[tool].some((name) => fs.existsSync(path.join(dir, name))),
-  ) as boolean) ?? false;
+  walkUp(cwd, (dir) =>
+    CONFIG_FILES[tool].some((name) => fs.existsSync(path.join(dir, name))) ? true : undefined,
+  ) !== undefined;
 
 // Biome and Prettier exit non-zero on file types they do not support (e.g.
 // the bundled .xsd), so only JS/TS output is routed to them.
