@@ -9,7 +9,7 @@ import type {
   SimpleTypeDef,
   XsdIr,
 } from "./types.js";
-import type { XmlLexicalFacets } from "./xmlMeta.js";
+import type { XmlChoiceMeta, XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
@@ -926,158 +926,86 @@ const choiceFlags = (
   return { required, repeated, flat, branches: entries };
 };
 
-const choiceRefines = (type: ComplexTypeDef): string[] => {
-  const keyOf = (field: IrField): string => `val[${JSON.stringify(toFieldKey(field))}]`;
-  // A choice with a wildcard branch is always satisfiable through it: wildcard
-  // content lands in the open shape, invisible to field presence checks.
-  const wildcardGroups = new Set(
-    (type.wildcards ?? []).flatMap((w) => (w.choiceGroup ? [w.choiceGroup] : [])),
-  );
-
-  // Emits one group's branch consts into `lines` and returns the group's check
-  // plus a presence expression (any field of the whole subtree present) that
-  // enclosing branches use for gating.
-  const emitGroup = (lines: string[], group: string): { check: string; any: string } => {
-    if (wildcardGroups.has(group)) {
-      const keys = choiceSubtreeFields(type, group).map(keyOf);
-      return { check: "true", any: keys.length > 0 ? `[${keys.join(", ")}].some(has)` : "false" };
+const choicesMetaFor = (type: ComplexTypeDef): string => {
+  // Collect all group ids: choiceGroups keys + every key and guard.group from
+  // choiceGroupGuards (mirror what multiBranchGroups collects).
+  const groupIds: Set<string> = new Set();
+  if (type.choiceGroups) {
+    for (const g of Object.keys(type.choiceGroups)) {
+      groupIds.add(g);
     }
-    const {
+  }
+  for (const [id, guard] of Object.entries(type.choiceGroupGuards ?? {})) {
+    groupIds.add(id);
+    groupIds.add(guard.group);
+  }
+
+  // If no choice groups, emit nothing.
+  if (groupIds.size === 0) {
+    return "";
+  }
+
+  // Build the choices object entry per group.
+  const choices: Record<string, XmlChoiceMeta> = {};
+
+  for (const group of groupIds) {
+    const { required: requiredChoice, repeated: repeatedChoice } = choiceFlags(type, group);
+    const branchMap = choiceBranchMap(type, group);
+
+    // Per-branch keys.
+    const branchesMeta: Array<{ id: string; keys: Array<{ key: string; required: boolean }> }> = [];
+    for (const [branchKey, fields] of branchMap) {
+      branchesMeta.push({
+        id: branchKey,
+        keys: fields.map((f) => ({ key: toFieldKey(f), required: f.minOccurs > 0 })),
+      });
+    }
+
+    // Guard from choiceGroupGuards.
+    const guardMeta = type.choiceGroupGuards?.[group];
+    const guard = guardMeta ? { group: guardMeta.group, branch: guardMeta.branch } : undefined;
+
+    // Wildcard.
+    const wildcard = (type.wildcards ?? []).some((w) => w.choiceGroup === group);
+
+    // Enforce: group is in multiBranchGroups, not wildcard, and NOT (repeated && !required).
+    const inMulti = multiBranchGroups(type).has(group);
+    const enforce = inMulti && !wildcard && !(repeatedChoice && !requiredChoice);
+
+    // Build the display names for the message.
+    // Per branch: fields if non-empty else choiceBranchSubtreeFields, mapped through
+    // clarkToLocal(f.qname), joined with "+"; branches joined with ", ".
+    const names: string[] = [];
+    for (const [branchKey, fields] of branchMap) {
+      const display =
+        fields.length > 0 ? fields : choiceBranchSubtreeFields(type, group, branchKey);
+      const fieldNames = display.map((f) => clarkToLocal(f.qname)).join("+");
+      names.push(fieldNames);
+    }
+    const joinedNames = names.join(", ");
+
+    // Message: repeated ? "at least one" : required ? "exactly one" : "at most one".
+    let message: string;
+    if (repeatedChoice) {
+      message = `choice requires at least one of: ${joinedNames}`;
+    } else if (requiredChoice) {
+      message = `choice requires exactly one of: ${joinedNames}`;
+    } else {
+      message = `choice allows at most one of: ${joinedNames}`;
+    }
+
+    choices[group] = {
       required: requiredChoice,
       repeated: repeatedChoice,
-      branches,
-    } = choiceFlags(type, group);
-    if (repeatedChoice && !requiredChoice) {
-      return { check: "true", any: "false" };
-    }
-
-    const completeNames: string[] = [];
-    const partialNames: string[] = [];
-    const selExprs: string[] = [];
-    const keySets: Set<string>[] = [];
-    branches.forEach(([branchKey, fields], i) => {
-      const id = `${group}g${i}`;
-      const allKeys = fields.map(keyOf);
-      const requiredKeys = fields.filter((f) => f.minOccurs > 0).map(keyOf);
-      keySets.push(new Set(fields.map((f) => toFieldKey(f))));
-      const children = choiceChildren(type, group, branchKey).map((child) =>
-        emitGroup(lines, child),
-      );
-      const selParts = [
-        ...(allKeys.length > 0 ? [`[${allKeys.join(", ")}].some(has)`] : []),
-        ...children.map((child) => child.any).filter((expr) => expr !== "false"),
-      ];
-      const sel = selParts.length > 0 ? selParts.join(" || ") : "false";
-      selExprs.push(sel);
-      // A branch is complete when all its required fields are present (or, for
-      // branches of only-optional fields, when any field is present) and every
-      // nested choice hanging off it is satisfied. A branch without fields of
-      // its own must additionally show up at all: an optional nested choice
-      // that is absent must not count its branch as complete.
-      const directOk =
-        requiredKeys.length === 1 && fields.length === 1
-          ? `has(${allKeys[0]})`
-          : requiredKeys.length > 0
-            ? `[${requiredKeys.join(", ")}].every(has)`
-            : allKeys.length > 0
-              ? `[${allKeys.join(", ")}].some(has)`
-              : "true";
-      const okParts = [
-        ...(fields.length === 0 ? [`(${sel})`] : []),
-        directOk,
-        ...children.map((child) => child.check),
-      ].filter((expr) => expr !== "true");
-      lines.push(`const b${id} = ${okParts.length > 0 ? okParts.join(" && ") : "true"};`);
-      completeNames.push(`b${id}`);
-      // Partial presence — the branch shows up but is not complete — is always
-      // rejected.
-      if (
-        (requiredKeys.length > 0 && fields.length > 1) ||
-        children.some((child) => child.check !== "true")
-      ) {
-        lines.push(`const p${id} = !b${id} && (${sel});`);
-        partialNames.push(`p${id}`);
-      }
-    });
-
-    // Overlapping branches: when a complete branch's key set covers a smaller
-    // complete branch's, the smaller match is fully explained by the larger
-    // one and is not counted separately.
-    const countedNames = completeNames.map((name, j) => {
-      const keysJ = keySets[j] ?? new Set<string>();
-      const absorbers = completeNames.filter((_, i) => {
-        const keysI = keySets[i] ?? new Set<string>();
-        return (
-          i !== j &&
-          keysJ.size > 0 &&
-          keysJ.size <= keysI.size &&
-          (keysJ.size < keysI.size || i < j) &&
-          [...keysJ].every((key) => keysI.has(key))
-        );
-      });
-      if (absorbers.length === 0) {
-        return name;
-      }
-      const counted = `c${group}g${j}`;
-      lines.push(`const ${counted} = ${name} && !(${absorbers.join(" || ")});`);
-      return counted;
-    });
-
-    const countCheck = repeatedChoice ? "> 0" : requiredChoice ? "=== 1" : "<= 1";
-    const partialCheck =
-      partialNames.length > 0 ? ` && ![${partialNames.join(", ")}].some(Boolean)` : "";
-    return {
-      check: `[${countedNames.join(", ")}].filter(Boolean).length ${countCheck}${partialCheck}`,
-      any:
-        selExprs.filter((expr) => expr !== "false").length > 0
-          ? selExprs.filter((expr) => expr !== "false").join(" || ")
-          : "false",
+      branches: branchesMeta,
+      message,
+      ...(guard ? { guard } : {}),
+      ...(wildcard ? { wildcard: true as const } : {}),
+      ...(enforce ? { enforce: true as const } : {}),
     };
-  };
-
-  const refines: string[] = [];
-  for (const group of multiBranchGroups(type)) {
-    if (wildcardGroups.has(group)) {
-      continue;
-    }
-    const { required: requiredChoice, repeated: repeatedChoice } = choiceFlags(type, group);
-    if (repeatedChoice && !requiredChoice) {
-      continue;
-    }
-
-    // Presence, not just definedness: the runtime materializes an absent
-    // repeated field as [] (readField), and [] !== undefined would count the
-    // branch as selected — an empty array is zero occurrences, i.e. absent.
-    const lines: string[] = [
-      `const has = (v: unknown): boolean => v !== undefined && !(Array.isArray(v) && v.length === 0);`,
-    ];
-    const { check } = emitGroup(lines, group);
-    const guard = type.choiceGroupGuards?.[group];
-    if (guard) {
-      // A nested choice is enforced only when its enclosing branch is
-      // actually selected.
-      const gateKeys = choiceBranchSubtreeFields(type, guard.group, guard.branch).map(keyOf);
-      const gate = gateKeys.length > 0 ? `[${gateKeys.join(", ")}].some(has)` : "false";
-      lines.push(`return (${gate}) ? (${check}) : true;`);
-    } else {
-      lines.push(`return ${check};`);
-    }
-
-    const names = [...choiceBranchMap(type, group).entries()]
-      .map(([branchKey, fields]) => {
-        const display =
-          fields.length > 0 ? fields : choiceBranchSubtreeFields(type, group, branchKey);
-        return display.map((f) => clarkToLocal(f.qname)).join("+");
-      })
-      .join(", ");
-    const message = repeatedChoice
-      ? `choice requires at least one of: ${names}`
-      : `${requiredChoice ? "choice requires exactly one of" : "choice allows at most one of"}: ${names}`;
-    refines.push(
-      `.refine((val) => {\n${lines.join("\n")}\n}, { message: ${JSON.stringify(message)} })`,
-    );
   }
-  return refines;
+
+  return `, choices: ${JSON.stringify(choices)}`;
 };
 
 // The structured datatype a type's values arrive in, looking through xs:list
@@ -1251,7 +1179,7 @@ const fieldsMetaFor = (
   if ((type.wildcards ?? []).some((w) => w.kind === "anyAttribute")) {
     entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
   }
-  return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(", ")} }`;
+  return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(", ")} }${choicesMetaFor(type)}`;
 };
 
 // Head element qname → substitution-group member declarations, transitively
@@ -1864,7 +1792,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     const objectCtor =
       complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object";
     schemaLines.push(
-      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}})${choiceRefines(complexType).join("")};`,
+      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}});`,
     );
   }
 
@@ -1902,7 +1830,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
     schemaLines.push(
       `const ${constName.get(complexType.name)}${annotation} = ${registered(
-        `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${choiceRefines(complexType).join("")})`,
+        `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
         complexType.description,
         fieldsMetaFor(complexType, ir, structured, membersByHead),
       )};`,
