@@ -38,7 +38,6 @@ const XML_NS = "http://www.w3.org/XML/1998/namespace";
 type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
 type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
 
-
 // XML 1.0 §3.3.3: literal TAB/LF/CR in attribute values normalize to spaces
 // before the app sees them; character references (&#9; etc.) keep the control
 // character after entity expansion. The parser's AttributeProcessor already
@@ -1024,7 +1023,6 @@ const extractRoot = (
 // Reading: XML nodes → data, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
-
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
@@ -1828,7 +1826,6 @@ const serializeFieldLeaf = (fieldMeta: XmlFieldMeta, schema: AnySchema, value: u
   }
   return serializeDatatypeValue(datatype, value);
 };
-
 
 const writeObjectFields = (
   schema: AnySchema,
