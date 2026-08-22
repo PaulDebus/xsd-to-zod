@@ -19,7 +19,6 @@ import type {
   WildcardDef,
   XsdIr,
 } from "./types.js";
-import { normalizeAttributeWhitespace } from "./xmlNormalize.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
@@ -408,7 +407,7 @@ const readSchema = (
   formDefaults: SchemaFormDefaults;
 } => {
   const xml = expandInternalEntities(readXmlFile(filePath));
-  const parsed = parser.parse(normalizeAttributeWhitespace(xml)) as Record<string, AnyNode>;
+  const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {
     throw new Xsd2ZodError("no-schema-root", `No schema root found in ${filePath}`, {
