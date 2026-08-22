@@ -35,7 +35,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/IdentityConstraint_w3c.xml/idF012/idF012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idF013/idF013.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idF014/idF014.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/IdentityConstraint_w3c.xml/idG030/idG030.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
 
   ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
