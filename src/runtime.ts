@@ -1220,9 +1220,13 @@ const sweepWildcards = (
   );
   const consumed = new Map<string, number>();
   const scalarQNameOf = (ns: string, local: string, prefix: string): string | undefined => {
-    if (wildcards.scalarElements === undefined) return undefined;
+    if (wildcards.scalarElements === undefined) {
+      return undefined;
+    }
     const exact = `{${ns}}${local}`;
-    if (wildcards.scalarElements.has(exact)) return exact;
+    if (wildcards.scalarElements.has(exact)) {
+      return exact;
+    }
     const unq = `{}${local}`;
     return prefix === "" && wildcards.scalarElements.has(unq) ? unq : undefined;
   };
@@ -1251,10 +1255,15 @@ const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
 ): { substituted: boolean; value?: unknown } => {
-  if (field.hasFixed) return { substituted: true, value: field.fixedValue };
-  if (fieldMeta.fixedValue !== undefined) return { substituted: true, value: fieldMeta.fixedValue };
-  if (fieldMeta.defaultValue !== undefined)
+  if (field.hasFixed) {
+    return { substituted: true, value: field.fixedValue };
+  }
+  if (fieldMeta.fixedValue !== undefined) {
+    return { substituted: true, value: fieldMeta.fixedValue };
+  }
+  if (fieldMeta.defaultValue !== undefined) {
     return { substituted: true, value: fieldMeta.defaultValue };
+  }
   return { substituted: false };
 };
 
@@ -1461,10 +1470,10 @@ const readField = (
   if (occurrences.length > 0) {
     return {
       present: true,
-      value: occurrences[0]!.value,
-      lexical: occurrences[0]!.lexical,
+      value: occurrences[0]?.value,
+      lexical: occurrences[0]?.lexical,
       substQNames: qnames[0],
-      qnameNs: occurrences[0]!.qnameNs,
+      qnameNs: occurrences[0]?.qnameNs,
       claimed,
     };
   }

@@ -11,7 +11,7 @@ const canonicalParts = (value: number): { digits: string; exponent: number } => 
   }
   const [mantissa, exponent] = abs.toExponential().split("e");
   return {
-    digits: mantissa!.replace(".", "").replace(/0+$/, "") || "0",
+    digits: mantissa?.replace(".", "").replace(/0+$/, "") || "0",
     exponent: Number(exponent!),
   };
 };

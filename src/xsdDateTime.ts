@@ -94,7 +94,9 @@ const fail = (datatype: string, value: string): never => {
 
 const mustExec = (re: RegExp, value: string, datatype: string): RegExpExecArray => {
   const m = re.exec(collapseWhiteSpace(value));
-  if (!m || m[1] === undefined) fail(datatype, value);
+  if (!m || m[1] === undefined) {
+    fail(datatype, value);
+  }
   return m as RegExpExecArray;
 };
 
@@ -175,7 +177,9 @@ const toUtcTime = (
 
 export const parseXsdDate = (value: string): XsdDate => {
   const m = mustExec(DATE_RE, value, "date");
-  if (m[2] === undefined || m[3] === undefined) fail("date", value);
+  if (m[2] === undefined || m[3] === undefined) {
+    fail("date", value);
+  }
   const y = Number(m[1]),
     mo = Number(m[2]),
     d = Number(m[3]);
@@ -189,8 +193,15 @@ export const parseXsdDate = (value: string): XsdDate => {
 
 export const parseXsdDateTime = (value: string): XsdDateTime => {
   const m = mustExec(DATE_TIME_RE, value, "dateTime");
-  if (m[2] === undefined || m[3] === undefined || m[4] === undefined || m[5] === undefined || m[6] === undefined)
+  if (
+    m[2] === undefined ||
+    m[3] === undefined ||
+    m[4] === undefined ||
+    m[5] === undefined ||
+    m[6] === undefined
+  ) {
     fail("dateTime", value);
+  }
   const frac = fraction(m[7]);
   const utc = toUtc(
     Number(m[1]),
@@ -208,20 +219,30 @@ export const parseXsdDateTime = (value: string): XsdDateTime => {
     minute: utc.minute,
     second: Number(m[6]),
   };
-  if (frac !== undefined) result.fraction = frac;
-  if (m[8] !== undefined) result.tzOffset = 0;
+  if (frac !== undefined) {
+    result.fraction = frac;
+  }
+  if (m[8] !== undefined) {
+    result.tzOffset = 0;
+  }
   return result;
 };
 
 export const parseXsdTime = (value: string): XsdTime => {
   const m = mustExec(TIME_RE, value, "time");
-  if (m[2] === undefined || m[3] === undefined) fail("time", value);
+  if (m[2] === undefined || m[3] === undefined) {
+    fail("time", value);
+  }
   const frac = fraction(m[4]);
   const offset = tzMinutes(m[5]);
   const utc = toUtcTime(Number(m[1]), Number(m[2]), offset ?? 0);
   const result: XsdTime = { hour: utc.hour, minute: utc.minute, second: Number(m[3]) };
-  if (frac !== undefined) result.fraction = frac;
-  if (offset !== undefined) result.tzOffset = 0;
+  if (frac !== undefined) {
+    result.fraction = frac;
+  }
+  if (offset !== undefined) {
+    result.tzOffset = 0;
+  }
   return result;
 };
 
@@ -234,7 +255,9 @@ const parseGWithTz = <T>(
   tzIdx: number,
 ): T => {
   const m = mustExec(re, value, dt);
-  if (tzIdx === 3 && m[2] === undefined) fail(dt, value);
+  if (tzIdx === 3 && m[2] === undefined) {
+    fail(dt, value);
+  }
   const offset = tzMinutes(m[tzIdx]);
   return offset === undefined ? buildPlain(m) : buildTz(m, offset);
 };

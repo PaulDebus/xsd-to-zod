@@ -146,10 +146,16 @@ export const isLibrary = (filePath: string): boolean => {
     for (const m of content.slice(start).matchAll(/<\/?(?:\w+:)?(\w+)[^>]*\/?>/g)) {
       const tag = m[0];
       if (tag.startsWith("</")) {
-        if (--depth === 0) break;
+        if (--depth === 0) {
+          break;
+        }
       } else {
-        if (depth === 1 && m[1] === "element") return false;
-        if (!tag.endsWith("/")) depth++;
+        if (depth === 1 && m[1] === "element") {
+          return false;
+        }
+        if (!tag.endsWith("/")) {
+          depth++;
+        }
       }
     }
     return true;
