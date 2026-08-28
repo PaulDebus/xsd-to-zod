@@ -192,6 +192,28 @@ import { defineConfig } from "xsd-to-zod";
 export default defineConfig({ out: "src/generated", datatypes: "structured" });
 ```
 
+```js
+// xsd-to-zod.config.cjs — CommonJS projects
+module.exports = { out: "src/generated" };
+```
+
+```jsonc
+// package.json
+{
+  "name": "my-app",
+  "xsd-to-zod": { "out": "src/generated", "silent": true }
+}
+```
+
+A CLI flag wins over the config for that run, `--config` points at a specific
+file, and `--no-config` skips loading:
+
+```sh
+npx xsd-to-zod schema.xsd --datatypes string        # config says structured; this run stays on strings
+npx xsd-to-zod schema.xsd --config ci/release.json  # explicit file, no discovery
+npx xsd-to-zod schema.xsd --no-config               # ignore the project config
+```
+
 Unknown keys and wrong types are rejected with a descriptive error, so typos
 fail loudly instead of being silently ignored.
 
