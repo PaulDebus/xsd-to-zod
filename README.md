@@ -148,6 +148,31 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
 | `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
+| `-c, --config <path>` | Load config from this file instead of auto-discovering one |
+| `--no-config` | Ignore any auto-discovered config file |
+
+#### Configuration file
+
+The generate command reads an optional project config, discovered by walking
+up from the working directory: `xsd-to-zod.config.{js,mjs,cjs,json}`, or an
+`"xsd-to-zod"` field in `package.json`. Every key mirrors a CLI flag; CLI
+flags override the config file, and `--config`/`--no-config` control loading.
+The `bundle` and `validate` subcommands do not read config.
+
+```json
+// xsd-to-zod.config.json
+{ "out": "src/generated", "datatypes": "structured", "includeLibraries": true }
+```
+
+```js
+// xsd-to-zod.config.js
+import { defineConfig } from "xsd-to-zod";
+
+export default defineConfig({ out: "src/generated", datatypes: "structured" });
+```
+
+Unknown keys and wrong types are rejected with a descriptive error, so typos
+fail loudly instead of being silently ignored.
 
 Bundle all imports and includes into a single self-contained XSD:
 

@@ -14,6 +14,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { z } from "zod";
+import { loadConfig, mergeConfig } from "./config.js";
 import { Xsd2ZodError } from "./errors.js";
 import { irToZod } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
@@ -169,7 +170,10 @@ export const isLibrary = (filePath: string): boolean => {
 // ---------------------------------------------------------------------------
 
 type GenerateOptions = {
-  out: string;
+  // commander treats --no-config as the negation of --config: the option value
+  // is a string path, false (--no-config), or true (neither flag given).
+  config?: string | boolean;
+  out?: string;
   name?: string;
   format?: boolean;
   includeLibraries?: boolean;
@@ -194,8 +198,24 @@ type BundleOptions = {
 // ---------------------------------------------------------------------------
 
 const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<void> => {
-  const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
-  const datatypes = opts.datatypes ?? "string";
+  // Project config fills in anything the CLI left undefined (see config.ts).
+  const { config: fileConfig } = await loadConfig({
+    cwd: process.cwd(),
+    configPath: typeof opts.config === "string" ? opts.config : undefined,
+    noConfig: opts.config === false,
+  });
+  const merged = mergeConfig(fileConfig, {
+    out: opts.out,
+    name: opts.name,
+    format: opts.format,
+    includeLibraries: opts.includeLibraries,
+    allowMissingImports: opts.allowMissingImports,
+    silent: opts.silent,
+    datatypes: opts.datatypes as "string" | "structured" | undefined,
+  });
+  const { name, format, includeLibraries, allowMissingImports, silent } = merged;
+  const out = merged.out ?? ".";
+  const datatypes = merged.datatypes ?? "string";
   if (datatypes !== "string" && datatypes !== "structured") {
     throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
   }
@@ -351,7 +371,7 @@ const program = new Command()
     "[files-or-dirs...]",
     "XSD schema files or directories (directories are recursively expanded)",
   )
-  .option("-o, --out <dir>", "Output directory", ".")
+  .option("-o, --out <dir>", "Output directory")
   .option("-n, --name <name>", "Basename for the generated file (default: stem of first input)")
   .option("-f, --format", "Run formatter on the generated file")
   .option(
@@ -367,6 +387,8 @@ const program = new Command()
     "--datatypes <mode>",
     'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
   )
+  .option("-c, --config <path>", "Load config from this file instead of auto-discovering one")
+  .option("--no-config", "Ignore any auto-discovered config file (default: false)")
   .action(generate);
 
 program
