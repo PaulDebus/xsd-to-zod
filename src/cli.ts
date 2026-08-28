@@ -371,7 +371,7 @@ const program = new Command()
     "[files-or-dirs...]",
     "XSD schema files or directories (directories are recursively expanded)",
   )
-  .option("-o, --out <dir>", "Output directory")
+  .option("-o, --out <dir>", "Output directory (default: current directory)")
   .option("-n, --name <name>", "Basename for the generated file (default: stem of first input)")
   .option("-f, --format", "Run formatter on the generated file")
   .option(
