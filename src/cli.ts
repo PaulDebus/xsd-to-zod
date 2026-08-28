@@ -170,8 +170,8 @@ export const isLibrary = (filePath: string): boolean => {
 // ---------------------------------------------------------------------------
 
 type GenerateOptions = {
-  // commander treats --no-config as the negation of --config: the option value
-  // is a string path, false (--no-config), or true (neither flag given).
+  // --no-config is the negation of --config: the option value is a string
+  // path, false (--no-config), or undefined (neither flag given).
   config?: string | boolean;
   out?: string;
   name?: string;
@@ -217,7 +217,10 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   const out = merged.out ?? ".";
   const datatypes = merged.datatypes ?? "string";
   if (datatypes !== "string" && datatypes !== "structured") {
-    throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
+    throw new Xsd2ZodError(
+      "config-invalid",
+      `invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`,
+    );
   }
   const files = expandDirectories(filesOrDirs);
 

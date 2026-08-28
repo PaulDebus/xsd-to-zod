@@ -60,13 +60,30 @@ const packageJsonConfigPath = (dir: string): string | undefined => {
   if (!existsSync(candidate)) {
     return undefined;
   }
+  let content: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(candidate, "utf8"));
-    if (parsed !== null && typeof parsed === "object" && "xsd-to-zod" in parsed) {
-      return candidate;
-    }
+    content = readFileSync(candidate, "utf8");
   } catch {
     // An unreadable package.json is not a config source; keep walking up.
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    // Malformed JSON that mentions our key should fail loudly instead of
+    // being silently ignored while walking up.
+    if (content.includes("xsd-to-zod")) {
+      throw new Xsd2ZodError(
+        "config-invalid",
+        `Invalid config in ${candidate}: ${e instanceof Error ? e.message : String(e)}`,
+        { file: candidate },
+      );
+    }
+    return undefined;
+  }
+  if (parsed !== null && typeof parsed === "object" && "xsd-to-zod" in parsed) {
+    return candidate;
   }
   return undefined;
 };
@@ -105,7 +122,10 @@ export const loadConfigFile = async (
   if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs")) {
     let mod: { default?: unknown };
     try {
-      mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
+      // Bust the ESM cache so repeated loads of the same temp file pick up
+      // fresh content (tests reuse paths across cases in the same process).
+      const url = `${pathToFileURL(path).href}?t=${Date.now()}`;
+      mod = (await import(url)) as { default?: unknown };
     } catch (e) {
       throw new Xsd2ZodError(
         "config-load-failed",
