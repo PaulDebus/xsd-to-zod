@@ -85,6 +85,12 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
 export const createOutputBuilder = (): BaseOutputBuilderFactory =>
   new EntityCompactBuilderFactory();
 
+// XML 1.0 §2.11 line-ending normalization, applied to the input text before
+// parsing: the parser itself keeps literal CR/CRLF, and its attribute-value
+// normalization would otherwise map a CRLF to two spaces instead of one.
+export const normalizeLineEndings = (xml: string): string =>
+  xml.includes("\r") ? xml.replaceAll("\r\n", "\n").replaceAll("\r", "\n") : xml;
+
 const parser = new XMLParser({
   // Keep whitespace-only text nodes: they are real character data ('<e>
   // </e>' is not empty), and only the schema's whiteSpace facet may drop
@@ -1522,7 +1528,10 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
-  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
+  const parsed = parser.parse(decodeTagNameCharRefs(normalizeLineEndings(xml))) as Record<
+    string,
+    unknown
+  >;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);

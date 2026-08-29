@@ -5,7 +5,7 @@ import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { createOutputBuilder } from "./runtime.js";
+import { createOutputBuilder, normalizeLineEndings } from "./runtime.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -422,7 +422,7 @@ const readSchema = (
   targetNs: string;
   formDefaults: SchemaFormDefaults;
 } => {
-  const xml = expandInternalEntities(readXmlFile(filePath));
+  const xml = normalizeLineEndings(expandInternalEntities(readXmlFile(filePath)));
   const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {

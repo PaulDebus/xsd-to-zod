@@ -38,7 +38,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ElemDecl/valueconstraint00501m5/Positive", REASONS.patternOnNonString],
   ["ElemDecl/valueconstraint00601m7/Positive", REASONS.patternOnNonString],
   ["Element/QFE1700c2/QFE1700c2.v", REASONS.needsTriage],
-  ["Errata10/errC001/errC001.v", REASONS.needsTriage],
   ["Group/groupF009v/groupF009v.v", REASONS.libxmlGap],
   ["Group/groupH009v/groupH009v.v", REASONS.libxmlGap],
   ["Group/groupJ009v/groupJ009v.v", REASONS.libxmlGap],
