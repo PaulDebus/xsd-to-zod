@@ -221,24 +221,27 @@ const parseSimpleTypeDef = (
 
   const unionChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === "union")?.[1];
   if (unionChild) {
+    // Members are the memberTypes attribute's refs followed by the inline
+    // xs:simpleType children, in order (XSD 1.0 §4.1.2.3).
     const memberTypesRaw = unionChild["@_memberTypes"];
-    let memberTypes: QName[];
-    if (memberTypesRaw) {
-      memberTypes = String(memberTypesRaw)
-        .split(/\s+/)
-        .map((mt) => resolveTypeQName(mt, nsMap, diagnostics));
-    } else {
-      memberTypes = nodeChildren(unionChild)
-        .filter(([key]) => getNodeTagLocalName(key) === "simpleType")
-        .map(([, stNode], idx) =>
-          resolveInlineSimpleType(
-            stNode,
-            nsMap,
-            simpleTypes,
-            syntheticChildName(qname, `_member${idx}`),
-            diagnostics,
-          ),
-        );
+    const memberTypes: QName[] = memberTypesRaw
+      ? String(memberTypesRaw)
+          .split(/\s+/)
+          .map((mt) => resolveTypeQName(mt, nsMap, diagnostics))
+      : [];
+    for (const [key, stNode] of nodeChildren(unionChild)) {
+      if (getNodeTagLocalName(key) !== "simpleType") {
+        continue;
+      }
+      memberTypes.push(
+        resolveInlineSimpleType(
+          stNode,
+          nsMap,
+          simpleTypes,
+          syntheticChildName(qname, `_member${memberTypes.length}`),
+          diagnostics,
+        ),
+      );
     }
     return {
       name: qname,

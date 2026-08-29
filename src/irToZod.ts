@@ -566,7 +566,10 @@ const withFacets = (
   const enumFacets = facets.filter((f) => f.kind === "enumeration");
   const whiteSpace = facets.find((f) => f.kind === "whiteSpace");
   // Enum literals are values: the effective whiteSpace facet (own declaration,
-  // else the builtin default) applies to the declared lexicals.
+  // else the builtin default) applies to the declared lexicals. Computed
+  // lazily: union/list-based enums route to the runtime meta (enumViaMeta),
+  // and coercing their literals to one primitive kind would be wrong (a
+  // union's members span kinds — BigInt('x') would throw).
   const enumWhiteSpace =
     whiteSpace?.value === "collapse" || whiteSpace?.value === "replace"
       ? whiteSpace.value
@@ -575,9 +578,11 @@ const withFacets = (
         : builtinLocal === "normalizedString"
           ? ("replace" as const)
           : ("collapse" as const);
-  const enumLiterals = enumFacets.map((f) =>
-    typedLiteral(kind, wsProcessLiteral(f.value, kind === "string" ? enumWhiteSpace : undefined)),
-  );
+  let enumLiteralsCache: string[] | undefined;
+  const enumLiterals = (): string[] =>
+    (enumLiteralsCache ??= enumFacets.map((f) =>
+      typedLiteral(kind, wsProcessLiteral(f.value, kind === "string" ? enumWhiteSpace : undefined)),
+    ));
 
   // Structured date/time values are objects, so enum membership compares
   // canonical lexicals (value-space equality) instead of reference identity.
@@ -640,12 +645,12 @@ const withFacets = (
       // Structured base (a string→object pipe): keep it and constrain.
       result += enumConstraint;
     } else if (isStringType(base)) {
-      result = `z.enum([${enumLiterals.join(", ")}])`;
+      result = `z.enum([${enumLiterals().join(", ")}])`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
-      result = `z.union([${enumLiterals.map((lit) => `z.literal(${lit})`).join(", ")}])`;
+      result = `z.union([${enumLiterals().map((lit) => `z.literal(${lit})`).join(", ")}])`;
     } else {
       // Base is a reference to another type's schema — keep it and constrain.
-      result += `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
+      result += `.refine((val) => [${enumLiterals().join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   } else {
     for (const facet of otherFacets) {
@@ -686,7 +691,7 @@ const withFacets = (
     if (enumFacets.length > 0 && !enumViaMeta) {
       result +=
         enumConstraint ??
-        `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
+        `.refine((val) => [${enumLiterals().join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   }
 

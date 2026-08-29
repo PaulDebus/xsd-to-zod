@@ -42,8 +42,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["ModelGroups/mgQ003/mgQ003.v", REASONS.choiceDocumentOrder],
   ["Particles/particlesQ030/particlesQ030.v", REASONS.libxmlRejectsSerialized],
   ["Particles/particlesQ032/particlesQ032.v", REASONS.libxmlRejectsSerialized],
-  ["Particles/particlesZ005/particlesZ005.v", REASONS.needsTriage],
-  ["Particles/particlesZ012/particlesZ012.v", REASONS.needsTriage],
   ["SType/st_name00401m/ST_name00401m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.needsTriage],
