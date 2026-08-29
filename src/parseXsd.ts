@@ -895,6 +895,10 @@ const collectElementRef = (
       scope.choiceGroup,
       scope.choiceBranch,
     ),
+    // A ref particle carries no value constraint of its own — the referenced
+    // global declaration's default/fixed applies.
+    ...optProp("defaultValue", referenced.defaultValue),
+    ...optProp("fixedValue", referenced.fixedValue),
     ...valueConstraints(child),
     ...optProp("description", description),
   });

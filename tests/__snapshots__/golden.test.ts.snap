@@ -191,7 +191,7 @@ export interface OrderType {
   "@currency": string;
   "@version"?: "1.0" | undefined;
 }
-const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({"item": z.string(), "quantity": z.bigint(), "@currency": z.string().optional().default("EUR"), "@version": z.literal("1.0").optional()})).register(xmlRegistry, { qname: "{urn:defaults}OrderType", fields: { "item": { kind: "element", qname: "{urn:defaults}item" }, "quantity": { kind: "element", qname: "{urn:defaults}quantity", defaultValue: 1n }, "@currency": { kind: "attribute", qname: "{}currency" }, "@version": { kind: "attribute", qname: "{}version", fixedLexical: "1.0" } } });
+const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({"item": z.string(), "quantity": z.bigint(), "@currency": z.string().optional().default("EUR"), "@version": z.literal("1.0").optional()})).register(xmlRegistry, { qname: "{urn:defaults}OrderType", fields: { "item": { kind: "element", qname: "{urn:defaults}item" }, "quantity": { kind: "element", qname: "{urn:defaults}quantity", defaultValue: 1n, defaultLexical: "1" }, "@currency": { kind: "attribute", qname: "{}currency" }, "@version": { kind: "attribute", qname: "{}version", fixedLexical: "1.0" } } });
 export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, { root: "{urn:defaults}order" });
 "
 `;
@@ -342,10 +342,10 @@ export interface InlineUnionContainer {
 export interface UnionContainer {
   "value": number | string;
 }
-const AttrTokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.string())).register(xmlRegistry, { qname: "{urn:curated}AttrTokenList" });
+const AttrTokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()))).register(xmlRegistry, { qname: "{urn:curated}AttrTokenList" });
 const InlineIntList_itemTypeSchema = z.bigint().register(xmlRegistry, { qname: "{urn:curated}InlineIntList_itemType" });
 const InlineIntListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(InlineIntList_itemTypeSchema)).register(xmlRegistry, { qname: "{urn:curated}InlineIntList" });
-const TokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.string())).register(xmlRegistry, { qname: "{urn:curated}TokenList" });
+const TokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()))).register(xmlRegistry, { qname: "{urn:curated}TokenList" });
 const InlineIntOrString_member0Schema = z.bigint().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member0" });
 const InlineIntOrString_member1Schema = z.string().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member1" });
 const InlineIntOrStringSchema = z.union([InlineIntOrString_member0Schema, InlineIntOrString_member1Schema]).register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString" });

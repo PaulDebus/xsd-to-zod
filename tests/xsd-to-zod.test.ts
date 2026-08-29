@@ -950,14 +950,14 @@ describe("xsd-to-zod v1 pipeline", () => {
         expect(generated.schemas).toContain('"note": z.string().optional()');
         expect(generated.schemas).not.toContain(".default(");
         expect(generated.schemas).toContain(
-          '"ratio": { kind: "element", qname: "{urn:typedDefaults}ratio", defaultValue: 1.5 }',
+          '"ratio": { kind: "element", qname: "{urn:typedDefaults}ratio", defaultValue: 1.5, defaultLexical: "1.50" }',
         );
         expect(generated.schemas).toContain(
-          '"enabled": { kind: "element", qname: "{urn:typedDefaults}enabled", defaultValue: true }',
+          '"enabled": { kind: "element", qname: "{urn:typedDefaults}enabled", defaultValue: true, defaultLexical: "1" }',
         );
         // string-typed fields keep the lexical verbatim
         expect(generated.schemas).toContain(
-          '"note": { kind: "element", qname: "{urn:typedDefaults}note", defaultValue: "1.50" }',
+          '"note": { kind: "element", qname: "{urn:typedDefaults}note", defaultValue: "1.50", defaultLexical: "1.50" }',
         );
 
         const mod = await importGeneratedSchemas(generated.schemas);
@@ -979,8 +979,9 @@ describe("xsd-to-zod v1 pipeline", () => {
         });
 
         // The serializer always writes elements — even equal to default/fixed.
+        // Substituted defaults re-emit the declared default lexical.
         const serialized = serializeXml(cfgSchema, parsed);
-        expect(serialized).toContain("<ns0:ratio>1.5</ns0:ratio>");
+        expect(serialized).toContain("<ns0:ratio>1.50</ns0:ratio>");
         expect(serialized).toContain("<ns0:level>3</ns0:level>");
       });
     });

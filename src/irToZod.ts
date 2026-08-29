@@ -84,6 +84,72 @@ const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["ENTITIES", "xsdNCNames"],
 ]);
 
+// The effective whiteSpace facet of a simple type: the nearest whiteSpace
+// declaration up the restriction chain, else the builtin default (collapse
+// for everything but string/anySimpleType, replace for normalizedString).
+const effectiveWhiteSpace = (
+  typeName: QName,
+  ir: XsdIr,
+  seen?: Set<string>,
+): "collapse" | "replace" | undefined => {
+  const parts = trySplitClark(typeName);
+  if (parts?.ns === XSD_NS) {
+    // anyType/anySimpleType have no whiteSpace facet; string preserves.
+    if (parts.local === "string" || parts.local === "anySimpleType" || parts.local === "anyType") {
+      return undefined;
+    }
+    return parts.local === "normalizedString" ? "replace" : "collapse";
+  }
+  const next = nextSeen(seen, typeName);
+  if (!next) {
+    return undefined;
+  }
+  const simple = ir.simpleTypes[typeName];
+  if (simple === undefined) {
+    return undefined;
+  }
+  if (simple.kind === "list") {
+    return "collapse";
+  }
+  if (simple.kind === "union") {
+    return undefined;
+  }
+  const declared = simple.facets?.find((f) => f.kind === "whiteSpace")?.value;
+  if (declared === "collapse" || declared === "replace") {
+    return declared;
+  }
+  return effectiveWhiteSpace(simple.baseType, ir, next);
+};
+
+const XSD_WS_COLLAPSE = "v.replace(/\\s+/g, \" \").trim()";
+const XSD_WS_REPLACE = "v.replace(/[\\t\\n\\r]/g, \" \")";
+
+// String-derived builtins with a fixed whiteSpace=collapse facet (XSD 1.0
+// §4.3): language and the Name/NCName/NMTOKEN family (incl. the list-ish
+// NMTOKENS/IDREFS/ENTITIES, which the codegen models as plain strings).
+const XSD_COLLAPSE_STRING_BUILTINS: ReadonlySet<string> = new Set([
+  "language",
+  "Name",
+  "NCName",
+  "ID",
+  "IDREF",
+  "ENTITY",
+  "NMTOKEN",
+  "NMTOKENS",
+  "IDREFS",
+  "ENTITIES",
+]);
+
+// Value-space processing of a fixed/default/enum lexical: the whiteSpace facet
+// applies to the literal itself, so the emitted JS literal is the processed
+// value (NMTOKENS fixed="&#x9; X" means the value "X").
+const wsProcessLiteral = (raw: string, whiteSpace: "collapse" | "replace" | undefined): string =>
+  whiteSpace === "collapse"
+    ? raw.replace(/\s+/g, " ").trim()
+    : whiteSpace === "replace"
+      ? raw.replace(/[\t\n\r]/g, " ")
+      : raw;
+
 // Primitive builtins that map to a constant zod expression; anything absent
 // falls back to z.string().
 const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
@@ -91,7 +157,13 @@ const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
   // zod stays permissive for this lax tier.
   ["anyType", "z.unknown()"],
   ["string", "z.string()"],
-  ["token", "z.string()"],
+  // xs:token/xs:normalizedString have fixed whiteSpace facets (collapse /
+  // replace) — they apply to every value, so the preprocess rides the type.
+  ["token", `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_COLLAPSE} : v, z.string())`],
+  [
+    "normalizedString",
+    `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_REPLACE} : v, z.string())`,
+  ],
   ["boolean", "z.boolean()"],
   ["decimal", "z.number()"],
   // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
@@ -254,7 +326,13 @@ const primitiveToZod = (
   const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
   if (validator) {
     usedHelpers.add(validator);
-    const base = `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    let base = `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    // The string-derived builtins fix whiteSpace=collapse (XSD 1.0) — it
+    // applies to every value, so the preprocess rides the type. The date/time
+    // family keeps its original lexicals (documented behavior).
+    if (XSD_COLLAPSE_STRING_BUILTINS.has(parts.local)) {
+      base = `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_COLLAPSE} : v, ${base})`;
+    }
     // Structured mode: the lexical check stays, the parsed value becomes a
     // plain object (xsdDateTime.ts) via a transform after the refine.
     const structuredInfo = structured ? structuredType(parts.local) : undefined;
@@ -487,7 +565,19 @@ const withFacets = (
 
   const enumFacets = facets.filter((f) => f.kind === "enumeration");
   const whiteSpace = facets.find((f) => f.kind === "whiteSpace");
-  const enumLiterals = enumFacets.map((f) => typedLiteral(kind, f.value));
+  // Enum literals are values: the effective whiteSpace facet (own declaration,
+  // else the builtin default) applies to the declared lexicals.
+  const enumWhiteSpace =
+    whiteSpace?.value === "collapse" || whiteSpace?.value === "replace"
+      ? whiteSpace.value
+      : builtinLocal === undefined || builtinLocal === "string" || builtinLocal === "anySimpleType"
+        ? undefined
+        : builtinLocal === "normalizedString"
+          ? ("replace" as const)
+          : ("collapse" as const);
+  const enumLiterals = enumFacets.map((f) =>
+    typedLiteral(kind, wsProcessLiteral(f.value, kind === "string" ? enumWhiteSpace : undefined)),
+  );
 
   // Structured date/time values are objects, so enum membership compares
   // canonical lexicals (value-space equality) instead of reference identity.
@@ -738,8 +828,12 @@ const withCardinality = (
   usedHelpers: Set<string>,
 ): string => {
   const kind = resolvePrimitiveKind(field.typeName, ir);
+  // Fixed/default literals are values: the type's whiteSpace facet applies to
+  // the declared lexical before comparison.
+  const ws = kind === "string" ? effectiveWhiteSpace(field.typeName, ir) : undefined;
   let result = schema;
   if (field.fixedValue !== undefined) {
+    const fixedValue = wsProcessLiteral(field.fixedValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
     if (listItemType === undefined) {
       // Structured date/time fixed: z.literal compares objects by reference, so
@@ -751,7 +845,14 @@ const withCardinality = (
         const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
         result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
       } else {
-        result = `z.literal(${typedLiteral(kind, field.fixedValue)})`;
+        // z.literal replaces the type expression, so the type's whiteSpace
+        // preprocessing must be re-applied around it (NMTOKENS fixed values
+        // compare after collapse).
+        const literal = `z.literal(${typedLiteral(kind, fixedValue)})`;
+        result =
+          ws === undefined
+            ? literal
+            : `z.preprocess((v) => typeof v === "string" ? ${ws === "collapse" ? XSD_WS_COLLAPSE : XSD_WS_REPLACE} : v, ${literal})`;
       }
     } else {
       // List-typed fixed: the lexical is whitespace-separated items. z.literal
@@ -799,10 +900,11 @@ const withCardinality = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined
   ) {
+    const defaultValue = wsProcessLiteral(field.defaultValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
     if (listItemType === undefined) {
       const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
-      result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
+      result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, defaultValue)})`;
     } else {
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
       const itemKind = resolvePrimitiveKind(listItemType, ir);
@@ -1085,7 +1187,10 @@ const fixedValueMetaParts = (
   } else if (root) {
     // Plain-typed roots: the schema is the bare type, so the runtime needs
     // the coerced value in the meta (fields read it from z.literal).
-    parts.push(`fixedValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), fixedValue)}`);
+    const kind = resolvePrimitiveKind(typeName, ir);
+    parts.push(
+      `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
+    );
   }
   if (!structured || root) {
     // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
@@ -1096,7 +1201,10 @@ const fixedValueMetaParts = (
 
 // List-aware default-value meta emission shared by fields and roots: a list
 // lexical is whitespace-separated items, so the meta carries a typed array
-// (or the raw lexical for structured items) instead of a scalar literal.
+// (or the raw lexical for structured items) instead of a scalar literal. The
+// declared lexical rides along so the runtime can retain it on substitution —
+// facet checks and re-serialization need the original form, not the coerced
+// value's canonical one.
 const defaultValueMetaParts = (
   typeName: QName,
   defaultValue: string,
@@ -1104,17 +1212,30 @@ const defaultValueMetaParts = (
   structured: boolean,
 ): string[] => {
   const listItemType = resolveListItemType(typeName, ir);
-  if (listItemType === undefined) {
-    return [`defaultValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), defaultValue)}`];
+  const parts =
+    listItemType === undefined
+      ? (() => {
+          const kind = resolvePrimitiveKind(typeName, ir);
+          return [
+            `defaultValue: ${typedLiteral(kind, wsProcessLiteral(defaultValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
+          ];
+        })()
+      : (() => {
+          const itemSt = structured
+            ? structuredType(resolveBuiltinLocal(listItemType, ir))
+            : undefined;
+          if (itemSt) {
+            // Structured items transform from the lexical, so the meta carries the
+            // raw lexical for the schema's preprocess to split and parse.
+            const trimmed = defaultValue.trim();
+            return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
+          }
+          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+        })();
+  if (!structured) {
+    parts.push(`defaultLexical: ${JSON.stringify(defaultValue)}`);
   }
-  const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-  if (itemSt) {
-    // Structured items transform from the lexical, so the meta carries the
-    // raw lexical for the schema's preprocess to split and parse.
-    const trimmed = defaultValue.trim();
-    return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
-  }
-  return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+  return parts;
 };
 
 // Per-field XML knowledge lives on the containing object schema: a named type
@@ -1423,7 +1544,15 @@ const tsFieldLine = (
       dt?.usedTypes.add(st.tsType);
       type = st.tsType;
     } else {
-      type = typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.fixedValue);
+      type = typedLiteral(
+        resolvePrimitiveKind(field.typeName, ir),
+        wsProcessLiteral(
+          field.fixedValue,
+          resolvePrimitiveKind(field.typeName, ir) === "string"
+            ? effectiveWhiteSpace(field.typeName, ir)
+            : undefined,
+        ),
+      );
     }
   } else {
     // List-typed fixed: the schema keeps the list type (the constraint is a

@@ -472,7 +472,16 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
         // XSD list: whitespace-separated lexicals, coerced per item.
         return coerceList(raw, (outDef as z.core.$ZodArrayDef).element);
       }
-      // Other pipes (e.g. a whiteSpace preprocess) coerce as their inner type.
+      // whiteSpace preprocess pipe (out is a real schema): run it so the
+      // coerced value is the one validation produces. A transform pipe
+      // (structured datatypes) instead coerces as its input — validation
+      // applies the transform itself.
+      if (outDef.type !== "transform") {
+        const parsed = (unwrapModifiers(schema) as z.ZodType).safeParse(raw);
+        if (parsed.success) {
+          return parsed.data;
+        }
+      }
       return coerceLexical(raw, pipe.out);
     }
     case "array":
@@ -751,11 +760,16 @@ const serializeStoredLeaf = (
   value: unknown,
   stored: string | undefined,
 ): string => {
-  // Fixed constraints compare lexically — re-emit the declared fixed lexical.
-  if (fieldMeta.fixedLexical !== undefined) {
-    return escapeXml(fieldMeta.fixedLexical);
-  }
-  const lexical = storedLexicalFor(stored, value, itemSchema);
+  // The declared fixed lexical is preferred when it denotes the value (fixed
+  // constraints compare in the value space — "1" is the boolean true), but an
+  // instance lexical that resolves through a different union member ("abcd
+  // edfgh" vs the fixed "abcd edfgh ") must be re-emitted as-is. The
+  // unconditional fixedLexical tail covers values the guard cannot compare
+  // (structured datatypes); validation has already enforced the constraint.
+  const lexical =
+    storedLexicalFor(fieldMeta.fixedLexical, value, itemSchema) ??
+    storedLexicalFor(stored, value, itemSchema) ??
+    fieldMeta.fixedLexical;
   return lexical === undefined
     ? serializeFieldLeaf(fieldMeta, itemSchema, value)
     : escapeXml(lexical);
@@ -1288,15 +1302,24 @@ const sweepWildcards = (
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
-): { substituted: boolean; value?: unknown } => {
+): { substituted: boolean; value?: unknown; lexical?: string } => {
+  // The declared default/fixed lexical is retained like an instance lexical:
+  // lexical facets and re-serialization need the declared form ("1.0E-2"),
+  // not the substituted value's canonical one ("0.01").
+  const substituted = (value: unknown): { substituted: true; value: unknown; lexical?: string } => {
+    const lexical = fieldMeta.fixedLexical ?? fieldMeta.defaultLexical;
+    return lexical === undefined
+      ? { substituted: true, value }
+      : { substituted: true, value, lexical };
+  };
   if (field.hasFixed) {
-    return { substituted: true, value: field.fixedValue };
+    return substituted(field.fixedValue);
   }
   if (fieldMeta.fixedValue !== undefined) {
-    return { substituted: true, value: fieldMeta.fixedValue };
+    return substituted(fieldMeta.fixedValue);
   }
   if (fieldMeta.defaultValue !== undefined) {
-    return { substituted: true, value: fieldMeta.defaultValue };
+    return substituted(fieldMeta.defaultValue);
   }
   return { substituted: false };
 };
@@ -1329,7 +1352,7 @@ const readOccurrence = (
       if (text === undefined || text === "") {
         const empty = substituteEmpty(field, fieldMeta);
         if (empty.substituted) {
-          return { value: empty.value };
+          return { value: empty.value, lexical: empty.lexical };
         }
       }
       return { value: openWalk(childNode, childContext) };
@@ -1341,7 +1364,7 @@ const readOccurrence = (
     if (text === undefined || text === "") {
       const empty = substituteEmpty(field, fieldMeta);
       if (empty.substituted) {
-        return { value: empty.value };
+        return { value: empty.value, lexical: empty.lexical };
       }
     }
     // A present element without character data has empty-string content: valid
@@ -1365,7 +1388,7 @@ const readOccurrence = (
   if (entry === "") {
     const empty = substituteEmpty(field, fieldMeta);
     if (empty.substituted) {
-      return { value: empty.value };
+      return { value: empty.value, lexical: empty.lexical };
     }
   }
   if (fieldMeta.open) {
@@ -1431,21 +1454,24 @@ const readField = (
       // Absent attribute: XSD applies default/fixed on absence. Validation
       // normally fills these via zod (.default()/z.literal); on the
       // validate:false fast path the walker supplies them from the def.
+      // The declared lexical is retained so lexical facets and re-serialization
+      // see the declared form.
+      const lexical = fieldMeta.fixedLexical ?? fieldMeta.defaultLexical;
       if (field.hasFixed) {
-        return { present: true, value: field.fixedValue };
+        return { present: true, value: field.fixedValue, lexical };
       }
       // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
       if (fieldMeta.fixedValue !== undefined) {
-        return { present: true, value: fieldMeta.fixedValue };
+        return { present: true, value: fieldMeta.fixedValue, lexical };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
       // would fail re-validation as a pipe input).
       if (fieldMeta.defaultValue !== undefined) {
-        return { present: true, value: fieldMeta.defaultValue };
+        return { present: true, value: fieldMeta.defaultValue, lexical };
       }
       if (field.hasDefault) {
-        return { present: true, value: field.defaultValue };
+        return { present: true, value: field.defaultValue, lexical };
       }
       return { present: false, value: undefined };
     }
@@ -1555,11 +1581,13 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
-    if (meta.fixedValue !== undefined) {
-      return meta.fixedValue;
-    }
-    if (meta.defaultValue !== undefined) {
-      return meta.defaultValue;
+    const substituted = meta.fixedValue !== undefined ? meta.fixedValue : meta.defaultValue;
+    if (substituted !== undefined) {
+      const declared = meta.fixedLexical ?? meta.defaultLexical;
+      if (declared !== undefined) {
+        rootLexicals.set(schema, { data: substituted, lexical: declared });
+      }
+      return substituted;
     }
   }
   // A present root without character data has empty-string content: valid for
@@ -2303,10 +2331,16 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
   } else if (meta.fixedLexical !== undefined) {
-    // Fixed root: re-emit the declared fixed lexical (see XmlFieldMeta).
-    body = escapeXml(meta.fixedLexical);
+    // Fixed root: the declared fixed lexical when it denotes the value, else
+    // the retained instance lexical (see serializeStoredLeaf).
+    const entry = rootLexicals.get(schema);
+    body = escapeXml(
+      storedLexicalFor(meta.fixedLexical, data, typeSchema) ??
+        storedLexicalFor(entry?.lexical, data, typeSchema) ??
+        meta.fixedLexical,
+    );
     if (meta.qnameValue) {
-      body = declareQNamePrefixes(body, rootLexicals.get(schema)?.qnameNs, ctx);
+      body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
     }
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);

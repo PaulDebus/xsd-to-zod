@@ -24,6 +24,8 @@ export type XmlFieldMeta = {
   datatype?: XsdDatatypeName;
   open?: boolean;
   fixedLexical?: string;
+  /** Declared default lexical, retained on substitution like fixedLexical. */
+  defaultLexical?: string;
   substitutes?: QName[];
   position?: number;
   namespaceConstraint?: string;
@@ -61,6 +63,8 @@ export type XmlMeta = {
   open?: boolean;
   datatype?: XsdDatatypeName;
   fixedLexical?: string;
+  /** Declared default lexical, retained on substitution like fixedLexical. */
+  defaultLexical?: string;
   facets?: XmlLexicalFacets;
   substElement?: QName;
   qnameValue?: boolean;

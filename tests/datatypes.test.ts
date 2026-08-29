@@ -266,7 +266,7 @@ describe("builtin lexical codegen", () => {
     expect(code).toContain('"l": z.bigint().min(-9223372036854775808n).max(9223372036854775807n)');
   });
 
-  it("keeps token/normalizedString/anyURI as plain strings (vacuous lexical space)", () => {
+  it("applies the fixed whiteSpace facet of token/normalizedString; anyURI stays plain", () => {
     const code = codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
@@ -279,8 +279,14 @@ describe("builtin lexical codegen", () => {
     </xs:complexType>
   </xs:element>
 </xs:schema>`);
-    expect(code).toContain('"t": z.string(),');
-    expect(code).toContain('"n": z.string(),');
+    // whiteSpace=collapse is fixed for xs:token, replace for
+    // xs:normalizedString — they ride the type as a preprocess.
+    expect(code).toContain(
+      '"t": z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()),',
+    );
+    expect(code).toContain(
+      '"n": z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, z.string()),',
+    );
     expect(code).toContain('"u": z.string()}');
     expect(code).not.toContain(".refine(");
   });
