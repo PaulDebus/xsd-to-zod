@@ -443,22 +443,26 @@ const resolveBaseStructure = (
       : simple.kind;
 };
 
-const applyPatternFacet = (
+// Pattern facets of one derivation step are alternatives (XSD ORs them).
+// Combining at the XSD source level (alternation) keeps the anchors and
+// translation in xsdPattern intact.
+const applyPatternFacets = (
   result: string,
-  facetValue: string,
+  facetValues: string[],
   st: ReturnType<typeof structuredType> | undefined,
   usedHelpers: Set<string>,
   ownPatterns: string[],
 ): string => {
   if (st !== undefined) {
     usedHelpers.add(st.writeFn);
-    return `${result}.refine((val) => new RegExp(${JSON.stringify(facetValue)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
+    const alternatives = facetValues.map((v) => JSON.stringify(v)).join(", ");
+    return `${result}.refine((val) => [${alternatives}].some((p) => new RegExp(p).test(${st.writeFn}(val))), { message: 'value does not match the pattern' })`;
   }
   if (isStringType(result)) {
     usedHelpers.add("xsdPattern");
-    return `${result}.regex(xsdPattern(${JSON.stringify(facetValue)}))`;
+    return `${result}.regex(xsdPattern(${JSON.stringify(facetValues.join("|"))}))`;
   }
-  ownPatterns.push(facetValue);
+  ownPatterns.push(...facetValues);
   return result;
 };
 
@@ -655,9 +659,6 @@ const withFacets = (
   } else {
     for (const facet of otherFacets) {
       switch (facet.kind) {
-        case "pattern":
-          result = applyPatternFacet(result, facet.value, st, usedHelpers, ownPatterns);
-          break;
         case "length":
         case "minLength":
         case "maxLength":
@@ -686,6 +687,12 @@ const withFacets = (
           }
           break;
       }
+    }
+    const patternValues = otherFacets
+      .filter((f) => f.kind === "pattern")
+      .map((f) => (f as Facet & { kind: "pattern" }).value);
+    if (patternValues.length > 0) {
+      result = applyPatternFacets(result, patternValues, st, usedHelpers, ownPatterns);
     }
 
     if (enumFacets.length > 0 && !enumViaMeta) {

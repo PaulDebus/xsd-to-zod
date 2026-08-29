@@ -822,7 +822,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       runFacetTest((_dir, file) => {
         const generated = irToZod(parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const CountryCodeSchema = z.string().regex(xsdPattern("[A-Z]{2}")).length(2).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
+          'const CountryCodeSchema = z.string().length(2).regex(xsdPattern("[A-Z]{2}")).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
         );
       });
     });
