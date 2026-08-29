@@ -49,7 +49,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Regex_w3c.xml/reF43/reF43.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/reK4/reK4.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.libxmlGap],
-  ["sunMeta/CType.testSet/basetd00101m1/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/SType.testSet/st_name00401m/ST_name00401m1_p", W3C_CORPUS_REASONS.needsTriage],

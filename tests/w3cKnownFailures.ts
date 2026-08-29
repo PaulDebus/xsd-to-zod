@@ -25,7 +25,6 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB116/addB116.v", REASONS.libxmlStrictWildcardXsiType],
   ["Additional/addB187/addB187.v", REASONS.needsTriage],
   ["Additional/isDefault079/isDefault079.v", REASONS.needsTriage],
-  ["CType/basetd00101m1/Positive", REASONS.simpleContentShape],
   ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlGap],
   ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlGap],

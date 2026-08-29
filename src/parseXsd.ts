@@ -2121,6 +2121,51 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
   return mergedComplexTypes;
 };
 
+// simpleContent derivation walks the base chain eagerly at collection time,
+// so a base declared LATER in the schema set leaves the derived type's _text
+// field typed by the (complex) base itself. Fix those up once every type is
+// collected: resolve the text type through the base chain and inherit the
+// attributes the eager walk missed.
+const resolveForwardSimpleContentBases = (state: ParseState): void => {
+  for (const type of Object.values(state.complexTypes)) {
+    const textField = type.fields.find((f) => f.kind === "text");
+    if (textField === undefined || state.complexTypes[textField.typeName] === undefined) {
+      continue;
+    }
+    const seenAttrs = new Set(
+      type.fields.filter((f) => f.kind === "attribute").map((f) => f.qname),
+    );
+    const seenTypes = new Set<QName>([textField.typeName]);
+    let current = state.complexTypes[textField.typeName];
+    let resolved: QName | undefined;
+    while (current !== undefined) {
+      for (const f of current.fields) {
+        if (f.kind === "attribute" && !seenAttrs.has(f.qname)) {
+          seenAttrs.add(f.qname);
+          // Copy the field so the derived type does not alias the base's object.
+          type.fields.push({ ...f });
+        }
+      }
+      const baseText = current.fields.find((f) => f.kind === "text");
+      if (baseText === undefined) {
+        break;
+      }
+      if (state.complexTypes[baseText.typeName] === undefined) {
+        resolved = baseText.typeName;
+        break;
+      }
+      if (seenTypes.has(baseText.typeName)) {
+        break;
+      }
+      seenTypes.add(baseText.typeName);
+      current = state.complexTypes[baseText.typeName];
+    }
+    if (resolved !== undefined) {
+      textField.typeName = resolved;
+    }
+  }
+};
+
 export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   const state: ParseState = {
     simpleTypes: {},
@@ -2150,6 +2195,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   collectComplexTypes(state, pendingFiles);
   applyTypeRedefines(state, redefineOverrides);
   processDeferredTypes(state);
+  resolveForwardSimpleContentBases(state);
   const mergedComplexTypes = mergeExtendedTypes(state);
 
   dropCircularSimpleTypeRefs(state.simpleTypes, state.diagnostics);
