@@ -86,7 +86,10 @@ export const createOutputBuilder = (): BaseOutputBuilderFactory =>
   new EntityCompactBuilderFactory();
 
 const parser = new XMLParser({
-  skip: { attributes: false },
+  // Keep whitespace-only text nodes: they are real character data ('<e>
+  // </e>' is not empty), and only the schema's whiteSpace facet may drop
+  // them.
+  skip: { attributes: false, whitespaceText: false },
   attributes: { prefix: "@_" },
   // Keep CDATA under its own key: merged text passes through the entity value
   // parser, which would corrupt literal entity text inside CDATA sections (#64).

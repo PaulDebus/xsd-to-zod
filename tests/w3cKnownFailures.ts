@@ -58,8 +58,4 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.needsTriage],
   ["SType/st_targetns00201m/ST_targetNS00201m1_p", REASONS.needsTriage],
-  ["suntest/xsd001/xsd001.v00", REASONS.needsTriage],
-  ["suntest/xsd001/xsd001.v01", REASONS.needsTriage],
-  ["suntest/xsd001/xsd001.v02", REASONS.needsTriage],
-  ["suntest/xsd001/xsd001.v03", REASONS.needsTriage],
 ]);

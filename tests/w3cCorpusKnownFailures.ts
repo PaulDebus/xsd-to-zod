@@ -119,8 +119,4 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/SType.testSet/st_targetns00201m/ST_targetNS00201m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/suntest.testSet/xsd001/xsd001.v00", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/suntest.testSet/xsd001/xsd001.v01", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/suntest.testSet/xsd001/xsd001.v02", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/suntest.testSet/xsd001/xsd001.v03", W3C_CORPUS_REASONS.needsTriage],
 ]);
