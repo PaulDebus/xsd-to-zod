@@ -8,7 +8,7 @@ export const REASONS = {
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
-    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range) — the zod-tier round-trip succeeds",
+    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, libxml2's XSD-regex dialect rejecting valid patterns or NameChar editions) — the zod-tier round-trip succeeds",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
   needsTriage: "needs triage",
   patternOnNonString:

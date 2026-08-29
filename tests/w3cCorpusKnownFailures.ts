@@ -9,7 +9,7 @@ export const W3C_CORPUS_REASONS = {
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
-    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range) — the zod-tier round-trip succeeds",
+    "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, libxml2's XSD-regex dialect rejecting valid patterns or NameChar editions) — the zod-tier round-trip succeeds",
   needsTriage: "needs triage",
   requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
   patternOnNonString:
@@ -46,14 +46,14 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ],
   ["msMeta/Particles_w3c.xml/particlesZ005/particlesZ005.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Particles_w3c.xml/particlesZ012/particlesZ012.v", W3C_CORPUS_REASONS.needsTriage],
-  ["msMeta/Regex_w3c.xml/RegexTest_42/RegexTest_42.v", W3C_CORPUS_REASONS.patternOnNonString],
-  ["msMeta/Regex_w3c.xml/RegexTest_73/RegexTest_73.v", W3C_CORPUS_REASONS.patternOnNonString],
+  ["msMeta/Regex_w3c.xml/RegexTest_42/RegexTest_42.v", W3C_CORPUS_REASONS.libxmlGap],
+  ["msMeta/Regex_w3c.xml/RegexTest_73/RegexTest_73.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/p16/p16.v", W3C_CORPUS_REASONS.patternOnNonString],
   ["msMeta/Regex_w3c.xml/p17/p17.v", W3C_CORPUS_REASONS.patternOnNonString],
   ["msMeta/Regex_w3c.xml/p20/p20.v", W3C_CORPUS_REASONS.patternOnNonString],
-  ["msMeta/Regex_w3c.xml/reF43/reF43.v", W3C_CORPUS_REASONS.patternOnNonString],
-  ["msMeta/Regex_w3c.xml/reK4/reK4.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.patternOnNonString],
+  ["msMeta/Regex_w3c.xml/reF43/reF43.v", W3C_CORPUS_REASONS.libxmlGap],
+  ["msMeta/Regex_w3c.xml/reK4/reK4.v", W3C_CORPUS_REASONS.libxmlGap],
+  ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.libxmlGap],
   ["sunMeta/CType.testSet/basetd00101m1/Positive", W3C_CORPUS_REASONS.simpleContentShape],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
   ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
