@@ -31,18 +31,8 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/IdentityConstraint_w3c.xml/idF012/idF012.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idF013/idF013.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
   ["msMeta/IdentityConstraint_w3c.xml/idF014/idF014.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
+  ["msMeta/ModelGroups_w3c.xml/mgA015/mgA015.v", W3C_CORPUS_REASONS.libxmlGap],
 
-  ["msMeta/ModelGroups_w3c.xml/mgO006/mgO006.v", W3C_CORPUS_REASONS.libxmlRejectsSerialized],
-  ["msMeta/ModelGroups_w3c.xml/mgQ003/mgQ003.v", W3C_CORPUS_REASONS.choiceDocumentOrder],
-  [
-    "msMeta/Particles_w3c.xml/particlesQ030/particlesQ030.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
-  [
-    "msMeta/Particles_w3c.xml/particlesQ032/particlesQ032.v",
-    W3C_CORPUS_REASONS.libxmlRejectsSerialized,
-  ],
   ["msMeta/Regex_w3c.xml/RegexTest_42/RegexTest_42.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/RegexTest_73/RegexTest_73.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/reF43/reF43.v", W3C_CORPUS_REASONS.libxmlGap],

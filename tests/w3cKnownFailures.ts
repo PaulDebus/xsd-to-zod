@@ -34,12 +34,8 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Group/groupJ009v/groupJ009v.v", REASONS.libxmlGap],
   ["Group/groupL009v/groupL009v.v", REASONS.libxmlGap],
   ["Group/groupN009v/groupN009v.v", REASONS.libxmlGap],
-  ["ModelGroups/mgA015/mgA015.v", REASONS.libxmlRejectsSerialized],
+  ["ModelGroups/mgA015/mgA015.v", REASONS.libxmlGap],
 
-  ["ModelGroups/mgO006/mgO006.v", REASONS.libxmlRejectsSerialized],
-  ["ModelGroups/mgQ003/mgQ003.v", REASONS.choiceDocumentOrder],
-  ["Particles/particlesQ030/particlesQ030.v", REASONS.libxmlRejectsSerialized],
-  ["Particles/particlesQ032/particlesQ032.v", REASONS.libxmlRejectsSerialized],
   ["SType/st_name00401m/ST_name00401m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],
   ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.needsTriage],

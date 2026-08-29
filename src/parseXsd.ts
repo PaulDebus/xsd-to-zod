@@ -1254,14 +1254,20 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
         ? `@${clarkToLocal(field.qname)}`
         : clarkToLocal(field.qname);
   const used = new Set<string>();
+  // Same-qname repeats share the key on purpose (see IrField.fieldKey) — the
+  // key a qname was assigned, so a later repeat shares it even when the
+  // first occurrence was itself disambiguated off the base key.
+  const keyByQName = new Map<string, string>();
   return fields.map((field) => {
+    const id = `${field.kind}:${field.qname}`;
+    const known = keyByQName.get(id);
+    if (known !== undefined) {
+      return known === (field.fieldKey ?? baseKey(field)) ? field : { ...field, fieldKey: known };
+    }
     const key = field.fieldKey ?? baseKey(field);
     if (!used.has(key)) {
       used.add(key);
-      return field;
-    }
-    // Same-qname repeats share the key on purpose (see IrField.fieldKey).
-    if (field.qname === fields.find((f) => (f.fieldKey ?? baseKey(f)) === key)?.qname) {
+      keyByQName.set(id, key);
       return field;
     }
     let n = 2;
@@ -1270,6 +1276,7 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
     }
     const unique = `${key}${n}`;
     used.add(unique);
+    keyByQName.set(id, unique);
     return { ...field, fieldKey: unique };
   });
 };

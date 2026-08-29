@@ -1259,6 +1259,165 @@ const defaultValueMetaParts = (
   return parts;
 };
 
+// Same-qname element fields that survive the IR's adjacent merge (separated
+// by other particles — e.g. choice branches, or a group ref between them)
+// still share one object key: the generated shape, the interface and the
+// fields meta must not repeat it (a duplicate key silently drops the first
+// entry). Merge them for emission: the field becomes one repeated field whose
+// cardinality accumulates across the members. Choice-branch structure is read
+// from the unmerged fields (choiceBranchMap & co.), so the IR list stays
+// untouched.
+const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
+  const byKey = new Map<string, IrField[]>();
+  for (const field of type.fields) {
+    const key = toFieldKey(field);
+    const group = byKey.get(key) ?? [];
+    group.push(field);
+    byKey.set(key, group);
+  }
+  if ([...byKey.values()].every((members) => members.length === 1)) {
+    return type.fields;
+  }
+
+  // A wildcard between two same-qname particles owns the intervening
+  // occurrences — the fields must not merge across it.
+  const wildcardPositions = new Set(
+    (type.wildcards ?? []).flatMap((w) => (w.position === undefined ? [] : [w.position])),
+  );
+  const elementOrdinals = new Map<IrField, number>();
+  let ordinal = 0;
+  for (const field of type.fields) {
+    if (field.kind === "element") {
+      elementOrdinals.set(field, ordinal++);
+    }
+  }
+  // A wildcard at position P sits between element ordinals P-1 and P, so it
+  // owns intervening occurrences — fields must not merge across it.
+  const separatedByWildcard = (a: IrField, b: IrField): boolean => {
+    const [lo, hi] = [elementOrdinals.get(a) ?? 0, elementOrdinals.get(b) ?? 0];
+    for (const pos of wildcardPositions) {
+      if (pos > lo && pos <= hi) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const sumMax = (members: IrField[]): number | "unbounded" =>
+    members.some((f) => f.maxOccurs === "unbounded")
+      ? "unbounded"
+      : members.reduce((sum, f) => sum + (f.maxOccurs as number), 0);
+
+  const mergeGroup = (members: IrField[]): IrField => {
+    const first = members[0]!;
+    // Choice-group members: branches are exclusive, so the group's
+    // contribution is per-branch sums, max across branches for maxOccurs;
+    // a branch missing the key (or an optional group) means minOccurs 0.
+    const choiceGroups = new Set(
+      members.map((f) => f.choiceGroup).filter((g): g is string => g !== undefined),
+    );
+    const choiceless = members.filter((f) => f.choiceGroup === undefined);
+    let minOccurs = choiceless.reduce((sum, f) => sum + f.minOccurs, 0);
+    let maxOccurs: number | "unbounded" = sumMax(choiceless);
+    for (const groupId of choiceGroups) {
+      const groupMembers = members.filter((f) => f.choiceGroup === groupId);
+      const branches = choiceBranchMap(type, groupId);
+      const branchIds = new Set(branches.keys());
+      const coveredBranches = new Set(groupMembers.map((f) => f.choiceBranch ?? toFieldKey(f)));
+      const card = type.choiceGroups?.[groupId];
+      const repeated = card !== undefined && (card.maxOccurs === "unbounded" || card.maxOccurs > 1);
+      const optionalGroup = card === undefined || card.minOccurs === 0;
+      let groupMin = 0;
+      let groupMax: number | "unbounded" = 0;
+      for (const branch of coveredBranches) {
+        const branchMembers = groupMembers.filter(
+          (f) => (f.choiceBranch ?? toFieldKey(f)) === branch,
+        );
+        const branchMax = sumMax(branchMembers);
+        groupMax =
+          groupMax === "unbounded" || branchMax === "unbounded"
+            ? "unbounded"
+            : Math.max(groupMax, branchMax);
+        groupMin = Math.max(groupMin, branchMembers.reduce((sum, f) => sum + f.minOccurs, 0));
+      }
+      if (optionalGroup || [...branchIds].some((b) => !coveredBranches.has(b))) {
+        groupMin = 0;
+      }
+      if (repeated && groupMax !== "unbounded" && card !== undefined) {
+        groupMax = card.maxOccurs === "unbounded" ? "unbounded" : groupMax * card.maxOccurs;
+        groupMin = groupMin * card.minOccurs;
+      }
+      minOccurs += groupMin;
+      maxOccurs =
+        maxOccurs === "unbounded" || groupMax === "unbounded"
+          ? "unbounded"
+          : maxOccurs + groupMax;
+    }
+    const uniform = <T>(pick: (f: IrField) => T): T | undefined =>
+      members.every((f) => Object.is(pick(f), pick(members[0]!))) ? pick(first) : undefined;
+    const sameArray = (
+      a: readonly (string | undefined)[] | undefined,
+      b: readonly (string | undefined)[] | undefined,
+    ): boolean =>
+      a === b ||
+      (a !== undefined &&
+        b !== undefined &&
+        a.length === b.length &&
+        a.every((v, i) => v === b[i]));
+    const positionalFixeds0 = first.positionalFixeds;
+    const positionalFixeds = members.every((f) => sameArray(f.positionalFixeds, positionalFixeds0))
+      ? positionalFixeds0
+      : undefined;
+    const merged: IrField = {
+      ...first,
+      minOccurs,
+      maxOccurs,
+      ...optPropU("defaultValue", uniform((f) => f.defaultValue)),
+      ...optPropU("fixedValue", uniform((f) => f.fixedValue)),
+      ...optPropU("positionalFixeds", positionalFixeds),
+      ...optPropU(
+        "choiceGroup",
+        members.every((f) => f.choiceGroup !== undefined) && choiceGroups.size === 1
+          ? [...choiceGroups][0]
+          : undefined,
+      ),
+    };
+    // The merged field spans every member's branch — it is not branch-scoped.
+    delete merged.choiceBranch;
+    return merged;
+  };
+
+  const out: IrField[] = [];
+  const emitted = new Set<string>();
+  for (const field of type.fields) {
+    const key = toFieldKey(field);
+    const members = byKey.get(key) ?? [];
+    const mergeable =
+      members.length > 1 &&
+      members.every(
+        (f) =>
+          f.kind === "element" &&
+          f.qname === field.qname &&
+          f.typeName === field.typeName &&
+          f.nillable === field.nillable,
+      ) &&
+      members.every((f, i) => i === 0 || !separatedByWildcard(members[i - 1]!, f));
+    if (!mergeable) {
+      out.push(field);
+      continue;
+    }
+    if (emitted.has(key)) {
+      continue;
+    }
+    emitted.add(key);
+    out.push(mergeGroup(members));
+  }
+  return out;
+};
+
+const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, T> | object =>
+  value === undefined ? {} : { [key]: value };
+
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict.
@@ -1268,7 +1427,7 @@ const fieldsMetaFor = (
   structured: boolean,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
 ): string => {
-  const entries = type.fields.map((field) => {
+  const entries = dedupeEmissionFields(type).map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
     const substMembers = membersByHead.get(field.qname);
     if (substMembers !== undefined && substMembers.length > 0) {
@@ -1829,7 +1988,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // object consts; the main consts wrap their shape in z.lazy as before.
   const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string => {
     const multiBranch = choiceOptionalGroups(complexType);
-    return complexType.fields
+    return dedupeEmissionFields(complexType)
       .map(
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
@@ -1853,7 +2012,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
       const multiBranch = choiceOptionalGroups(complexType);
-      const props = complexType.fields
+      const props = dedupeEmissionFields(complexType)
         .map((field) =>
           tsFieldLine(
             field,
@@ -1967,7 +2126,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       continue;
     }
     const multiBranch = choiceOptionalGroups(complexType);
-    const props = complexType.fields
+    const props = dedupeEmissionFields(complexType)
       .map(
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
