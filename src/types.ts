@@ -19,6 +19,13 @@ export type IrField = Cardinality & {
   defaultValue?: string;
   fixedValue?: string;
   /**
+   * Merged same-qname siblings whose fixed constraints differ per position
+   * (two <element name="x" fixed="..."/> particles in one group): the merged
+   * repeated field's per-index fixed lexicals (undefined = unconstrained
+   * position). fixedValue is cleared then.
+   */
+  positionalFixeds?: (string | undefined)[];
+  /**
    * Disambiguated object key, assigned when two fields would map to the same
    * key (same local name, different namespaces). Same-qname repeats keep the
    * shared key: element lookup is by qname, so split keys would duplicate

@@ -1194,12 +1194,49 @@ const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[])
       field.choiceGroup === prev.choiceGroup &&
       field.choiceBranch === prev.choiceBranch
     ) {
-      prev.minOccurs += field.minOccurs;
-      prev.maxOccurs =
-        prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
-          ? "unbounded"
-          : prev.maxOccurs + field.maxOccurs;
-      continue;
+      // Same qname and type, but different value constraints: the merged
+      // repeated field keeps them per position instead of applying the
+      // first particle's fixed to every occurrence. Only bounded particles
+      // expand to positions; an unbounded tail keeps the old single-fixed
+      // behavior.
+      const toPositions = (f: IrField): (string | undefined)[] | undefined => {
+        if (f.positionalFixeds !== undefined) {
+          return f.positionalFixeds;
+        }
+        if (f.maxOccurs === "unbounded") {
+          return undefined;
+        }
+        if (f.fixedValue === undefined && f.defaultValue === undefined) {
+          return Array(f.maxOccurs).fill(undefined) as (string | undefined)[];
+        }
+        return Array(f.maxOccurs).fill(f.fixedValue) as (string | undefined)[];
+      };
+      const prevPositions = toPositions(prev);
+      const fieldPositions = toPositions(field);
+      if (
+        prev.positionalFixeds !== undefined ||
+        prev.fixedValue !== field.fixedValue ||
+        prev.defaultValue !== field.defaultValue
+      ) {
+        if (prevPositions !== undefined && fieldPositions !== undefined) {
+          delete prev.fixedValue;
+          delete prev.defaultValue;
+          prev.positionalFixeds = [...prevPositions, ...fieldPositions];
+          prev.minOccurs += field.minOccurs;
+          prev.maxOccurs =
+            prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
+              ? "unbounded"
+              : prev.maxOccurs + field.maxOccurs;
+          continue;
+        }
+      } else {
+        prev.minOccurs += field.minOccurs;
+        prev.maxOccurs =
+          prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
+            ? "unbounded"
+            : prev.maxOccurs + field.maxOccurs;
+        continue;
+      }
     }
     merged.push({ ...field });
   }

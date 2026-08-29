@@ -899,6 +899,15 @@ const withCardinality = (
     if (field.maxOccurs !== "unbounded") {
       result += `.max(${field.maxOccurs})`;
     }
+    // Merged same-qname siblings with per-position fixed constraints: the
+    // array carries them (undefined = unconstrained position).
+    if (field.positionalFixeds !== undefined) {
+      const itemKind = resolvePrimitiveKind(field.typeName, ir);
+      const lits = field.positionalFixeds.map((fx) =>
+        fx === undefined ? "undefined" : typedLiteral(itemKind, wsProcessLiteral(fx, ws)),
+      );
+      result += `.refine((val) => [${lits.join(", ")}].every((fx, i) => fx === undefined || Object.is(val[i], fx)), { message: 'value does not match the fixed value' })`;
+    }
   }
   if (field.minOccurs === 0 || forceOptional) {
     result += ".optional()";
@@ -1291,6 +1300,12 @@ const fieldsMetaFor = (
     }
     if (field.fixedValue !== undefined) {
       parts.push(...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured));
+    }
+    if (field.positionalFixeds !== undefined) {
+      const lits = field.positionalFixeds.map((fx) =>
+        fx === undefined ? "undefined" : JSON.stringify(fx),
+      );
+      parts.push(`fixedLexicals: [${lits.join(", ")}]`);
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });

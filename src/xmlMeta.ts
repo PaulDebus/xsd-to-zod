@@ -26,6 +26,8 @@ export type XmlFieldMeta = {
   fixedLexical?: string;
   /** Declared default lexical, retained on substitution like fixedLexical. */
   defaultLexical?: string;
+  /** Per-index fixed lexicals for merged same-qname siblings (undefined = unconstrained position). */
+  fixedLexicals?: (string | undefined)[];
   substitutes?: QName[];
   position?: number;
   namespaceConstraint?: string;

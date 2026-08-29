@@ -1302,6 +1302,7 @@ const sweepWildcards = (
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
+  position?: number,
 ): { substituted: boolean; value?: unknown; lexical?: string } => {
   // The declared default/fixed lexical is retained like an instance lexical:
   // lexical facets and re-serialization need the declared form ("1.0E-2"),
@@ -1312,6 +1313,16 @@ const substituteEmpty = (
       ? { substituted: true, value }
       : { substituted: true, value, lexical };
   };
+  // Merged same-qname siblings: the fixed constraint of this occurrence's
+  // position applies.
+  const positional = position === undefined ? undefined : fieldMeta.fixedLexicals?.[position];
+  if (positional !== undefined) {
+    return {
+      substituted: true,
+      value: coerceLexical(positional, field.itemSchema),
+      lexical: positional,
+    };
+  }
   if (field.hasFixed) {
     return substituted(field.fixedValue);
   }
@@ -1330,6 +1341,7 @@ const readOccurrence = (
   entry: unknown,
   namespaceContext: Record<string, string>,
   walk?: WalkCtx,
+  position?: number,
 ): {
   value: unknown;
   lexical?: string | undefined;
@@ -1350,7 +1362,7 @@ const readOccurrence = (
       // Element default/fixed applies to present-but-empty open fields too.
       const text = textOf(childNode);
       if (text === undefined || text === "") {
-        const empty = substituteEmpty(field, fieldMeta);
+        const empty = substituteEmpty(field, fieldMeta, position);
         if (empty.substituted) {
           return { value: empty.value, lexical: empty.lexical };
         }
@@ -1362,7 +1374,7 @@ const readOccurrence = (
     }
     const text = textOf(childNode);
     if (text === undefined || text === "") {
-      const empty = substituteEmpty(field, fieldMeta);
+      const empty = substituteEmpty(field, fieldMeta, position);
       if (empty.substituted) {
         return { value: empty.value, lexical: empty.lexical };
       }
@@ -1386,7 +1398,7 @@ const readOccurrence = (
 
   // Scalar entry: the parser yields text-only elements as bare strings.
   if (entry === "") {
-    const empty = substituteEmpty(field, fieldMeta);
+    const empty = substituteEmpty(field, fieldMeta, position);
     if (empty.substituted) {
       return { value: empty.value, lexical: empty.lexical };
     }
@@ -1511,7 +1523,7 @@ const readField = (
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
     const occWalk = field.isArray ? childWalk(walk, index) : walk;
     return {
-      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk),
+      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk, index),
       qname: entry.qname,
     };
   });
@@ -2082,7 +2094,12 @@ const writeObjectFields = (
       return `<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`;
     }
     const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
-    const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
+    // Merged same-qname siblings: the fixed lexical of this occurrence's
+    // position.
+    const positionalFixed = fieldMeta.fixedLexicals?.[i];
+    const leafMeta =
+      positionalFixed === undefined ? fieldMeta : { ...fieldMeta, fixedLexical: positionalFixed };
+    const leaf = serializeStoredLeaf(leafMeta, itemSchema, item, storedItem);
     const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
     const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
     return `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
