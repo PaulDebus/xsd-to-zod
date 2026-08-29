@@ -1099,10 +1099,38 @@ const readObject = (
       fieldList.filter((f) => f.kind === "element").length > 1 ||
       fieldList.some((f) => f.kind === "element" && (f.substitutes?.length ?? 0) > 0));
   const elementReads: ElementRead[] = [];
+  // Position-aware occurrence claiming: a scalar element field preceded by a
+  // matching wildcard claims its occurrence from the END — the wildcard owns
+  // the earlier ones (sequence: xs:any, e). Without this the field swallows
+  // the wildcard's occurrence (a processContents="skip" slot would be
+  // validated).
+  const targetNamespace = splitClark(findObjectMeta(schema)?.qname ?? "{}").namespace;
+  const anyWildcards = fieldList.filter((f) => f.kind === "any");
+  const scalarFromEnd = new Set<string>();
+  let elementOrdinal = 0;
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {
       continue;
+    }
+    const claimFromEnd =
+      fieldMeta.kind === "element" &&
+      !analyzeField(fieldSchema).isArray &&
+      anyWildcards.some(
+        (w) =>
+          w.position !== undefined &&
+          w.position <= elementOrdinal &&
+          wildcardAllows(
+            w.namespaceConstraint ?? "##any",
+            targetNamespace,
+            splitClark(fieldMeta.qname).namespace,
+          ),
+      );
+    if (fieldMeta.kind === "element") {
+      elementOrdinal++;
+    }
+    if (claimFromEnd) {
+      scalarFromEnd.add(fieldMeta.qname);
     }
     const { present, value, lexical, substQNames, qnameNs, claimed } = readField(
       fieldMeta,
@@ -1111,6 +1139,7 @@ const readObject = (
       namespaceContext,
       exactElementQNames,
       childWalk(walk, key),
+      claimFromEnd,
     );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1130,7 +1159,8 @@ const readObject = (
   }
   if (hasAny || hasAnyAttribute) {
     // Scalar element fields hold exactly one occurrence (readField takes the
-    // first); further occurrences of their qname are wildcard extras.
+    // first — the last when a preceding wildcard claimed the earlier ones);
+    // further occurrences of their qname are wildcard extras.
     const scalarElements = new Set(
       Object.entries(fields)
         .filter(
@@ -1142,6 +1172,7 @@ const readObject = (
       any: hasAny,
       anyAttribute: hasAnyAttribute,
       scalarElements,
+      scalarFromEnd,
     });
   }
   if (recordOrder) {
@@ -1256,7 +1287,12 @@ const sweepWildcards = (
   node: Record<string, unknown>,
   fieldList: XmlFieldMeta[],
   namespaceContext: Record<string, string>,
-  wildcards: { any: boolean; anyAttribute: boolean; scalarElements?: Set<string> },
+  wildcards: {
+    any: boolean;
+    anyAttribute: boolean;
+    scalarElements?: Set<string>;
+    scalarFromEnd?: Set<string>;
+  },
 ): void => {
   const knownElements = new Set(
     fieldList
@@ -1278,6 +1314,21 @@ const sweepWildcards = (
     const unq = `{}${local}`;
     return prefix === "" && wildcards.scalarElements.has(unq) ? unq : undefined;
   };
+  // Occurrence totals per from-end scalar qname: the field claims the last
+  // occurrence, so the sweep takes all but that one.
+  const totals = new Map<string, number>();
+  const fromEnd = wildcards.scalarFromEnd ?? new Set<string>();
+  if (fromEnd.size > 0) {
+    walkChildren({}, node, namespaceContext, {
+      element: (ns, local, prefix) => {
+        const sq = scalarQNameOf(ns, local, prefix);
+        if (sq !== undefined && fromEnd.has(sq)) {
+          totals.set(sq, (totals.get(sq) ?? 0) + 1);
+        }
+        return false;
+      },
+    });
+  }
   walkChildren(result, node, namespaceContext, {
     attribute: wildcards.anyAttribute
       ? (ns, local) => !knownAttributes.has(`{${ns}}${local}`)
@@ -1288,7 +1339,7 @@ const sweepWildcards = (
           if (sq !== undefined) {
             const seen = (consumed.get(sq) ?? 0) + 1;
             consumed.set(sq, seen);
-            return seen > 1;
+            return fromEnd.has(sq) ? seen < (totals.get(sq) ?? 1) : seen > 1;
           }
           return (
             !knownElements.has(`{${ns}}${local}`) &&
@@ -1457,6 +1508,7 @@ const readField = (
   namespaceContext: Record<string, string>,
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
+  claimFromEnd = false,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1518,7 +1570,15 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
-  const occurrences = matched.map((entry, index) => {
+  // Scalar fields keep one occurrence (the last when a preceding wildcard
+  // claimed the earlier ones); only that occurrence is read — the content of
+  // overflow occurrences is not the field's to validate.
+  const keptIndexes =
+    field.isArray || matched.length === 0
+      ? matched.map((_, i) => i)
+      : [claimFromEnd ? matched.length - 1 : 0];
+  const occurrences = keptIndexes.map((index) => {
+    const entry = matched[index]!;
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
     const occWalk = field.isArray ? childWalk(walk, index) : walk;
@@ -1529,9 +1589,9 @@ const readField = (
   });
   const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
   const substituted = qnames.some((q) => q !== undefined);
-  const claimed = matched.map((entry, index) => ({
-    rawKey: entry.rawKey,
-    rawValue: entry.value,
+  const claimed = keptIndexes.map((index) => ({
+    rawKey: matched[index]!.rawKey,
+    rawValue: matched[index]!.value,
     index,
   }));
   if (field.isArray) {
@@ -1547,13 +1607,16 @@ const readField = (
     };
   }
   if (occurrences.length > 0) {
+    // A scalar field preceded by a matching wildcard claims the LAST
+    // occurrence; the wildcard sweep owns the earlier ones (see readObject).
+    const kept = claimFromEnd ? occurrences.length - 1 : 0;
     return {
       present: true,
-      value: occurrences[0]?.value,
-      lexical: occurrences[0]?.lexical,
-      substQNames: qnames[0],
-      qnameNs: occurrences[0]?.qnameNs,
-      claimed,
+      value: occurrences[kept]?.value,
+      lexical: occurrences[kept]?.lexical,
+      substQNames: qnames[kept],
+      qnameNs: occurrences[kept]?.qnameNs,
+      claimed: claimFromEnd ? [claimed[kept]!] : claimed,
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to

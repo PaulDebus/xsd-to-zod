@@ -22,7 +22,6 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/DataTypes_w3c.xml/gMonth004_2063/gMonth004_2063.v", W3C_CORPUS_REASONS.libxmlGap],
-  ["msMeta/Element_w3c.xml/QFE1700c2/QFE1700c2.v", W3C_CORPUS_REASONS.needsTriage],
   ["msMeta/Group_w3c.xml/groupF009v/groupF009v.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupH009v/groupH009v.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupJ009v/groupJ009v.v", W3C_CORPUS_REASONS.libxmlGap],
