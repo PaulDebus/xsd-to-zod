@@ -3,19 +3,11 @@
 // `it.fails` — a fix that makes a case pass turns the suite red; remove the
 // entry in the same PR. Generated from full corpus runs, then hand-maintained.
 export const W3C_CORPUS_REASONS = {
-  choiceDocumentOrder:
-    "choice: interleaved repeated branches collapse into per-element arrays; document order is lost and the serialized XML no longer validates",
-  libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
   noRootDeclaration: "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
     "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, libxml2's XSD-regex dialect rejecting valid patterns or NameChar editions) — the zod-tier round-trip succeeds",
-  needsTriage: "needs triage",
-  requiredArrayEmpty: "cardinality: required element array parsed empty (needs triage)",
-  patternOnNonString:
-    "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
-  simpleContentShape: "parse: simpleContent _text shape mismatch (needs triage)",
 } as const;
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([

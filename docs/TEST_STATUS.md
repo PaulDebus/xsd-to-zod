@@ -101,21 +101,21 @@ Features tested include:
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,576 passing, 39 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
-- [x] W3C invalid-instance (negative) tests (1,528 cases: 1,139 rejected by the zod tier, 574 accepted leniently — libxml2 confirms invalid, recorded in the negative conformance report, 7 pinned)
+- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,600 passing, 15 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C invalid-instance (negative) tests (1,529 cases: the zod tier rejects what the suite marks invalid or libxml2 confirms the leniency, recorded in the negative conformance report, 6 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
-- [ ] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187), XML-namespace attributes without a declaration (`xml:base`/`xml:space`; the harness supplies the standard declarations to libxml2) + `xs:list` attribute defaults (#122 `undefinedValue` bucket), root-element `xs:list` `default`/`fixed` values (stZ072), xsi:type derived-type polymorphism (discriminated-union dispatch in codegen + runtime, lossless capture fallback for unknown QNames; cleared `ctA002`/`ctA003`/`ctL022`), simpleContent extension via `simpleContent` derivation (cleared `basetd00101m2`).
+- [x] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187), XML-namespace attributes without a declaration (`xml:base`/`xml:space`; the harness supplies the standard declarations to libxml2) + `xs:list` attribute defaults (#122 `undefinedValue` bucket), root-element `xs:list` `default`/`fixed` values (stZ072), xsi:type derived-type polymorphism (discriminated-union dispatch in codegen + runtime, lossless capture fallback for unknown QNames; cleared `ctA002`/`ctA003`/`ctL022`), simpleContent extension via `simpleContent` derivation (cleared `basetd00101m2`), whitespace-only text nodes survive the parse (cleared `xsd001`, the `reG`/`reI`/`reJ`/`reO`/`reP`/`reQ`/`reR` regex whitespace cases), XML 1.0 line-ending normalization (`errC001`), declared default/fixed lexicals retained on substitution (`valueConstraint00501m*`, `valueConstraint00601m7`), whiteSpace-processed fixed/enum literals (`attO009`–`attO011`), value-space fixed-lexical emission (`stE065`/`stE066`), union memberTypes + inline members (`particlesZ005`/`particlesZ012`), OR-within-step patterns (`p16`/`p17`/`p20`), XSD-regex block-name normalization + full block coverage (`reL*`/`LatinExtended-*`/`ArabicPresentationForms-*`/`reDF*`), per-position fixed constraints for merged same-name siblings (`isDefault079`), same-qname emission dedupe with merged cardinality + document order (`mgO006`/`mgQ003`/`particlesQ030`/`particlesQ032`), position-aware wildcard/field occurrence claiming (`QFE1700c2`), simpleContent text-type resolution across forward-declared bases (`basetd00101m1`), xsi:type preservation on open content (`idF012`–`idF014`).
 - [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
 ## Phase 3 — Full conformance (current)
 
-- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,821 passing, 78 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,879 passing, 20 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
@@ -129,22 +129,25 @@ turns the suite red until the pin is removed in the same PR. Two pin files:
 `tests/w3cCorpusKnownFailures.ts` (full corpus, 78 pins). #122 tracks the
 buckets with per-case triage notes; their dispositions:
 
-- **Fix in the zod tier** — genuine parse/serialize bugs: `needsTriage`
-  (18 + 18), `simpleContentShape` (1 + 1), and
-  `patternOnNonString` (5 + 39, remaining XSD-regex translation gaps).
-- **Fix without changing the generated data model** — document-order loss
-  for repeated compositors and interleaved choice branches
-  (`choiceDocumentOrder`, 1 + 1): the fix belongs in runtime metadata (like
-  the retained-lexical store), never in the emitted zod shapes. The
-  document-order preservation fix also cleared the 8 `particles*`
-  `libxmlRejectsSerialized` cases and `groupH017v` — same root cause — so
-  those pins were removed too.
-- **Won't fix (documented as pins)** — `libxmlGap` (7 + 7) and
-  `libxmlStrictWildcardXsiType` (1 + 1): the original W3C instance/schema
-  fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, `maxOccurs` beyond
-  libxml2's integer range, strict-wildcard
-  `xsi:type` fallback). The zod-tier round-trip succeeds; the pin records the
-  libxml2 tier's deviation.
+All former fix buckets are cleared: `needsTriage`, `simpleContentShape`,
+`patternOnNonString` (XSD-regex translation gaps), `choiceDocumentOrder` and
+the `libxmlRejectsSerialized` document-order cases are fixed — including
+whitespace-only text nodes surviving the parse, declared default/fixed
+lexicals retained on substitution, per-position fixed constraints for merged
+same-name siblings, position-aware wildcard/field occurrence claiming, and
+xsi:type preservation on open content. What remains is entirely won't-fix:
+
+- **`libxmlGap` (8 selection + 13 corpus)** — the original W3C
+  instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical,
+  `maxOccurs` beyond libxml2's integer range, libxml2's XSD-regex dialect
+  rejecting valid patterns or NameChar editions, `all` with `maxOccurs=0`,
+  union fixed-value compared lexically). The zod-tier round-trip succeeds;
+  the pin records the libxml2 tier's deviation.
+- **`libxmlStrictWildcardXsiType` (1 + 1)** — strict-wildcard item with
+  xsi:type but no global element declaration (the original fails libxml2 too).
+- **`noRootDeclaration` (6 + 6)** — type-library schemas with no global
+  element matching the instance root (instance validity rides xsi:type root
+  assessment); the generated artifact has no root schema to parse with.
 
 ## Intentionally out of scope (zod tier)
 
