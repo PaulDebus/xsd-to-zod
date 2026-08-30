@@ -244,6 +244,8 @@ npm test
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
 
+**What the ⚠️ pins mean.** The W3C suites are triaged to closure — the goal is zero unexplained failures, not a perfect raw count (the corpus contains cases that are unpassable by design). Every failing case carries a pin with a categorized reason: either libxml2 itself rejects the *original* instance/schema, or the case exercises a documented out-of-scope feature (e.g. type-library schemas with no global element to generate a root parser from). Pins run as `it.fails`, and their stated reasons are re-verified by the suite (`tests/w3cPinVerification.test.ts`) — a pin that stops being true, e.g. because a libxml2 upgrade closes a gap, breaks the build. See [docs/TEST_STATUS.md](docs/TEST_STATUS.md#definition-of-done) for the full definition of done.
+
 **Test data sources**
 
 - `testdata/curated/` — hand-authored XSD/XML pairs + negative variants (CC0-1.0)

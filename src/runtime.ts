@@ -1666,7 +1666,7 @@ const readField = (
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
       substQNames: substituted ? qnames : undefined,
       qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
-      ...(anyOpenXsiType !== undefined ? { openXsiTypes: anyOpenXsiType } : {}),
+      ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: anyOpenXsiType }),
       claimed,
     };
   }
@@ -1680,7 +1680,7 @@ const readField = (
       lexical: occurrences[0]?.lexical,
       substQNames: qnames[0],
       qnameNs: occurrences[0]?.qnameNs,
-      ...(anyOpenXsiType !== undefined ? { openXsiTypes: [anyOpenXsiType[0]] } : {}),
+      ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: [anyOpenXsiType[0]] }),
       claimed,
     };
   }
@@ -1721,7 +1721,7 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
-    const substituted = meta.fixedValue !== undefined ? meta.fixedValue : meta.defaultValue;
+    const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
       if (declared !== undefined) {

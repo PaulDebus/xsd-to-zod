@@ -3,7 +3,8 @@
 // `it.fails` — a fix that makes a case pass turns the suite red; remove the
 // entry in the same PR. Generated from full corpus runs, then hand-maintained.
 export const W3C_CORPUS_REASONS = {
-  noRootDeclaration: "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
+  noRootDeclaration:
+    "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
@@ -29,7 +30,16 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.libxmlGap],
   ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
   ["sunMeta/SType.testSet/st_name00401m/ST_name00401m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
-  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
-  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p", W3C_CORPUS_REASONS.noRootDeclaration],
-  ["sunMeta/SType.testSet/st_targetns00201m/ST_targetNS00201m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
+  [
+    "sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p",
+    W3C_CORPUS_REASONS.noRootDeclaration,
+  ],
+  [
+    "sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p",
+    W3C_CORPUS_REASONS.noRootDeclaration,
+  ],
+  [
+    "sunMeta/SType.testSet/st_targetns00201m/ST_targetNS00201m1_p",
+    W3C_CORPUS_REASONS.noRootDeclaration,
+  ],
 ]);

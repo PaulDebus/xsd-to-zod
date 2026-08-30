@@ -125,8 +125,8 @@ Features tested include:
 Corpus cases that fail the round-trip are pinned as `it.fails` with a
 categorized reason: the case keeps running, and a fix that makes it pass
 turns the suite red until the pin is removed in the same PR. Two pin files:
-`tests/w3cKnownFailures.ts` (sun/ms selection, 39 pins) and
-`tests/w3cCorpusKnownFailures.ts` (full corpus, 78 pins). #122 tracks the
+`tests/w3cKnownFailures.ts` (sun/ms selection, 15 pins) and
+`tests/w3cCorpusKnownFailures.ts` (full corpus, 20 pins). #122 tracks the
 buckets with per-case triage notes; their dispositions:
 
 All former fix buckets are cleared: `needsTriage`, `simpleContentShape`,
@@ -148,6 +148,34 @@ xsi:type preservation on open content. What remains is entirely won't-fix:
 - **`noRootDeclaration` (6 + 6)** — type-library schemas with no global
   element matching the instance root (instance validity rides xsi:type root
   assessment); the generated artifact has no root schema to parse with.
+
+## Definition of done
+
+The goal was never 13,899/13,899 — the corpus contains cases that are
+unpassable by design (libxml2 rejects the original instance) or out of the
+zod tier's scope. The goal is **zero unexplained failures**: every case
+either round-trips or carries a documented, verified reason it can't.
+Conformance work on the zod tier is done while these invariants hold — each
+enforced by the suite itself, not by review discipline:
+
+1. **Zero unpinned failures.** Every failing corpus case has a pin entry,
+   and every pin's reason comes from the closed reason enum in the pin file
+   (`tests/w3cPinVerification.test.ts` asserts the closed set).
+2. **Pins are self-expiring.** Pins run as `it.fails`, so a fix that makes a
+   pinned case pass turns the suite red until the pin is removed in the same
+   PR.
+3. **Pin claims are re-verified, not just asserted.**
+   `tests/w3cPinVerification.test.ts` re-checks each pin's stated reason:
+   libxml-deviation pins must still fail libxml2 on the *original* instance
+   (a libxml2 upgrade that closes a gap breaks the build and forces an
+   unpin), and no-root pins must still have no global element matching the
+   instance root.
+4. **Scope boundaries are documented once** (see "Intentionally out of
+   scope" below): identity constraints and validation conformance belong to
+   the libxml2 tier; XSD 1.1 is excluded.
+5. **Remaining gaps are feature work, not conformance debt.** e.g. rootless
+   xsi:type assessment (`noRootDeclaration`) or XSD 1.1 — if picked up, they
+   get their own feature issues, not a place in the failure count.
 
 ## Intentionally out of scope (zod tier)
 

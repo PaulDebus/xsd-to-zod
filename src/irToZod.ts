@@ -121,8 +121,8 @@ const effectiveWhiteSpace = (
   return effectiveWhiteSpace(simple.baseType, ir, next);
 };
 
-const XSD_WS_COLLAPSE = "v.replace(/\\s+/g, \" \").trim()";
-const XSD_WS_REPLACE = "v.replace(/[\\t\\n\\r]/g, \" \")";
+const XSD_WS_COLLAPSE = 'v.replace(/\\s+/g, " ").trim()';
+const XSD_WS_REPLACE = 'v.replace(/[\\t\\n\\r]/g, " ")';
 
 // String-derived builtins with a fixed whiteSpace=collapse facet (XSD 1.0
 // §4.3): language and the Name/NCName/NMTOKEN family (incl. the list-ish
@@ -651,7 +651,9 @@ const withFacets = (
     } else if (isStringType(base)) {
       result = `z.enum([${enumLiterals().join(", ")}])`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
-      result = `z.union([${enumLiterals().map((lit) => `z.literal(${lit})`).join(", ")}])`;
+      result = `z.union([${enumLiterals()
+        .map((lit) => `z.literal(${lit})`)
+        .join(", ")}])`;
     } else {
       // Base is a reference to another type's schema — keep it and constrain.
       result += `.refine((val) => [${enumLiterals().join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
@@ -1338,7 +1340,10 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
           groupMax === "unbounded" || branchMax === "unbounded"
             ? "unbounded"
             : Math.max(groupMax, branchMax);
-        groupMin = Math.max(groupMin, branchMembers.reduce((sum, f) => sum + f.minOccurs, 0));
+        groupMin = Math.max(
+          groupMin,
+          branchMembers.reduce((sum, f) => sum + f.minOccurs, 0),
+        );
       }
       if (optionalGroup || [...branchIds].some((b) => !coveredBranches.has(b))) {
         groupMin = 0;
@@ -1349,9 +1354,7 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
       }
       minOccurs += groupMin;
       maxOccurs =
-        maxOccurs === "unbounded" || groupMax === "unbounded"
-          ? "unbounded"
-          : maxOccurs + groupMax;
+        maxOccurs === "unbounded" || groupMax === "unbounded" ? "unbounded" : maxOccurs + groupMax;
     }
     const uniform = <T>(pick: (f: IrField) => T): T | undefined =>
       members.every((f) => Object.is(pick(f), pick(members[0]!))) ? pick(first) : undefined;
@@ -1372,8 +1375,14 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
       ...first,
       minOccurs,
       maxOccurs,
-      ...optPropU("defaultValue", uniform((f) => f.defaultValue)),
-      ...optPropU("fixedValue", uniform((f) => f.fixedValue)),
+      ...optPropU(
+        "defaultValue",
+        uniform((f) => f.defaultValue),
+      ),
+      ...optPropU(
+        "fixedValue",
+        uniform((f) => f.fixedValue),
+      ),
       ...optPropU("positionalFixeds", positionalFixeds),
       ...optPropU(
         "choiceGroup",

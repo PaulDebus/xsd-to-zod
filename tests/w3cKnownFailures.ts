@@ -9,7 +9,8 @@ export const REASONS = {
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
     "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, libxml2's XSD-regex dialect rejecting valid patterns or NameChar editions) — the zod-tier round-trip succeeds",
-  noRootDeclaration: "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
+  noRootDeclaration:
+    "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
 } as const;
 
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
