@@ -770,12 +770,14 @@ const serializeStoredLeaf = (
   // constraints compare in the value space — "1" is the boolean true), but an
   // instance lexical that resolves through a different union member ("abcd
   // edfgh" vs the fixed "abcd edfgh ") must be re-emitted as-is. The
-  // unconditional fixedLexical tail covers values the guard cannot compare
-  // (structured datatypes); validation has already enforced the constraint.
+  // datatype-gated tail covers structured values the guard cannot compare
+  // (the refine already enforced the constraint); anything else falls back
+  // to the canonical form so a mutated value never hides behind the fixed
+  // lexical.
   const lexical =
     storedLexicalFor(fieldMeta.fixedLexical, value, itemSchema) ??
     storedLexicalFor(stored, value, itemSchema) ??
-    fieldMeta.fixedLexical;
+    (fieldMeta.datatype === undefined ? undefined : fieldMeta.fixedLexical);
   return lexical === undefined
     ? serializeFieldLeaf(fieldMeta, itemSchema, value)
     : escapeXml(lexical);
@@ -1012,6 +1014,23 @@ const captureUnknownXsiType = (
         const itemNode =
           item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
         list.push(itemNode === undefined ? item : openWalk(itemNode, contextFor(item, context)));
+        // The extra's own xsi:type rides the open side channel too.
+        if (itemNode !== undefined) {
+          const extraXsiType = readXsiTypeAttr(itemNode, contextFor(item, context));
+          if (extraXsiType !== undefined) {
+            let record = openXsiTypeStore.get(value);
+            if (record === undefined) {
+              record = new Map();
+              openXsiTypeStore.set(value, record);
+            }
+            let types = record.get(clark);
+            if (types === undefined) {
+              types = [];
+              record.set(clark, types);
+            }
+            types[list.length - 1] = extraXsiType;
+          }
+        }
         order.push([clark, list.length - 1]);
         continue;
       }
@@ -1126,17 +1145,21 @@ const readObject = (
         (w) =>
           w.position !== undefined &&
           w.position <= elementOrdinal &&
-          wildcardAllows(
-            w.namespaceConstraint ?? "##any",
-            targetNamespace,
-            splitClark(fieldMeta.qname).namespace,
+          [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])].some((q) =>
+            wildcardAllows(
+              w.namespaceConstraint ?? "##any",
+              targetNamespace,
+              splitClark(q).namespace,
+            ),
           ),
       );
     if (fieldMeta.kind === "element") {
       elementOrdinal++;
     }
     if (claimFromEnd) {
-      scalarFromEnd.add(fieldMeta.qname);
+      for (const q of [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])]) {
+        scalarFromEnd.add(q);
+      }
     }
     const { present, value, lexical, substQNames, qnameNs, claimed, openXsiTypes } = readField(
       fieldMeta,
@@ -1169,13 +1192,14 @@ const readObject = (
   if (hasAny || hasAnyAttribute) {
     // Scalar element fields hold exactly one occurrence (readField takes the
     // first — the last when a preceding wildcard claimed the earlier ones);
-    // further occurrences of their qname are wildcard extras.
+    // further occurrences of their qname are wildcard extras. Substitution
+    // members count as the head's occurrences.
     const scalarElements = new Set(
       Object.entries(fields)
         .filter(
           ([key, f]) => f.kind === "element" && shape[key] && !analyzeField(shape[key]).isArray,
         )
-        .map(([, f]) => f.qname),
+        .flatMap(([, f]) => [f.qname, ...(f.substitutes ?? [])]),
     );
     sweepWildcards(result, node, fieldList, namespaceContext, {
       any: hasAny,
@@ -1649,17 +1673,15 @@ const readField = (
   if (occurrences.length > 0) {
     // A scalar field preceded by a matching wildcard claims the LAST
     // occurrence; the wildcard sweep owns the earlier ones (see readObject).
-    const kept = claimFromEnd ? occurrences.length - 1 : 0;
+    // keptIndexes already reduced occurrences/claimed to the kept entry.
     return {
       present: true,
-      value: occurrences[kept]?.value,
-      lexical: occurrences[kept]?.lexical,
-      substQNames: qnames[kept],
-      qnameNs: occurrences[kept]?.qnameNs,
-      ...(anyOpenXsiType !== undefined
-        ? { openXsiTypes: [anyOpenXsiType[claimFromEnd ? occurrences.length - 1 : 0]] }
-        : {}),
-      claimed: claimFromEnd ? [claimed[kept]!] : claimed,
+      value: occurrences[0]?.value,
+      lexical: occurrences[0]?.lexical,
+      substQNames: qnames[0],
+      qnameNs: occurrences[0]?.qnameNs,
+      ...(anyOpenXsiType !== undefined ? { openXsiTypes: [anyOpenXsiType[0]] } : {}),
+      claimed,
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
@@ -2494,11 +2516,14 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     // Fixed root: the declared fixed lexical when it denotes the value, else
     // the retained instance lexical (see serializeStoredLeaf).
     const entry = rootLexicals.get(schema);
-    body = escapeXml(
+    // Structured fixed values (datatype set) cannot be compared by the
+    // guard — the refine already enforced the constraint; anything else
+    // falls back to the canonical form.
+    const rootFixed =
       storedLexicalFor(meta.fixedLexical, data, typeSchema) ??
-        storedLexicalFor(entry?.lexical, data, typeSchema) ??
-        meta.fixedLexical,
-    );
+      storedLexicalFor(entry?.lexical, data, typeSchema) ??
+      (meta.datatype === undefined ? undefined : meta.fixedLexical);
+    body = rootFixed === undefined ? serializeLeaf(typeSchema, data) : escapeXml(rootFixed);
     if (meta.qnameValue) {
       body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
     }
