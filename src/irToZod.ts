@@ -1311,7 +1311,10 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
       : members.reduce((sum, f) => sum + (f.maxOccurs as number), 0);
 
   const mergeGroup = (members: IrField[]): IrField => {
-    const first = members[0]!;
+    const first = members[0];
+    if (first === undefined) {
+      throw new Error("mergeGroup requires at least one member");
+    }
     // Choice-group members: branches are exclusive, so the group's
     // contribution is per-branch sums, max across branches for maxOccurs;
     // a branch missing the key (or an optional group) means minOccurs 0.
@@ -1357,7 +1360,7 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
         maxOccurs === "unbounded" || groupMax === "unbounded" ? "unbounded" : maxOccurs + groupMax;
     }
     const uniform = <T>(pick: (f: IrField) => T): T | undefined =>
-      members.every((f) => Object.is(pick(f), pick(members[0]!))) ? pick(first) : undefined;
+      members.every((f) => Object.is(pick(f), pick(first))) ? pick(first) : undefined;
     const sameArray = (
       a: readonly (string | undefined)[] | undefined,
       b: readonly (string | undefined)[] | undefined,
@@ -1410,7 +1413,10 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
           f.typeName === field.typeName &&
           f.nillable === field.nillable,
       ) &&
-      members.every((f, i) => i === 0 || !separatedByWildcard(members[i - 1]!, f));
+      members.every((f, i) => {
+        const prev = i > 0 ? members[i - 1] : undefined;
+        return prev === undefined || !separatedByWildcard(prev, f);
+      });
     if (!mergeable) {
       out.push(field);
       continue;

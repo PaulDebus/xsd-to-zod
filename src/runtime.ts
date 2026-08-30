@@ -910,7 +910,10 @@ const readXsiTypeOccurrence = (
   walk?: WalkCtx,
 ): Record<string, unknown> => {
   const options = unionDef.options as readonly AnySchema[];
-  const declared = options[0]!;
+  const declared = options[0];
+  if (declared === undefined) {
+    throw new Error("xsi:type union without a declared-type option");
+  }
   const xsiType = readXsiTypeAttr(node, namespaceContext);
   const derived =
     xsiType === undefined
@@ -1638,8 +1641,16 @@ const readField = (
     field.isArray || matched.length === 0
       ? matched.map((_, i) => i)
       : [claimFromEnd ? matched.length - 1 : 0];
+  // keptIndexes are drawn from matched's own index range, so lookups hit.
+  const entryAt = (index: number): (typeof matched)[number] => {
+    const entry = matched[index];
+    if (entry === undefined) {
+      throw new Error("occurrence index out of range");
+    }
+    return entry;
+  };
   const occurrences = keptIndexes.map((index) => {
-    const entry = matched[index]!;
+    const entry = entryAt(index);
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
     const occWalk = field.isArray ? childWalk(walk, index) : walk;
@@ -1651,8 +1662,8 @@ const readField = (
   const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
   const substituted = qnames.some((q) => q !== undefined);
   const claimed = keptIndexes.map((index) => ({
-    rawKey: matched[index]!.rawKey,
-    rawValue: matched[index]!.value,
+    rawKey: entryAt(index).rawKey,
+    rawValue: entryAt(index).value,
     index,
   }));
   const openXsiTypes = occurrences.map((o) => o.openXsiType);
@@ -2025,7 +2036,10 @@ const xsiTypeVariantFor = (
   ctx: SerializeCtx,
 ): { option: AnySchema; xsiTypeAttr?: string } => {
   const options = unionDef.options as readonly AnySchema[];
-  const declared = options[0]!;
+  const declared = options[0];
+  if (declared === undefined) {
+    throw new Error("xsi:type union without a declared-type option");
+  }
   const raw = value[XSI_TYPE_FIELD];
   const xsiType =
     typeof raw === "string" && trySplitClark(raw) !== undefined ? (raw as QName) : undefined;
