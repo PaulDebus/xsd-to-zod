@@ -6,6 +6,7 @@ export const W3C_CORPUS_REASONS = {
   choiceDocumentOrder:
     "choice: interleaved repeated branches collapse into per-element arrays; document order is lost and the serialized XML no longer validates",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
+  noRootDeclaration: "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
   libxmlStrictWildcardXsiType:
     "libxml2 gap: strict-wildcard item with xsi:type but no global element declaration is rejected — the XSD xsi:type fallback is unimplemented (the original instance fails libxml2 too)",
   libxmlGap:
@@ -19,7 +20,7 @@ export const W3C_CORPUS_REASONS = {
 
 export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Additional_w3c.xml/addB116/addB116.v", W3C_CORPUS_REASONS.libxmlStrictWildcardXsiType],
-  ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.needsTriage],
+  ["msMeta/Additional_w3c.xml/addB187/addB187.v", W3C_CORPUS_REASONS.noRootDeclaration],
   ["msMeta/DataTypes_w3c.xml/gMonth002_2061/gMonth002_2061.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/DataTypes_w3c.xml/gMonth004_2063/gMonth004_2063.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Group_w3c.xml/groupF009v/groupF009v.v", W3C_CORPUS_REASONS.libxmlGap],
@@ -34,10 +35,9 @@ export const W3C_CORPUS_KNOWN_FAILURES = new Map<string, string>([
   ["msMeta/Regex_w3c.xml/reF43/reF43.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/reK4/reK4.v", W3C_CORPUS_REASONS.libxmlGap],
   ["msMeta/Regex_w3c.xml/reZ006i/reZ006i.i", W3C_CORPUS_REASONS.libxmlGap],
-  ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/ElemDecl.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/SType.testSet/st_name00401m/ST_name00401m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p", W3C_CORPUS_REASONS.needsTriage],
-  ["sunMeta/SType.testSet/st_targetns00201m/ST_targetNS00201m1_p", W3C_CORPUS_REASONS.needsTriage],
+  ["sunMeta/CType.testSet/targetns00101m/targetNS00101m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
+  ["sunMeta/SType.testSet/st_name00401m/ST_name00401m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
+  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
+  ["sunMeta/SType.testSet/st_targetns00101m/ST_targetNS00101m2_p", W3C_CORPUS_REASONS.noRootDeclaration],
+  ["sunMeta/SType.testSet/st_targetns00201m/ST_targetNS00201m1_p", W3C_CORPUS_REASONS.noRootDeclaration],
 ]);

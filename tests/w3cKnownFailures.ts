@@ -10,6 +10,7 @@ export const REASONS = {
   libxmlGap:
     "libxml2 gap: the original instance/schema fails libxml2 itself (pre-errata XSD 1.0 gMonth lexical, maxOccurs beyond libxml2's integer range, libxml2's XSD-regex dialect rejecting valid patterns or NameChar editions) — the zod-tier round-trip succeeds",
   libxmlRejectsSerialized: "libxml2 rejects serialized XML (needs triage)",
+  noRootDeclaration: "no root declaration: the schema declares no global element matching the instance root (a type-library schema — instance validity rides xsi:type root assessment), so the generated artifact has no root schema to parse with",
   needsTriage: "needs triage",
   patternOnNonString:
     "runtime: pattern checked against coerced value, not the original lexical (lexical preservation needed)",
@@ -23,11 +24,10 @@ export const REASONS = {
 
 export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Additional/addB116/addB116.v", REASONS.libxmlStrictWildcardXsiType],
-  ["Additional/addB187/addB187.v", REASONS.needsTriage],
-  ["CType/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
+  ["Additional/addB187/addB187.v", REASONS.noRootDeclaration],
+  ["CType/targetns00101m/targetNS00101m1_p", REASONS.noRootDeclaration],
   ["DataTypes/gMonth002_2061/gMonth002_2061.v", REASONS.libxmlGap],
   ["DataTypes/gMonth004_2063/gMonth004_2063.v", REASONS.libxmlGap],
-  ["ElemDecl/targetns00101m/targetNS00101m1_p", REASONS.needsTriage],
   ["Group/groupF009v/groupF009v.v", REASONS.libxmlGap],
   ["Group/groupH009v/groupH009v.v", REASONS.libxmlGap],
   ["Group/groupJ009v/groupJ009v.v", REASONS.libxmlGap],
@@ -35,8 +35,8 @@ export const W3C_KNOWN_FAILURES = new Map<string, string>([
   ["Group/groupN009v/groupN009v.v", REASONS.libxmlGap],
   ["ModelGroups/mgA015/mgA015.v", REASONS.libxmlGap],
 
-  ["SType/st_name00401m/ST_name00401m1_p", REASONS.needsTriage],
-  ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.needsTriage],
-  ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.needsTriage],
-  ["SType/st_targetns00201m/ST_targetNS00201m1_p", REASONS.needsTriage],
+  ["SType/st_name00401m/ST_name00401m1_p", REASONS.noRootDeclaration],
+  ["SType/st_targetns00101m/ST_targetNS00101m1_p", REASONS.noRootDeclaration],
+  ["SType/st_targetns00101m/ST_targetNS00101m2_p", REASONS.noRootDeclaration],
+  ["SType/st_targetns00201m/ST_targetNS00201m1_p", REASONS.noRootDeclaration],
 ]);
