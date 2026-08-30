@@ -624,6 +624,12 @@ type XsiTypeCapture = {
 };
 const xsiCaptureStore = new WeakMap<object, XsiTypeCapture>();
 
+// xsi:type on open-content children (xs:anyType slots, wildcard extras): the
+// open shape keeps values type-agnostic, so the annotation rides this opaque
+// side channel — container object → child clark key → per-occurrence Clark
+// type qname. The serializer re-emits it with a fresh prefix.
+const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>>();
+
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
 const qnameBindingsOf = (
@@ -701,7 +707,7 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   ) {
     return;
   }
-  for (const store of [lexicalStore, substQNameStore]) {
+  for (const store of [lexicalStore, substQNameStore, openXsiTypeStore]) {
     const record = store.get(walked);
     if (record !== undefined) {
       store.delete(walked);
@@ -1132,7 +1138,7 @@ const readObject = (
     if (claimFromEnd) {
       scalarFromEnd.add(fieldMeta.qname);
     }
-    const { present, value, lexical, substQNames, qnameNs, claimed } = readField(
+    const { present, value, lexical, substQNames, qnameNs, claimed, openXsiTypes } = readField(
       fieldMeta,
       fieldSchema,
       node,
@@ -1154,6 +1160,9 @@ const readObject = (
       }
       if (qnameNs !== undefined) {
         recordQNameNs(result, key, qnameNs);
+      }
+      if (openXsiTypes !== undefined) {
+        recordInto(openXsiTypeStore, result, key, openXsiTypes);
       }
     }
   }
@@ -1266,6 +1275,26 @@ const walkChildren = (
       const childKey = rawChildClarkKey(key, item, context);
       const itemNode =
         item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
+      // xsi:type on an open-content child rides the side channel (the open
+      // shape is type-agnostic); resolved to Clark notation here.
+      if (itemNode !== undefined) {
+        const xsiType = readXsiTypeAttr(itemNode, contextFor(item, context));
+        if (xsiType !== undefined) {
+          const existing = target[childKey];
+          const index = existing === undefined ? 0 : Array.isArray(existing) ? existing.length : 1;
+          let record = openXsiTypeStore.get(target);
+          if (record === undefined) {
+            record = new Map();
+            openXsiTypeStore.set(target, record);
+          }
+          let list = record.get(childKey);
+          if (list === undefined) {
+            list = [];
+            record.set(childKey, list);
+          }
+          list[index] = xsiType;
+        }
+      }
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = target[childKey];
       if (existing === undefined) {
@@ -1397,6 +1426,8 @@ const readOccurrence = (
   value: unknown;
   lexical?: string | undefined;
   qnameNs?: Record<string, string> | undefined;
+  /** xsi:type of an open-content occurrence, resolved to Clark notation. */
+  openXsiType?: string | undefined;
 } => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
@@ -1418,7 +1449,11 @@ const readOccurrence = (
           return { value: empty.value, lexical: empty.lexical };
         }
       }
-      return { value: openWalk(childNode, childContext) };
+      // xsi:type on open content rides the side channel (see openXsiTypeStore).
+      return {
+        value: openWalk(childNode, childContext),
+        openXsiType: readXsiTypeAttr(childNode, childContext),
+      };
     }
     if (hasObjectShape(field.itemSchema)) {
       return { value: readObject(field.itemSchema, childNode, childContext, false, walk) };
@@ -1494,6 +1529,8 @@ type FieldRead = {
   /** Member qname per occurrence — set only where it differs from the head. */
   substQNames?: string | (string | undefined)[] | undefined;
   qnameNs?: Record<string, string> | (Record<string, string> | undefined)[] | undefined;
+  /** Per-occurrence xsi:type of open content (Clark), index-aligned. */
+  openXsiTypes?: (string | undefined)[];
   /**
    * Raw parser-node occurrences the field claimed, index-aligned with the
    * produced value(s) — readObject maps them onto document-order positions.
@@ -1594,6 +1631,8 @@ const readField = (
     rawValue: matched[index]!.value,
     index,
   }));
+  const openXsiTypes = occurrences.map((o) => o.openXsiType);
+  const anyOpenXsiType = openXsiTypes.some((t) => t !== undefined) ? openXsiTypes : undefined;
   if (field.isArray) {
     const lexicals = occurrences.map((o) => o.lexical);
     const qnameNs = occurrences.map((o) => o.qnameNs);
@@ -1603,6 +1642,7 @@ const readField = (
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
       substQNames: substituted ? qnames : undefined,
       qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
+      ...(anyOpenXsiType !== undefined ? { openXsiTypes: anyOpenXsiType } : {}),
       claimed,
     };
   }
@@ -1616,6 +1656,9 @@ const readField = (
       lexical: occurrences[kept]?.lexical,
       substQNames: qnames[kept],
       qnameNs: occurrences[kept]?.qnameNs,
+      ...(anyOpenXsiType !== undefined
+        ? { openXsiTypes: [anyOpenXsiType[claimFromEnd ? occurrences.length - 1 : 0]] }
+        : {}),
       claimed: claimFromEnd ? [claimed[kept]!] : claimed,
     };
   }
@@ -1849,7 +1892,11 @@ const openSerialize = (
       continue;
     }
     const tag = elementName(key, ctx.prefixMap, ctx.qnameNs);
-    usesXsi = pushOpenChildren(elements, tag, entry, ctx) || usesXsi;
+    const xsiTypes =
+      typeof value === "object" && value !== null
+        ? openXsiTypeStore.get(value as object)?.get(key)
+        : undefined;
+    usesXsi = pushOpenChildren(elements, tag, entry, ctx, xsiTypes) || usesXsi;
   }
   return { attributes, body: elements.join(""), usesXsi };
 };
@@ -1861,17 +1908,28 @@ const pushOpenChildren = (
   tag: string,
   value: unknown,
   ctx: SerializeCtx,
+  xsiTypes?: (string | undefined)[],
 ): boolean => {
   let usesXsi = false;
+  let i = 0;
   for (const item of Array.isArray(value) ? value : [value]) {
     if (item === null) {
       usesXsi = true;
       elements.push(`<${tag} xsi:nil="true"/>`);
+      i++;
       continue;
     }
     const inner = openSerialize(item, ctx);
     usesXsi = usesXsi || inner.usesXsi;
-    const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+    const xsiType = xsiTypes?.[i];
+    i++;
+    const attrs = [...inner.attributes];
+    if (xsiType !== undefined) {
+      // The captured xsi:type (Clark) re-emitted with a fresh prefix.
+      usesXsi = true;
+      attrs.push(`xsi:type="${elementName(xsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+    }
+    const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
     elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
   }
   return usesXsi;
@@ -2071,8 +2129,13 @@ const writeObjectFields = (
     wildcardBuckets.delete(wildcard);
     for (const [key, value] of bucket) {
       usesXsi =
-        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), value, ctx) ||
-        usesXsi;
+        pushOpenChildren(
+          elements,
+          elementName(key, ctx.prefixMap, ctx.qnameNs),
+          value,
+          ctx,
+          openXsiTypeStore.get(obj)?.get(key),
+        ) || usesXsi;
     }
   };
 
@@ -2133,7 +2196,14 @@ const writeObjectFields = (
     if (fieldMeta.open) {
       const inner = openSerialize(item, ctx);
       usesXsi = usesXsi || inner.usesXsi;
-      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+      // Captured xsi:type of the open occurrence (see openXsiTypeStore).
+      const openXsiType = openXsiTypeStore.get(obj)?.get(key)?.[i];
+      const attrs = [...inner.attributes];
+      if (openXsiType !== undefined) {
+        usesXsi = true;
+        attrs.push(`xsi:type="${elementName(openXsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+      }
+      const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
       return `<${localName}${attrStr}>${inner.body}</${localName}>`;
     }
     const xsiUnion = xsiTypeUnionDef(itemSchema);
@@ -2213,8 +2283,13 @@ const writeObjectFields = (
       (xml) => elements.push(xml),
       (key, item) => {
         usesXsi =
-          pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx) ||
-          usesXsi;
+          pushOpenChildren(
+            elements,
+            elementName(key, ctx.prefixMap, ctx.qnameNs),
+            item,
+            ctx,
+            openXsiTypeStore.get(obj)?.get(key),
+          ) || usesXsi;
       },
     );
     return { attributes, elements, usesXsi };
@@ -2280,8 +2355,13 @@ const writeObjectFields = (
     for (const [clark, values] of Object.entries(xsiCapture.extras)) {
       for (const extra of values) {
         usesXsi =
-          pushOpenChildren(elements, elementName(clark, ctx.prefixMap, ctx.qnameNs), extra, ctx) ||
-          usesXsi;
+          pushOpenChildren(
+            elements,
+            elementName(clark, ctx.prefixMap, ctx.qnameNs),
+            extra,
+            ctx,
+            openXsiTypeStore.get(obj)?.get(clark),
+          ) || usesXsi;
       }
     }
   }
