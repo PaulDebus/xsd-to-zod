@@ -371,12 +371,12 @@ const writeFraction = (frac: string | undefined): string => {
   return s ? `.${s}` : "";
 };
 
-const tzUtc = <T extends { tzOffset?: number }>(v: T, toUtcFn: (v: T) => T): T =>
-  v.tzOffset === undefined ? v : toUtcFn(v);
+const tzUtc = <T extends { tzOffset?: number }>(v: T, toUtcFn: (v: T, tzOffset: number) => T): T =>
+  v.tzOffset === undefined ? v : toUtcFn(v, v.tzOffset);
 
 export const writeXsdDate = (v: XsdDate): string => {
-  const u = tzUtc(v, (x) => {
-    const utc = toUtc(x.year, x.month, x.day, 0, 0, x.tzOffset!);
+  const u = tzUtc(v, (x, tz) => {
+    const utc = toUtc(x.year, x.month, x.day, 0, 0, tz);
     return { ...x, year: utc.year, month: utc.month, day: utc.day };
   });
   return `${writeYear(u.year)}-${pad(u.month)}-${pad(u.day)}${writeTz(v.tzOffset)}`;
@@ -398,8 +398,8 @@ export const writeXsdGYear = (v: XsdGYear): string => {
 };
 
 export const writeXsdGYearMonth = (v: XsdGYearMonth): string => {
-  const u = tzUtc(v, (x) => {
-    const utc = toUtc(x.year, x.month, 1, 0, 0, x.tzOffset!);
+  const u = tzUtc(v, (x, tz) => {
+    const utc = toUtc(x.year, x.month, 1, 0, 0, tz);
     return { ...x, year: utc.year, month: utc.month };
   });
   return `${writeYear(u.year)}-${pad(u.month)}${writeTz(v.tzOffset)}`;
@@ -412,8 +412,8 @@ export const writeXsdGMonth = (v: XsdGMonth): string => {
 };
 
 export const writeXsdGMonthDay = (v: XsdGMonthDay): string => {
-  const u = tzUtc(v, (x) => {
-    const utc = toUtc(REFERENCE_YEAR, x.month, x.day, 0, 0, x.tzOffset!);
+  const u = tzUtc(v, (x, tz) => {
+    const utc = toUtc(REFERENCE_YEAR, x.month, x.day, 0, 0, tz);
     return { ...x, month: utc.month, day: utc.day };
   });
   return `--${pad(u.month)}-${pad(u.day)}${writeTz(v.tzOffset)}`;
