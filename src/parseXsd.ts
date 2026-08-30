@@ -5,7 +5,7 @@ import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
 import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { createOutputBuilder } from "./runtime.js";
+import { createOutputBuilder, normalizeLineEndings } from "./runtime.js";
 import type {
   Cardinality,
   ChoiceGroupGuard,
@@ -221,24 +221,27 @@ const parseSimpleTypeDef = (
 
   const unionChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === "union")?.[1];
   if (unionChild) {
+    // Members are the memberTypes attribute's refs followed by the inline
+    // xs:simpleType children, in order (XSD 1.0 §4.1.2.3).
     const memberTypesRaw = unionChild["@_memberTypes"];
-    let memberTypes: QName[];
-    if (memberTypesRaw) {
-      memberTypes = String(memberTypesRaw)
-        .split(/\s+/)
-        .map((mt) => resolveTypeQName(mt, nsMap, diagnostics));
-    } else {
-      memberTypes = nodeChildren(unionChild)
-        .filter(([key]) => getNodeTagLocalName(key) === "simpleType")
-        .map(([, stNode], idx) =>
-          resolveInlineSimpleType(
-            stNode,
-            nsMap,
-            simpleTypes,
-            syntheticChildName(qname, `_member${idx}`),
-            diagnostics,
-          ),
-        );
+    const memberTypes: QName[] = memberTypesRaw
+      ? String(memberTypesRaw)
+          .split(/\s+/)
+          .map((mt) => resolveTypeQName(mt, nsMap, diagnostics))
+      : [];
+    for (const [key, stNode] of nodeChildren(unionChild)) {
+      if (getNodeTagLocalName(key) !== "simpleType") {
+        continue;
+      }
+      memberTypes.push(
+        resolveInlineSimpleType(
+          stNode,
+          nsMap,
+          simpleTypes,
+          syntheticChildName(qname, `_member${memberTypes.length}`),
+          diagnostics,
+        ),
+      );
     }
     return {
       name: qname,
@@ -422,7 +425,7 @@ const readSchema = (
   targetNs: string;
   formDefaults: SchemaFormDefaults;
 } => {
-  const xml = expandInternalEntities(readXmlFile(filePath));
+  const xml = normalizeLineEndings(expandInternalEntities(readXmlFile(filePath)));
   const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {
@@ -895,6 +898,10 @@ const collectElementRef = (
       scope.choiceGroup,
       scope.choiceBranch,
     ),
+    // A ref particle carries no value constraint of its own — the referenced
+    // global declaration's default/fixed applies.
+    ...optProp("defaultValue", referenced.defaultValue),
+    ...optProp("fixedValue", referenced.fixedValue),
     ...valueConstraints(child),
     ...optProp("description", description),
   });
@@ -1187,12 +1194,49 @@ const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[])
       field.choiceGroup === prev.choiceGroup &&
       field.choiceBranch === prev.choiceBranch
     ) {
-      prev.minOccurs += field.minOccurs;
-      prev.maxOccurs =
-        prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
-          ? "unbounded"
-          : prev.maxOccurs + field.maxOccurs;
-      continue;
+      // Same qname and type, but different value constraints: the merged
+      // repeated field keeps them per position instead of applying the
+      // first particle's fixed to every occurrence. Only bounded particles
+      // expand to positions; an unbounded tail keeps the old single-fixed
+      // behavior.
+      const toPositions = (f: IrField): (string | undefined)[] | undefined => {
+        if (f.positionalFixeds !== undefined) {
+          return f.positionalFixeds;
+        }
+        if (f.maxOccurs === "unbounded") {
+          return undefined;
+        }
+        if (f.fixedValue === undefined && f.defaultValue === undefined) {
+          return Array(f.maxOccurs).fill(undefined) as (string | undefined)[];
+        }
+        return Array(f.maxOccurs).fill(f.fixedValue) as (string | undefined)[];
+      };
+      const prevPositions = toPositions(prev);
+      const fieldPositions = toPositions(field);
+      if (
+        prev.positionalFixeds !== undefined ||
+        prev.fixedValue !== field.fixedValue ||
+        prev.defaultValue !== field.defaultValue
+      ) {
+        if (prevPositions !== undefined && fieldPositions !== undefined) {
+          delete prev.fixedValue;
+          delete prev.defaultValue;
+          prev.positionalFixeds = [...prevPositions, ...fieldPositions];
+          prev.minOccurs += field.minOccurs;
+          prev.maxOccurs =
+            prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
+              ? "unbounded"
+              : prev.maxOccurs + field.maxOccurs;
+          continue;
+        }
+      } else {
+        prev.minOccurs += field.minOccurs;
+        prev.maxOccurs =
+          prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
+            ? "unbounded"
+            : prev.maxOccurs + field.maxOccurs;
+        continue;
+      }
     }
     merged.push({ ...field });
   }
@@ -1210,14 +1254,20 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
         ? `@${clarkToLocal(field.qname)}`
         : clarkToLocal(field.qname);
   const used = new Set<string>();
+  // Same-qname repeats share the key on purpose (see IrField.fieldKey) — the
+  // key a qname was assigned, so a later repeat shares it even when the
+  // first occurrence was itself disambiguated off the base key.
+  const keyByQName = new Map<string, string>();
   return fields.map((field) => {
+    const id = `${field.kind}:${field.qname}`;
+    const known = keyByQName.get(id);
+    if (known !== undefined) {
+      return known === (field.fieldKey ?? baseKey(field)) ? field : { ...field, fieldKey: known };
+    }
     const key = field.fieldKey ?? baseKey(field);
     if (!used.has(key)) {
       used.add(key);
-      return field;
-    }
-    // Same-qname repeats share the key on purpose (see IrField.fieldKey).
-    if (field.qname === fields.find((f) => (f.fieldKey ?? baseKey(f)) === key)?.qname) {
+      keyByQName.set(id, key);
       return field;
     }
     let n = 2;
@@ -1226,6 +1276,7 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
     }
     const unique = `${key}${n}`;
     used.add(unique);
+    keyByQName.set(id, unique);
     return { ...field, fieldKey: unique };
   });
 };
@@ -2114,6 +2165,51 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
   return mergedComplexTypes;
 };
 
+// simpleContent derivation walks the base chain eagerly at collection time,
+// so a base declared LATER in the schema set leaves the derived type's _text
+// field typed by the (complex) base itself. Fix those up once every type is
+// collected: resolve the text type through the base chain and inherit the
+// attributes the eager walk missed.
+const resolveForwardSimpleContentBases = (state: ParseState): void => {
+  for (const type of Object.values(state.complexTypes)) {
+    const textField = type.fields.find((f) => f.kind === "text");
+    if (textField === undefined || state.complexTypes[textField.typeName] === undefined) {
+      continue;
+    }
+    const seenAttrs = new Set(
+      type.fields.filter((f) => f.kind === "attribute").map((f) => f.qname),
+    );
+    const seenTypes = new Set<QName>([textField.typeName]);
+    let current = state.complexTypes[textField.typeName];
+    let resolved: QName | undefined;
+    while (current !== undefined) {
+      for (const f of current.fields) {
+        if (f.kind === "attribute" && !seenAttrs.has(f.qname)) {
+          seenAttrs.add(f.qname);
+          // Copy the field so the derived type does not alias the base's object.
+          type.fields.push({ ...f });
+        }
+      }
+      const baseText = current.fields.find((f) => f.kind === "text");
+      if (baseText === undefined) {
+        break;
+      }
+      if (state.complexTypes[baseText.typeName] === undefined) {
+        resolved = baseText.typeName;
+        break;
+      }
+      if (seenTypes.has(baseText.typeName)) {
+        break;
+      }
+      seenTypes.add(baseText.typeName);
+      current = state.complexTypes[baseText.typeName];
+    }
+    if (resolved !== undefined) {
+      textField.typeName = resolved;
+    }
+  }
+};
+
 export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   const state: ParseState = {
     simpleTypes: {},
@@ -2143,6 +2239,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
   collectComplexTypes(state, pendingFiles);
   applyTypeRedefines(state, redefineOverrides);
   processDeferredTypes(state);
+  resolveForwardSimpleContentBases(state);
   const mergedComplexTypes = mergeExtendedTypes(state);
 
   dropCircularSimpleTypeRefs(state.simpleTypes, state.diagnostics);

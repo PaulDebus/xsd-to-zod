@@ -168,6 +168,8 @@ const BLOCKS: Record<string, string> = {
   opticalcharacterrecognition: "\\u2440-\\u245F",
   oriya: "\\u0B00-\\u0B7F",
   privateuse: "\\uE000-\\uF8FF",
+  arabicpresentationformsa: "\\uFB50-\\uFDFF",
+  arabicpresentationformsb: "\\uFE70-\\uFEFF",
   runic: "\\u16A0-\\u16FF",
   sinhala: "\\u0D80-\\u0DFF",
   smallformvariants: "\\uFE50-\\uFE6F",
@@ -207,7 +209,8 @@ const readEscape = (source: string, start: number): Escape & { end: number } => 
     const name = source.slice(start + 3, close);
     const block = /^[Ii][Ss](.+)$/.exec(name)?.[1];
     if (block !== undefined) {
-      const range = BLOCKS[block.toLowerCase()];
+      const normalized = block.toLowerCase().replace(/[-_\s]/g, "");
+      const range = BLOCKS[normalized];
       if (range === undefined) {
         throw new Error(`unknown Unicode block ${name}`);
       }
@@ -357,12 +360,16 @@ const translate = (source: string): string => {
     }
     if (ch === "\\") {
       const esc = readEscape(source, i);
-      out +=
-        esc.kind === "complement"
-          ? `[^${esc.content}]`
-          : esc.kind === "content"
-            ? `[${esc.content}]`
-            : esc.content;
+      if (esc.kind === "complement") {
+        out += `[^${esc.content}]`;
+      } else if (esc.kind === "content") {
+        out += `[${esc.content}]`;
+      } else if (esc.content === "\\-") {
+        // \- is not an escapable character outside classes in u-mode.
+        out += "-";
+      } else {
+        out += esc.content;
+      }
       i = esc.end;
       continue;
     }

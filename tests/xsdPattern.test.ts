@@ -128,4 +128,36 @@ describe("xsdPattern", () => {
     // Unions mixing complement escapes with other items are inexpressible.
     expect(xsdPattern("[a\\C]").source).toBe("[a\\C]");
   });
+
+  it("normalizes Unicode block names with hyphens/spaces", () => {
+    // Latin-1 Supplement with hyphen in XSD name normalizes to table key.
+    const re = xsdPattern("\\p{IsLatin-1Supplement}+");
+    expect(re.source).toContain("\\u0080-\\u00FF");
+    expect(re.test("é")).toBe(true);
+    expect(re.test("a")).toBe(false);
+    // Arabic Presentation Forms-A and -B resolve to their block ranges.
+    const formA = xsdPattern("\\p{IsArabicPresentationForms-A}+");
+    expect(formA.source).toContain("\\uFB50-\\uFDFF");
+    expect(formA.test("\uFB80")).toBe(true);
+    expect(formA.test("a")).toBe(false);
+    const formB = xsdPattern("\\p{IsArabicPresentationForms-B}+");
+    expect(formB.source).toContain("\\uFE70-\\uFEFF");
+    expect(formB.test("\uFE80")).toBe(true);
+  });
+
+  it("emits a bare hyphen for the \\- escape outside classes", () => {
+    const re = xsdPattern("\\p{Nd}{2}:\\d\\d:\\d\\d(\\-\\d\\d:\\d\\d)?");
+    expect(re.flags).toContain("u");
+    expect(re.test("12:34:56")).toBe(true);
+    expect(re.test("12:34:56-07:00")).toBe(true);
+    expect(re.test("12:34")).toBe(false);
+    expect(re.test("ab:cd:ef")).toBe(false);
+    expect(re.test("12:34:56-")).toBe(false);
+  });
+
+  it("keeps the \\- escape inside character classes working", () => {
+    expect(xsdPattern("[a\\-z]+").test("a-z")).toBe(true);
+    expect(xsdPattern("[a\\-z]+").test("z")).toBe(true);
+    expect(xsdPattern("[a\\-z]+").test("a")).toBe(true);
+  });
 });

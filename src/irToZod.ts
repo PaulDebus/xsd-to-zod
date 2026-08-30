@@ -84,6 +84,72 @@ const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["ENTITIES", "xsdNCNames"],
 ]);
 
+// The effective whiteSpace facet of a simple type: the nearest whiteSpace
+// declaration up the restriction chain, else the builtin default (collapse
+// for everything but string/anySimpleType, replace for normalizedString).
+const effectiveWhiteSpace = (
+  typeName: QName,
+  ir: XsdIr,
+  seen?: Set<string>,
+): "collapse" | "replace" | undefined => {
+  const parts = trySplitClark(typeName);
+  if (parts?.ns === XSD_NS) {
+    // anyType/anySimpleType have no whiteSpace facet; string preserves.
+    if (parts.local === "string" || parts.local === "anySimpleType" || parts.local === "anyType") {
+      return undefined;
+    }
+    return parts.local === "normalizedString" ? "replace" : "collapse";
+  }
+  const next = nextSeen(seen, typeName);
+  if (!next) {
+    return undefined;
+  }
+  const simple = ir.simpleTypes[typeName];
+  if (simple === undefined) {
+    return undefined;
+  }
+  if (simple.kind === "list") {
+    return "collapse";
+  }
+  if (simple.kind === "union") {
+    return undefined;
+  }
+  const declared = simple.facets?.find((f) => f.kind === "whiteSpace")?.value;
+  if (declared === "collapse" || declared === "replace") {
+    return declared;
+  }
+  return effectiveWhiteSpace(simple.baseType, ir, next);
+};
+
+const XSD_WS_COLLAPSE = 'v.replace(/\\s+/g, " ").trim()';
+const XSD_WS_REPLACE = 'v.replace(/[\\t\\n\\r]/g, " ")';
+
+// String-derived builtins with a fixed whiteSpace=collapse facet (XSD 1.0
+// §4.3): language and the Name/NCName/NMTOKEN family (incl. the list-ish
+// NMTOKENS/IDREFS/ENTITIES, which the codegen models as plain strings).
+const XSD_COLLAPSE_STRING_BUILTINS: ReadonlySet<string> = new Set([
+  "language",
+  "Name",
+  "NCName",
+  "ID",
+  "IDREF",
+  "ENTITY",
+  "NMTOKEN",
+  "NMTOKENS",
+  "IDREFS",
+  "ENTITIES",
+]);
+
+// Value-space processing of a fixed/default/enum lexical: the whiteSpace facet
+// applies to the literal itself, so the emitted JS literal is the processed
+// value (NMTOKENS fixed="&#x9; X" means the value "X").
+const wsProcessLiteral = (raw: string, whiteSpace: "collapse" | "replace" | undefined): string =>
+  whiteSpace === "collapse"
+    ? raw.replace(/\s+/g, " ").trim()
+    : whiteSpace === "replace"
+      ? raw.replace(/[\t\n\r]/g, " ")
+      : raw;
+
 // Primitive builtins that map to a constant zod expression; anything absent
 // falls back to z.string().
 const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
@@ -91,7 +157,13 @@ const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
   // zod stays permissive for this lax tier.
   ["anyType", "z.unknown()"],
   ["string", "z.string()"],
-  ["token", "z.string()"],
+  // xs:token/xs:normalizedString have fixed whiteSpace facets (collapse /
+  // replace) — they apply to every value, so the preprocess rides the type.
+  ["token", `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_COLLAPSE} : v, z.string())`],
+  [
+    "normalizedString",
+    `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_REPLACE} : v, z.string())`,
+  ],
   ["boolean", "z.boolean()"],
   ["decimal", "z.number()"],
   // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
@@ -254,7 +326,13 @@ const primitiveToZod = (
   const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
   if (validator) {
     usedHelpers.add(validator);
-    const base = `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    let base = `z.string().refine(${validator}, { message: 'invalid xs:${parts.local} lexical' })`;
+    // The string-derived builtins fix whiteSpace=collapse (XSD 1.0) — it
+    // applies to every value, so the preprocess rides the type. The date/time
+    // family keeps its original lexicals (documented behavior).
+    if (XSD_COLLAPSE_STRING_BUILTINS.has(parts.local)) {
+      base = `z.preprocess((v) => typeof v === "string" ? ${XSD_WS_COLLAPSE} : v, ${base})`;
+    }
     // Structured mode: the lexical check stays, the parsed value becomes a
     // plain object (xsdDateTime.ts) via a transform after the refine.
     const structuredInfo = structured ? structuredType(parts.local) : undefined;
@@ -365,22 +443,26 @@ const resolveBaseStructure = (
       : simple.kind;
 };
 
-const applyPatternFacet = (
+// Pattern facets of one derivation step are alternatives (XSD ORs them).
+// Combining at the XSD source level (alternation) keeps the anchors and
+// translation in xsdPattern intact.
+const applyPatternFacets = (
   result: string,
-  facetValue: string,
+  facetValues: string[],
   st: ReturnType<typeof structuredType> | undefined,
   usedHelpers: Set<string>,
   ownPatterns: string[],
 ): string => {
   if (st !== undefined) {
     usedHelpers.add(st.writeFn);
-    return `${result}.refine((val) => new RegExp(${JSON.stringify(facetValue)}).test(${st.writeFn}(val)), { message: 'value does not match the pattern' })`;
+    const alternatives = facetValues.map((v) => JSON.stringify(v)).join(", ");
+    return `${result}.refine((val) => [${alternatives}].some((p) => new RegExp(p).test(${st.writeFn}(val))), { message: 'value does not match the pattern' })`;
   }
   if (isStringType(result)) {
     usedHelpers.add("xsdPattern");
-    return `${result}.regex(xsdPattern(${JSON.stringify(facetValue)}))`;
+    return `${result}.regex(xsdPattern(${JSON.stringify(facetValues.join("|"))}))`;
   }
-  ownPatterns.push(facetValue);
+  ownPatterns.push(...facetValues);
   return result;
 };
 
@@ -487,7 +569,24 @@ const withFacets = (
 
   const enumFacets = facets.filter((f) => f.kind === "enumeration");
   const whiteSpace = facets.find((f) => f.kind === "whiteSpace");
-  const enumLiterals = enumFacets.map((f) => typedLiteral(kind, f.value));
+  // Enum literals are values: the effective whiteSpace facet (own declaration,
+  // else the builtin default) applies to the declared lexicals. Computed
+  // lazily: union/list-based enums route to the runtime meta (enumViaMeta),
+  // and coercing their literals to one primitive kind would be wrong (a
+  // union's members span kinds — BigInt('x') would throw).
+  const enumWhiteSpace =
+    whiteSpace?.value === "collapse" || whiteSpace?.value === "replace"
+      ? whiteSpace.value
+      : builtinLocal === undefined || builtinLocal === "string" || builtinLocal === "anySimpleType"
+        ? undefined
+        : builtinLocal === "normalizedString"
+          ? ("replace" as const)
+          : ("collapse" as const);
+  let enumLiteralsCache: string[] | undefined;
+  const enumLiterals = (): string[] =>
+    (enumLiteralsCache ??= enumFacets.map((f) =>
+      typedLiteral(kind, wsProcessLiteral(f.value, kind === "string" ? enumWhiteSpace : undefined)),
+    ));
 
   // Structured date/time values are objects, so enum membership compares
   // canonical lexicals (value-space equality) instead of reference identity.
@@ -550,19 +649,18 @@ const withFacets = (
       // Structured base (a string→object pipe): keep it and constrain.
       result += enumConstraint;
     } else if (isStringType(base)) {
-      result = `z.enum([${enumLiterals.join(", ")}])`;
+      result = `z.enum([${enumLiterals().join(", ")}])`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
-      result = `z.union([${enumLiterals.map((lit) => `z.literal(${lit})`).join(", ")}])`;
+      result = `z.union([${enumLiterals()
+        .map((lit) => `z.literal(${lit})`)
+        .join(", ")}])`;
     } else {
       // Base is a reference to another type's schema — keep it and constrain.
-      result += `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
+      result += `.refine((val) => [${enumLiterals().join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   } else {
     for (const facet of otherFacets) {
       switch (facet.kind) {
-        case "pattern":
-          result = applyPatternFacet(result, facet.value, st, usedHelpers, ownPatterns);
-          break;
         case "length":
         case "minLength":
         case "maxLength":
@@ -592,11 +690,17 @@ const withFacets = (
           break;
       }
     }
+    const patternValues = otherFacets
+      .filter((f) => f.kind === "pattern")
+      .map((f) => (f as Facet & { kind: "pattern" }).value);
+    if (patternValues.length > 0) {
+      result = applyPatternFacets(result, patternValues, st, usedHelpers, ownPatterns);
+    }
 
     if (enumFacets.length > 0 && !enumViaMeta) {
       result +=
         enumConstraint ??
-        `.refine((val) => [${enumLiterals.join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
+        `.refine((val) => [${enumLiterals().join(", ")}].includes(val), { message: 'value is not one of the allowed values' })`;
     }
   }
 
@@ -738,8 +842,12 @@ const withCardinality = (
   usedHelpers: Set<string>,
 ): string => {
   const kind = resolvePrimitiveKind(field.typeName, ir);
+  // Fixed/default literals are values: the type's whiteSpace facet applies to
+  // the declared lexical before comparison.
+  const ws = kind === "string" ? effectiveWhiteSpace(field.typeName, ir) : undefined;
   let result = schema;
   if (field.fixedValue !== undefined) {
+    const fixedValue = wsProcessLiteral(field.fixedValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
     if (listItemType === undefined) {
       // Structured date/time fixed: z.literal compares objects by reference, so
@@ -751,7 +859,14 @@ const withCardinality = (
         const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
         result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
       } else {
-        result = `z.literal(${typedLiteral(kind, field.fixedValue)})`;
+        // z.literal replaces the type expression, so the type's whiteSpace
+        // preprocessing must be re-applied around it (NMTOKENS fixed values
+        // compare after collapse).
+        const literal = `z.literal(${typedLiteral(kind, fixedValue)})`;
+        result =
+          ws === undefined
+            ? literal
+            : `z.preprocess((v) => typeof v === "string" ? ${ws === "collapse" ? XSD_WS_COLLAPSE : XSD_WS_REPLACE} : v, ${literal})`;
       }
     } else {
       // List-typed fixed: the lexical is whitespace-separated items. z.literal
@@ -786,6 +901,15 @@ const withCardinality = (
     if (field.maxOccurs !== "unbounded") {
       result += `.max(${field.maxOccurs})`;
     }
+    // Merged same-qname siblings with per-position fixed constraints: the
+    // array carries them (undefined = unconstrained position).
+    if (field.positionalFixeds !== undefined) {
+      const itemKind = resolvePrimitiveKind(field.typeName, ir);
+      const lits = field.positionalFixeds.map((fx) =>
+        fx === undefined ? "undefined" : typedLiteral(itemKind, wsProcessLiteral(fx, ws)),
+      );
+      result += `.refine((val) => [${lits.join(", ")}].every((fx, i) => fx === undefined || Object.is(val[i], fx)), { message: 'value does not match the fixed value' })`;
+    }
   }
   if (field.minOccurs === 0 || forceOptional) {
     result += ".optional()";
@@ -799,10 +923,11 @@ const withCardinality = (
     field.defaultValue !== undefined &&
     field.fixedValue === undefined
   ) {
+    const defaultValue = wsProcessLiteral(field.defaultValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
     if (listItemType === undefined) {
       const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
-      result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, field.defaultValue)})`;
+      result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, defaultValue)})`;
     } else {
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
       const itemKind = resolvePrimitiveKind(listItemType, ir);
@@ -1085,7 +1210,10 @@ const fixedValueMetaParts = (
   } else if (root) {
     // Plain-typed roots: the schema is the bare type, so the runtime needs
     // the coerced value in the meta (fields read it from z.literal).
-    parts.push(`fixedValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), fixedValue)}`);
+    const kind = resolvePrimitiveKind(typeName, ir);
+    parts.push(
+      `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
+    );
   }
   if (!structured || root) {
     // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).
@@ -1096,7 +1224,10 @@ const fixedValueMetaParts = (
 
 // List-aware default-value meta emission shared by fields and roots: a list
 // lexical is whitespace-separated items, so the meta carries a typed array
-// (or the raw lexical for structured items) instead of a scalar literal.
+// (or the raw lexical for structured items) instead of a scalar literal. The
+// declared lexical rides along so the runtime can retain it on substitution —
+// facet checks and re-serialization need the original form, not the coerced
+// value's canonical one.
 const defaultValueMetaParts = (
   typeName: QName,
   defaultValue: string,
@@ -1104,18 +1235,197 @@ const defaultValueMetaParts = (
   structured: boolean,
 ): string[] => {
   const listItemType = resolveListItemType(typeName, ir);
-  if (listItemType === undefined) {
-    return [`defaultValue: ${typedLiteral(resolvePrimitiveKind(typeName, ir), defaultValue)}`];
+  const parts =
+    listItemType === undefined
+      ? (() => {
+          const kind = resolvePrimitiveKind(typeName, ir);
+          return [
+            `defaultValue: ${typedLiteral(kind, wsProcessLiteral(defaultValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
+          ];
+        })()
+      : (() => {
+          const itemSt = structured
+            ? structuredType(resolveBuiltinLocal(listItemType, ir))
+            : undefined;
+          if (itemSt) {
+            // Structured items transform from the lexical, so the meta carries the
+            // raw lexical for the schema's preprocess to split and parse.
+            const trimmed = defaultValue.trim();
+            return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
+          }
+          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+        })();
+  if (!structured) {
+    parts.push(`defaultLexical: ${JSON.stringify(defaultValue)}`);
   }
-  const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-  if (itemSt) {
-    // Structured items transform from the lexical, so the meta carries the
-    // raw lexical for the schema's preprocess to split and parse.
-    const trimmed = defaultValue.trim();
-    return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
-  }
-  return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+  return parts;
 };
+
+// Same-qname element fields that survive the IR's adjacent merge (separated
+// by other particles — e.g. choice branches, or a group ref between them)
+// still share one object key: the generated shape, the interface and the
+// fields meta must not repeat it (a duplicate key silently drops the first
+// entry). Merge them for emission: the field becomes one repeated field whose
+// cardinality accumulates across the members. Choice-branch structure is read
+// from the unmerged fields (choiceBranchMap & co.), so the IR list stays
+// untouched.
+const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
+  const byKey = new Map<string, IrField[]>();
+  for (const field of type.fields) {
+    const key = toFieldKey(field);
+    const group = byKey.get(key) ?? [];
+    group.push(field);
+    byKey.set(key, group);
+  }
+  if ([...byKey.values()].every((members) => members.length === 1)) {
+    return type.fields;
+  }
+
+  // A wildcard between two same-qname particles owns the intervening
+  // occurrences — the fields must not merge across it.
+  const wildcardPositions = new Set(
+    (type.wildcards ?? []).flatMap((w) => (w.position === undefined ? [] : [w.position])),
+  );
+  const elementOrdinals = new Map<IrField, number>();
+  let ordinal = 0;
+  for (const field of type.fields) {
+    if (field.kind === "element") {
+      elementOrdinals.set(field, ordinal++);
+    }
+  }
+  // A wildcard at position P sits between element ordinals P-1 and P, so it
+  // owns intervening occurrences — fields must not merge across it.
+  const separatedByWildcard = (a: IrField, b: IrField): boolean => {
+    const [lo, hi] = [elementOrdinals.get(a) ?? 0, elementOrdinals.get(b) ?? 0];
+    for (const pos of wildcardPositions) {
+      if (pos > lo && pos <= hi) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const sumMax = (members: IrField[]): number | "unbounded" =>
+    members.some((f) => f.maxOccurs === "unbounded")
+      ? "unbounded"
+      : members.reduce((sum, f) => sum + (f.maxOccurs as number), 0);
+
+  const mergeGroup = (members: IrField[]): IrField => {
+    const first = members[0]!;
+    // Choice-group members: branches are exclusive, so the group's
+    // contribution is per-branch sums, max across branches for maxOccurs;
+    // a branch missing the key (or an optional group) means minOccurs 0.
+    const choiceGroups = new Set(
+      members.map((f) => f.choiceGroup).filter((g): g is string => g !== undefined),
+    );
+    const choiceless = members.filter((f) => f.choiceGroup === undefined);
+    let minOccurs = choiceless.reduce((sum, f) => sum + f.minOccurs, 0);
+    let maxOccurs: number | "unbounded" = sumMax(choiceless);
+    for (const groupId of choiceGroups) {
+      const groupMembers = members.filter((f) => f.choiceGroup === groupId);
+      const branches = choiceBranchMap(type, groupId);
+      const branchIds = new Set(branches.keys());
+      const coveredBranches = new Set(groupMembers.map((f) => f.choiceBranch ?? toFieldKey(f)));
+      const card = type.choiceGroups?.[groupId];
+      const repeated = card !== undefined && (card.maxOccurs === "unbounded" || card.maxOccurs > 1);
+      const optionalGroup = card === undefined || card.minOccurs === 0;
+      let groupMin = 0;
+      let groupMax: number | "unbounded" = 0;
+      for (const branch of coveredBranches) {
+        const branchMembers = groupMembers.filter(
+          (f) => (f.choiceBranch ?? toFieldKey(f)) === branch,
+        );
+        const branchMax = sumMax(branchMembers);
+        groupMax =
+          groupMax === "unbounded" || branchMax === "unbounded"
+            ? "unbounded"
+            : Math.max(groupMax, branchMax);
+        groupMin = Math.max(
+          groupMin,
+          branchMembers.reduce((sum, f) => sum + f.minOccurs, 0),
+        );
+      }
+      if (optionalGroup || [...branchIds].some((b) => !coveredBranches.has(b))) {
+        groupMin = 0;
+      }
+      if (repeated && groupMax !== "unbounded" && card !== undefined) {
+        groupMax = card.maxOccurs === "unbounded" ? "unbounded" : groupMax * card.maxOccurs;
+        groupMin = groupMin * card.minOccurs;
+      }
+      minOccurs += groupMin;
+      maxOccurs =
+        maxOccurs === "unbounded" || groupMax === "unbounded" ? "unbounded" : maxOccurs + groupMax;
+    }
+    const uniform = <T>(pick: (f: IrField) => T): T | undefined =>
+      members.every((f) => Object.is(pick(f), pick(members[0]!))) ? pick(first) : undefined;
+    const sameArray = (
+      a: readonly (string | undefined)[] | undefined,
+      b: readonly (string | undefined)[] | undefined,
+    ): boolean =>
+      a === b ||
+      (a !== undefined &&
+        b !== undefined &&
+        a.length === b.length &&
+        a.every((v, i) => v === b[i]));
+    const positionalFixeds0 = first.positionalFixeds;
+    const positionalFixeds = members.every((f) => sameArray(f.positionalFixeds, positionalFixeds0))
+      ? positionalFixeds0
+      : undefined;
+    const merged: IrField = {
+      ...first,
+      minOccurs,
+      maxOccurs,
+      ...optPropU(
+        "defaultValue",
+        uniform((f) => f.defaultValue),
+      ),
+      ...optPropU(
+        "fixedValue",
+        uniform((f) => f.fixedValue),
+      ),
+      ...optPropU("positionalFixeds", positionalFixeds),
+      ...optPropU(
+        "choiceGroup",
+        members.every((f) => f.choiceGroup !== undefined) && choiceGroups.size === 1
+          ? [...choiceGroups][0]
+          : undefined,
+      ),
+    };
+    // The merged field spans every member's branch — it is not branch-scoped.
+    delete merged.choiceBranch;
+    return merged;
+  };
+
+  const out: IrField[] = [];
+  const emitted = new Set<string>();
+  for (const field of type.fields) {
+    const key = toFieldKey(field);
+    const members = byKey.get(key) ?? [];
+    const mergeable =
+      members.length > 1 &&
+      members.every(
+        (f) =>
+          f.kind === "element" &&
+          f.qname === field.qname &&
+          f.typeName === field.typeName &&
+          f.nillable === field.nillable,
+      ) &&
+      members.every((f, i) => i === 0 || !separatedByWildcard(members[i - 1]!, f));
+    if (!mergeable) {
+      out.push(field);
+      continue;
+    }
+    if (emitted.has(key)) {
+      continue;
+    }
+    emitted.add(key);
+    out.push(mergeGroup(members));
+  }
+  return out;
+};
+
+const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, T> | object =>
+  value === undefined ? {} : { [key]: value };
 
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
@@ -1126,7 +1436,7 @@ const fieldsMetaFor = (
   structured: boolean,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
 ): string => {
-  const entries = type.fields.map((field) => {
+  const entries = dedupeEmissionFields(type).map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
     const substMembers = membersByHead.get(field.qname);
     if (substMembers !== undefined && substMembers.length > 0) {
@@ -1158,6 +1468,12 @@ const fieldsMetaFor = (
     }
     if (field.fixedValue !== undefined) {
       parts.push(...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured));
+    }
+    if (field.positionalFixeds !== undefined) {
+      const lits = field.positionalFixeds.map((fx) =>
+        fx === undefined ? "undefined" : JSON.stringify(fx),
+      );
+      parts.push(`fixedLexicals: [${lits.join(", ")}]`);
     }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
@@ -1423,7 +1739,15 @@ const tsFieldLine = (
       dt?.usedTypes.add(st.tsType);
       type = st.tsType;
     } else {
-      type = typedLiteral(resolvePrimitiveKind(field.typeName, ir), field.fixedValue);
+      type = typedLiteral(
+        resolvePrimitiveKind(field.typeName, ir),
+        wsProcessLiteral(
+          field.fixedValue,
+          resolvePrimitiveKind(field.typeName, ir) === "string"
+            ? effectiveWhiteSpace(field.typeName, ir)
+            : undefined,
+        ),
+      );
     }
   } else {
     // List-typed fixed: the schema keeps the list type (the constraint is a
@@ -1673,7 +1997,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // object consts; the main consts wrap their shape in z.lazy as before.
   const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string => {
     const multiBranch = choiceOptionalGroups(complexType);
-    return complexType.fields
+    return dedupeEmissionFields(complexType)
       .map(
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(
@@ -1697,7 +2021,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
       const multiBranch = choiceOptionalGroups(complexType);
-      const props = complexType.fields
+      const props = dedupeEmissionFields(complexType)
         .map((field) =>
           tsFieldLine(
             field,
@@ -1811,7 +2135,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       continue;
     }
     const multiBranch = choiceOptionalGroups(complexType);
-    const props = complexType.fields
+    const props = dedupeEmissionFields(complexType)
       .map(
         (field) =>
           `${JSON.stringify(toFieldKey(field))}: ${withDescription(

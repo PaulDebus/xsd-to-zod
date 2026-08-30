@@ -236,13 +236,15 @@ npm test
 |----------|------:|----------------|
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
-| W3C Boeing | 12 (10 ✅, 2 ⚠️) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule (ipo6 ⚠️ `it.fails`: group-in-choice document order is lost) |
-| W3C sun/ms/nist selection | 2,615 (2,558 ✅, 57 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
-| W3C negative (invalid instances) | 1,528 (1,520 ✅, 8 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
-| W3C full corpus (main + weekly) | 13,899 (13,806 ✅, 93 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
+| W3C Boeing | 12 (12 ✅) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule |
+| W3C sun/ms/nist selection | 2,615 (2,600 ✅, 15 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
+| W3C negative (invalid instances) | 1,529 (1,523 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
+| W3C full corpus (main + weekly) | 13,899 (13,879 ✅, 20 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
 | Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
+
+**What the ⚠️ pins mean.** The W3C suites are triaged to closure — the goal is zero unexplained failures, not a perfect raw count (the corpus contains cases that are unpassable by design). Every failing case carries a pin with a categorized reason: either libxml2 itself rejects the *original* instance/schema, or the case exercises a documented out-of-scope feature (e.g. type-library schemas with no global element to generate a root parser from). Pins run as `it.fails`, and their stated reasons are re-verified by the suite (`tests/w3cPinVerification.test.ts`) — a pin that stops being true, e.g. because a libxml2 upgrade closes a gap, breaks the build. See [docs/TEST_STATUS.md](docs/TEST_STATUS.md#definition-of-done) for the full definition of done.
 
 **Test data sources**
 

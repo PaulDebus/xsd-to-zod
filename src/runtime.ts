@@ -85,8 +85,17 @@ class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
 export const createOutputBuilder = (): BaseOutputBuilderFactory =>
   new EntityCompactBuilderFactory();
 
+// XML 1.0 §2.11 line-ending normalization, applied to the input text before
+// parsing: the parser itself keeps literal CR/CRLF, and its attribute-value
+// normalization would otherwise map a CRLF to two spaces instead of one.
+export const normalizeLineEndings = (xml: string): string =>
+  xml.includes("\r") ? xml.replaceAll("\r\n", "\n").replaceAll("\r", "\n") : xml;
+
 const parser = new XMLParser({
-  skip: { attributes: false },
+  // Keep whitespace-only text nodes: they are real character data ('<e>
+  // </e>' is not empty), and only the schema's whiteSpace facet may drop
+  // them.
+  skip: { attributes: false, whitespaceText: false },
   attributes: { prefix: "@_" },
   // Keep CDATA under its own key: merged text passes through the entity value
   // parser, which would corrupt literal entity text inside CDATA sections (#64).
@@ -463,7 +472,16 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
         // XSD list: whitespace-separated lexicals, coerced per item.
         return coerceList(raw, (outDef as z.core.$ZodArrayDef).element);
       }
-      // Other pipes (e.g. a whiteSpace preprocess) coerce as their inner type.
+      // whiteSpace preprocess pipe (out is a real schema): run it so the
+      // coerced value is the one validation produces. A transform pipe
+      // (structured datatypes) instead coerces as its input — validation
+      // applies the transform itself.
+      if (outDef.type !== "transform") {
+        const parsed = (unwrapModifiers(schema) as z.ZodType).safeParse(raw);
+        if (parsed.success) {
+          return parsed.data;
+        }
+      }
       return coerceLexical(raw, pipe.out);
     }
     case "array":
@@ -606,6 +624,12 @@ type XsiTypeCapture = {
 };
 const xsiCaptureStore = new WeakMap<object, XsiTypeCapture>();
 
+// xsi:type on open-content children (xs:anyType slots, wildcard extras): the
+// open shape keeps values type-agnostic, so the annotation rides this opaque
+// side channel — container object → child clark key → per-occurrence Clark
+// type qname. The serializer re-emits it with a fresh prefix.
+const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>>();
+
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
 const qnameBindingsOf = (
@@ -683,7 +707,7 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   ) {
     return;
   }
-  for (const store of [lexicalStore, substQNameStore]) {
+  for (const store of [lexicalStore, substQNameStore, openXsiTypeStore]) {
     const record = store.get(walked);
     if (record !== undefined) {
       store.delete(walked);
@@ -742,11 +766,18 @@ const serializeStoredLeaf = (
   value: unknown,
   stored: string | undefined,
 ): string => {
-  // Fixed constraints compare lexically — re-emit the declared fixed lexical.
-  if (fieldMeta.fixedLexical !== undefined) {
-    return escapeXml(fieldMeta.fixedLexical);
-  }
-  const lexical = storedLexicalFor(stored, value, itemSchema);
+  // The declared fixed lexical is preferred when it denotes the value (fixed
+  // constraints compare in the value space — "1" is the boolean true), but an
+  // instance lexical that resolves through a different union member ("abcd
+  // edfgh" vs the fixed "abcd edfgh ") must be re-emitted as-is. The
+  // datatype-gated tail covers structured values the guard cannot compare
+  // (the refine already enforced the constraint); anything else falls back
+  // to the canonical form so a mutated value never hides behind the fixed
+  // lexical.
+  const lexical =
+    storedLexicalFor(fieldMeta.fixedLexical, value, itemSchema) ??
+    storedLexicalFor(stored, value, itemSchema) ??
+    (fieldMeta.datatype === undefined ? undefined : fieldMeta.fixedLexical);
   return lexical === undefined
     ? serializeFieldLeaf(fieldMeta, itemSchema, value)
     : escapeXml(lexical);
@@ -983,6 +1014,23 @@ const captureUnknownXsiType = (
         const itemNode =
           item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
         list.push(itemNode === undefined ? item : openWalk(itemNode, contextFor(item, context)));
+        // The extra's own xsi:type rides the open side channel too.
+        if (itemNode !== undefined) {
+          const extraXsiType = readXsiTypeAttr(itemNode, contextFor(item, context));
+          if (extraXsiType !== undefined) {
+            let record = openXsiTypeStore.get(value);
+            if (record === undefined) {
+              record = new Map();
+              openXsiTypeStore.set(value, record);
+            }
+            let types = record.get(clark);
+            if (types === undefined) {
+              types = [];
+              record.set(clark, types);
+            }
+            types[list.length - 1] = extraXsiType;
+          }
+        }
         order.push([clark, list.length - 1]);
         continue;
       }
@@ -1076,18 +1124,51 @@ const readObject = (
       fieldList.filter((f) => f.kind === "element").length > 1 ||
       fieldList.some((f) => f.kind === "element" && (f.substitutes?.length ?? 0) > 0));
   const elementReads: ElementRead[] = [];
+  // Position-aware occurrence claiming: a scalar element field preceded by a
+  // matching wildcard claims its occurrence from the END — the wildcard owns
+  // the earlier ones (sequence: xs:any, e). Without this the field swallows
+  // the wildcard's occurrence (a processContents="skip" slot would be
+  // validated).
+  const targetNamespace = splitClark(findObjectMeta(schema)?.qname ?? "{}").namespace;
+  const anyWildcards = fieldList.filter((f) => f.kind === "any");
+  const scalarFromEnd = new Set<string>();
+  let elementOrdinal = 0;
   for (const [key, fieldMeta] of Object.entries(fields)) {
     const fieldSchema = shape[key];
     if (!fieldSchema) {
       continue;
     }
-    const { present, value, lexical, substQNames, qnameNs, claimed } = readField(
+    const claimFromEnd =
+      fieldMeta.kind === "element" &&
+      !analyzeField(fieldSchema).isArray &&
+      anyWildcards.some(
+        (w) =>
+          w.position !== undefined &&
+          w.position <= elementOrdinal &&
+          [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])].some((q) =>
+            wildcardAllows(
+              w.namespaceConstraint ?? "##any",
+              targetNamespace,
+              splitClark(q).namespace,
+            ),
+          ),
+      );
+    if (fieldMeta.kind === "element") {
+      elementOrdinal++;
+    }
+    if (claimFromEnd) {
+      for (const q of [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])]) {
+        scalarFromEnd.add(q);
+      }
+    }
+    const { present, value, lexical, substQNames, qnameNs, claimed, openXsiTypes } = readField(
       fieldMeta,
       fieldSchema,
       node,
       namespaceContext,
       exactElementQNames,
       childWalk(walk, key),
+      claimFromEnd,
     );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1103,22 +1184,28 @@ const readObject = (
       if (qnameNs !== undefined) {
         recordQNameNs(result, key, qnameNs);
       }
+      if (openXsiTypes !== undefined) {
+        recordInto(openXsiTypeStore, result, key, openXsiTypes);
+      }
     }
   }
   if (hasAny || hasAnyAttribute) {
     // Scalar element fields hold exactly one occurrence (readField takes the
-    // first); further occurrences of their qname are wildcard extras.
+    // first — the last when a preceding wildcard claimed the earlier ones);
+    // further occurrences of their qname are wildcard extras. Substitution
+    // members count as the head's occurrences.
     const scalarElements = new Set(
       Object.entries(fields)
         .filter(
           ([key, f]) => f.kind === "element" && shape[key] && !analyzeField(shape[key]).isArray,
         )
-        .map(([, f]) => f.qname),
+        .flatMap(([, f]) => [f.qname, ...(f.substitutes ?? [])]),
     );
     sweepWildcards(result, node, fieldList, namespaceContext, {
       any: hasAny,
       anyAttribute: hasAnyAttribute,
       scalarElements,
+      scalarFromEnd,
     });
   }
   if (recordOrder) {
@@ -1212,6 +1299,26 @@ const walkChildren = (
       const childKey = rawChildClarkKey(key, item, context);
       const itemNode =
         item !== null && typeof item === "object" ? (item as Record<string, unknown>) : undefined;
+      // xsi:type on an open-content child rides the side channel (the open
+      // shape is type-agnostic); resolved to Clark notation here.
+      if (itemNode !== undefined) {
+        const xsiType = readXsiTypeAttr(itemNode, contextFor(item, context));
+        if (xsiType !== undefined) {
+          const existing = target[childKey];
+          const index = existing === undefined ? 0 : Array.isArray(existing) ? existing.length : 1;
+          let record = openXsiTypeStore.get(target);
+          if (record === undefined) {
+            record = new Map();
+            openXsiTypeStore.set(target, record);
+          }
+          let list = record.get(childKey);
+          if (list === undefined) {
+            list = [];
+            record.set(childKey, list);
+          }
+          list[index] = xsiType;
+        }
+      }
       const childValue = itemNode ? openWalk(itemNode, context) : item;
       const existing = target[childKey];
       if (existing === undefined) {
@@ -1233,7 +1340,12 @@ const sweepWildcards = (
   node: Record<string, unknown>,
   fieldList: XmlFieldMeta[],
   namespaceContext: Record<string, string>,
-  wildcards: { any: boolean; anyAttribute: boolean; scalarElements?: Set<string> },
+  wildcards: {
+    any: boolean;
+    anyAttribute: boolean;
+    scalarElements?: Set<string>;
+    scalarFromEnd?: Set<string>;
+  },
 ): void => {
   const knownElements = new Set(
     fieldList
@@ -1255,6 +1367,21 @@ const sweepWildcards = (
     const unq = `{}${local}`;
     return prefix === "" && wildcards.scalarElements.has(unq) ? unq : undefined;
   };
+  // Occurrence totals per from-end scalar qname: the field claims the last
+  // occurrence, so the sweep takes all but that one.
+  const totals = new Map<string, number>();
+  const fromEnd = wildcards.scalarFromEnd ?? new Set<string>();
+  if (fromEnd.size > 0) {
+    walkChildren({}, node, namespaceContext, {
+      element: (ns, local, prefix) => {
+        const sq = scalarQNameOf(ns, local, prefix);
+        if (sq !== undefined && fromEnd.has(sq)) {
+          totals.set(sq, (totals.get(sq) ?? 0) + 1);
+        }
+        return false;
+      },
+    });
+  }
   walkChildren(result, node, namespaceContext, {
     attribute: wildcards.anyAttribute
       ? (ns, local) => !knownAttributes.has(`{${ns}}${local}`)
@@ -1265,7 +1392,7 @@ const sweepWildcards = (
           if (sq !== undefined) {
             const seen = (consumed.get(sq) ?? 0) + 1;
             consumed.set(sq, seen);
-            return seen > 1;
+            return fromEnd.has(sq) ? seen < (totals.get(sq) ?? 1) : seen > 1;
           }
           return (
             !knownElements.has(`{${ns}}${local}`) &&
@@ -1279,15 +1406,35 @@ const sweepWildcards = (
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
-): { substituted: boolean; value?: unknown } => {
+  position?: number,
+): { substituted: boolean; value?: unknown; lexical?: string } => {
+  // The declared default/fixed lexical is retained like an instance lexical:
+  // lexical facets and re-serialization need the declared form ("1.0E-2"),
+  // not the substituted value's canonical one ("0.01").
+  const substituted = (value: unknown): { substituted: true; value: unknown; lexical?: string } => {
+    const lexical = fieldMeta.fixedLexical ?? fieldMeta.defaultLexical;
+    return lexical === undefined
+      ? { substituted: true, value }
+      : { substituted: true, value, lexical };
+  };
+  // Merged same-qname siblings: the fixed constraint of this occurrence's
+  // position applies.
+  const positional = position === undefined ? undefined : fieldMeta.fixedLexicals?.[position];
+  if (positional !== undefined) {
+    return {
+      substituted: true,
+      value: coerceLexical(positional, field.itemSchema),
+      lexical: positional,
+    };
+  }
   if (field.hasFixed) {
-    return { substituted: true, value: field.fixedValue };
+    return substituted(field.fixedValue);
   }
   if (fieldMeta.fixedValue !== undefined) {
-    return { substituted: true, value: fieldMeta.fixedValue };
+    return substituted(fieldMeta.fixedValue);
   }
   if (fieldMeta.defaultValue !== undefined) {
-    return { substituted: true, value: fieldMeta.defaultValue };
+    return substituted(fieldMeta.defaultValue);
   }
   return { substituted: false };
 };
@@ -1298,10 +1445,13 @@ const readOccurrence = (
   entry: unknown,
   namespaceContext: Record<string, string>,
   walk?: WalkCtx,
+  position?: number,
 ): {
   value: unknown;
   lexical?: string | undefined;
   qnameNs?: Record<string, string> | undefined;
+  /** xsi:type of an open-content occurrence, resolved to Clark notation. */
+  openXsiType?: string | undefined;
 } => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
@@ -1318,21 +1468,25 @@ const readOccurrence = (
       // Element default/fixed applies to present-but-empty open fields too.
       const text = textOf(childNode);
       if (text === undefined || text === "") {
-        const empty = substituteEmpty(field, fieldMeta);
+        const empty = substituteEmpty(field, fieldMeta, position);
         if (empty.substituted) {
-          return { value: empty.value };
+          return { value: empty.value, lexical: empty.lexical };
         }
       }
-      return { value: openWalk(childNode, childContext) };
+      // xsi:type on open content rides the side channel (see openXsiTypeStore).
+      return {
+        value: openWalk(childNode, childContext),
+        openXsiType: readXsiTypeAttr(childNode, childContext),
+      };
     }
     if (hasObjectShape(field.itemSchema)) {
       return { value: readObject(field.itemSchema, childNode, childContext, false, walk) };
     }
     const text = textOf(childNode);
     if (text === undefined || text === "") {
-      const empty = substituteEmpty(field, fieldMeta);
+      const empty = substituteEmpty(field, fieldMeta, position);
       if (empty.substituted) {
-        return { value: empty.value };
+        return { value: empty.value, lexical: empty.lexical };
       }
     }
     // A present element without character data has empty-string content: valid
@@ -1354,9 +1508,9 @@ const readOccurrence = (
 
   // Scalar entry: the parser yields text-only elements as bare strings.
   if (entry === "") {
-    const empty = substituteEmpty(field, fieldMeta);
+    const empty = substituteEmpty(field, fieldMeta, position);
     if (empty.substituted) {
-      return { value: empty.value };
+      return { value: empty.value, lexical: empty.lexical };
     }
   }
   if (fieldMeta.open) {
@@ -1399,6 +1553,8 @@ type FieldRead = {
   /** Member qname per occurrence — set only where it differs from the head. */
   substQNames?: string | (string | undefined)[] | undefined;
   qnameNs?: Record<string, string> | (Record<string, string> | undefined)[] | undefined;
+  /** Per-occurrence xsi:type of open content (Clark), index-aligned. */
+  openXsiTypes?: (string | undefined)[];
   /**
    * Raw parser-node occurrences the field claimed, index-aligned with the
    * produced value(s) — readObject maps them onto document-order positions.
@@ -1413,6 +1569,7 @@ const readField = (
   namespaceContext: Record<string, string>,
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
+  claimFromEnd = false,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1422,21 +1579,24 @@ const readField = (
       // Absent attribute: XSD applies default/fixed on absence. Validation
       // normally fills these via zod (.default()/z.literal); on the
       // validate:false fast path the walker supplies them from the def.
+      // The declared lexical is retained so lexical facets and re-serialization
+      // see the declared form.
+      const lexical = fieldMeta.fixedLexical ?? fieldMeta.defaultLexical;
       if (field.hasFixed) {
-        return { present: true, value: field.fixedValue };
+        return { present: true, value: field.fixedValue, lexical };
       }
       // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
       if (fieldMeta.fixedValue !== undefined) {
-        return { present: true, value: fieldMeta.fixedValue };
+        return { present: true, value: fieldMeta.fixedValue, lexical };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
       // would fail re-validation as a pipe input).
       if (fieldMeta.defaultValue !== undefined) {
-        return { present: true, value: fieldMeta.defaultValue };
+        return { present: true, value: fieldMeta.defaultValue, lexical };
       }
       if (field.hasDefault) {
-        return { present: true, value: field.defaultValue };
+        return { present: true, value: field.defaultValue, lexical };
       }
       return { present: false, value: undefined };
     }
@@ -1471,22 +1631,32 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
-  const occurrences = matched.map((entry, index) => {
+  // Scalar fields keep one occurrence (the last when a preceding wildcard
+  // claimed the earlier ones); only that occurrence is read — the content of
+  // overflow occurrences is not the field's to validate.
+  const keptIndexes =
+    field.isArray || matched.length === 0
+      ? matched.map((_, i) => i)
+      : [claimFromEnd ? matched.length - 1 : 0];
+  const occurrences = keptIndexes.map((index) => {
+    const entry = matched[index]!;
     const itemSchema = substitutionSchemaFor(entry.qname, field.itemSchema);
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
     const occWalk = field.isArray ? childWalk(walk, index) : walk;
     return {
-      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk),
+      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk, index),
       qname: entry.qname,
     };
   });
   const qnames = occurrences.map((o) => (o.qname === fieldMeta.qname ? undefined : o.qname));
   const substituted = qnames.some((q) => q !== undefined);
-  const claimed = matched.map((entry, index) => ({
-    rawKey: entry.rawKey,
-    rawValue: entry.value,
+  const claimed = keptIndexes.map((index) => ({
+    rawKey: matched[index]!.rawKey,
+    rawValue: matched[index]!.value,
     index,
   }));
+  const openXsiTypes = occurrences.map((o) => o.openXsiType);
+  const anyOpenXsiType = openXsiTypes.some((t) => t !== undefined) ? openXsiTypes : undefined;
   if (field.isArray) {
     const lexicals = occurrences.map((o) => o.lexical);
     const qnameNs = occurrences.map((o) => o.qnameNs);
@@ -1496,16 +1666,21 @@ const readField = (
       lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
       substQNames: substituted ? qnames : undefined,
       qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
+      ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: anyOpenXsiType }),
       claimed,
     };
   }
   if (occurrences.length > 0) {
+    // A scalar field preceded by a matching wildcard claims the LAST
+    // occurrence; the wildcard sweep owns the earlier ones (see readObject).
+    // keptIndexes already reduced occurrences/claimed to the kept entry.
     return {
       present: true,
       value: occurrences[0]?.value,
       lexical: occurrences[0]?.lexical,
       substQNames: qnames[0],
       qnameNs: occurrences[0]?.qnameNs,
+      ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: [anyOpenXsiType[0]] }),
       claimed,
     };
   }
@@ -1519,7 +1694,10 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
-  const parsed = parser.parse(decodeTagNameCharRefs(xml)) as Record<string, unknown>;
+  const parsed = parser.parse(decodeTagNameCharRefs(normalizeLineEndings(xml))) as Record<
+    string,
+    unknown
+  >;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
@@ -1543,11 +1721,13 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
-    if (meta.fixedValue !== undefined) {
-      return meta.fixedValue;
-    }
-    if (meta.defaultValue !== undefined) {
-      return meta.defaultValue;
+    const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
+    if (substituted !== undefined) {
+      const declared = meta.fixedLexical ?? meta.defaultLexical;
+      if (declared !== undefined) {
+        rootLexicals.set(schema, { data: substituted, lexical: declared });
+      }
+      return substituted;
     }
   }
   // A present root without character data has empty-string content: valid for
@@ -1734,7 +1914,11 @@ const openSerialize = (
       continue;
     }
     const tag = elementName(key, ctx.prefixMap, ctx.qnameNs);
-    usesXsi = pushOpenChildren(elements, tag, entry, ctx) || usesXsi;
+    const xsiTypes =
+      typeof value === "object" && value !== null
+        ? openXsiTypeStore.get(value as object)?.get(key)
+        : undefined;
+    usesXsi = pushOpenChildren(elements, tag, entry, ctx, xsiTypes) || usesXsi;
   }
   return { attributes, body: elements.join(""), usesXsi };
 };
@@ -1746,17 +1930,28 @@ const pushOpenChildren = (
   tag: string,
   value: unknown,
   ctx: SerializeCtx,
+  xsiTypes?: (string | undefined)[],
 ): boolean => {
   let usesXsi = false;
+  let i = 0;
   for (const item of Array.isArray(value) ? value : [value]) {
     if (item === null) {
       usesXsi = true;
       elements.push(`<${tag} xsi:nil="true"/>`);
+      i++;
       continue;
     }
     const inner = openSerialize(item, ctx);
     usesXsi = usesXsi || inner.usesXsi;
-    const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+    const xsiType = xsiTypes?.[i];
+    i++;
+    const attrs = [...inner.attributes];
+    if (xsiType !== undefined) {
+      // The captured xsi:type (Clark) re-emitted with a fresh prefix.
+      usesXsi = true;
+      attrs.push(`xsi:type="${elementName(xsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+    }
+    const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
     elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
   }
   return usesXsi;
@@ -1956,8 +2151,13 @@ const writeObjectFields = (
     wildcardBuckets.delete(wildcard);
     for (const [key, value] of bucket) {
       usesXsi =
-        pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), value, ctx) ||
-        usesXsi;
+        pushOpenChildren(
+          elements,
+          elementName(key, ctx.prefixMap, ctx.qnameNs),
+          value,
+          ctx,
+          openXsiTypeStore.get(obj)?.get(key),
+        ) || usesXsi;
     }
   };
 
@@ -2018,7 +2218,14 @@ const writeObjectFields = (
     if (fieldMeta.open) {
       const inner = openSerialize(item, ctx);
       usesXsi = usesXsi || inner.usesXsi;
-      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+      // Captured xsi:type of the open occurrence (see openXsiTypeStore).
+      const openXsiType = openXsiTypeStore.get(obj)?.get(key)?.[i];
+      const attrs = [...inner.attributes];
+      if (openXsiType !== undefined) {
+        usesXsi = true;
+        attrs.push(`xsi:type="${elementName(openXsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+      }
+      const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
       return `<${localName}${attrStr}>${inner.body}</${localName}>`;
     }
     const xsiUnion = xsiTypeUnionDef(itemSchema);
@@ -2042,7 +2249,12 @@ const writeObjectFields = (
       return `<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`;
     }
     const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
-    const leaf = serializeStoredLeaf(fieldMeta, itemSchema, item, storedItem);
+    // Merged same-qname siblings: the fixed lexical of this occurrence's
+    // position.
+    const positionalFixed = fieldMeta.fixedLexicals?.[i];
+    const leafMeta =
+      positionalFixed === undefined ? fieldMeta : { ...fieldMeta, fixedLexical: positionalFixed };
+    const leaf = serializeStoredLeaf(leafMeta, itemSchema, item, storedItem);
     const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
     const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
     return `<${localName}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
@@ -2093,8 +2305,13 @@ const writeObjectFields = (
       (xml) => elements.push(xml),
       (key, item) => {
         usesXsi =
-          pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx) ||
-          usesXsi;
+          pushOpenChildren(
+            elements,
+            elementName(key, ctx.prefixMap, ctx.qnameNs),
+            item,
+            ctx,
+            openXsiTypeStore.get(obj)?.get(key),
+          ) || usesXsi;
       },
     );
     return { attributes, elements, usesXsi };
@@ -2160,8 +2377,13 @@ const writeObjectFields = (
     for (const [clark, values] of Object.entries(xsiCapture.extras)) {
       for (const extra of values) {
         usesXsi =
-          pushOpenChildren(elements, elementName(clark, ctx.prefixMap, ctx.qnameNs), extra, ctx) ||
-          usesXsi;
+          pushOpenChildren(
+            elements,
+            elementName(clark, ctx.prefixMap, ctx.qnameNs),
+            extra,
+            ctx,
+            openXsiTypeStore.get(obj)?.get(clark),
+          ) || usesXsi;
       }
     }
   }
@@ -2291,10 +2513,19 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
   } else if (meta.fixedLexical !== undefined) {
-    // Fixed root: re-emit the declared fixed lexical (see XmlFieldMeta).
-    body = escapeXml(meta.fixedLexical);
+    // Fixed root: the declared fixed lexical when it denotes the value, else
+    // the retained instance lexical (see serializeStoredLeaf).
+    const entry = rootLexicals.get(schema);
+    // Structured fixed values (datatype set) cannot be compared by the
+    // guard — the refine already enforced the constraint; anything else
+    // falls back to the canonical form.
+    const rootFixed =
+      storedLexicalFor(meta.fixedLexical, data, typeSchema) ??
+      storedLexicalFor(entry?.lexical, data, typeSchema) ??
+      (meta.datatype === undefined ? undefined : meta.fixedLexical);
+    body = rootFixed === undefined ? serializeLeaf(typeSchema, data) : escapeXml(rootFixed);
     if (meta.qnameValue) {
-      body = declareQNamePrefixes(body, rootLexicals.get(schema)?.qnameNs, ctx);
+      body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
     }
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);

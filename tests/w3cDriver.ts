@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
 import { readXmlFile } from "../src/index.js";
@@ -177,6 +178,29 @@ export interface W3cCase {
 /** A testSet file, optionally restricted to testGroups matching a name filter. */
 export type W3cTestSetRef = string | { file: string; groupFilter?: RegExp };
 
+// Schema documents the INSTANCE references via xsi:schemaLocation /
+// xsi:noNamespaceSchemaLocation (mirrors what a validating parser would
+// fetch): namespaces the group's schemaTest does not list still resolve.
+const instanceSchemaHints = (xmlFile: string): string[] => {
+  const instance = readXmlFile(xmlFile);
+  const locations: string[] = [];
+  for (const match of instance.matchAll(/\b\w+:schemaLocation\s*=\s*["']([^"']*)["']/g)) {
+    const tokens = (match[1] ?? "").trim().split(/\s+/);
+    for (let i = 0; i + 1 < tokens.length; i += 2) {
+      locations.push(tokens[i + 1]!);
+    }
+  }
+  for (const match of instance.matchAll(
+    /\b\w+:noNamespaceSchemaLocation\s*=\s*["']([^"']*)["']/g,
+  )) {
+    locations.push((match[1] ?? "").trim());
+  }
+  return locations
+    .filter((location) => location !== "" && !/^https?:/i.test(location))
+    .map((location) => path.resolve(path.dirname(xmlFile), location))
+    .filter((location) => location.endsWith(".xsd") && fs.existsSync(location));
+};
+
 const discoverCases = (testSetFiles: W3cTestSetRef[], instanceValid: boolean): W3cCase[] => {
   const cases: W3cCase[] = [];
   for (const ref of testSetFiles) {
@@ -193,10 +217,16 @@ const discoverCases = (testSetFiles: W3cTestSetRef[], instanceValid: boolean): W
         if (instance.expectedValid !== instanceValid) {
           continue;
         }
+        const xsdFiles = [...group.xsdFiles];
+        for (const hint of instanceSchemaHints(instance.xmlFile)) {
+          if (!xsdFiles.includes(hint)) {
+            xsdFiles.push(hint);
+          }
+        }
         cases.push({
           name: `${group.name}/${instance.name || path.basename(instance.xmlFile, ".xml")}`,
           testSet,
-          xsdFiles: group.xsdFiles,
+          xsdFiles,
           xmlFile: instance.xmlFile,
           specRefs: group.specRefs,
         });
