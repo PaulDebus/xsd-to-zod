@@ -104,18 +104,19 @@ describe("xsi:type polymorphism — codegen", () => {
       fs.writeFileSync(file, ZOO_XSD);
       const { schemas } = irToZod(parseXsd([file]));
 
-      // One union over base + derived, discriminating on xsiType.
+      // One union over base + derived, discriminating on xsiType. The
+      // declared variant is a separate const from the derived-position one:
+      // exactly one option may accept a missing discriminant, and that must
+      // be the declared type.
       expect(schemas).toContain(
-        'z.discriminatedUnion("xsiType", [AnimalVariantSchema, DogVariantSchema]',
+        'z.discriminatedUnion("xsiType", [AnimalDeclaredVariantSchema, DogVariantSchema]',
       );
       // Discriminant literals are the types' Clark qnames: optional on the
-      // base variant, defaulted on the derived variant.
+      // declared variant, a bare literal on the derived variant.
       expect(schemas).toContain(
         '"xsiType": z.literal("{http://example.com/zoo}Animal").optional()',
       );
-      expect(schemas).toContain(
-        '"xsiType": z.literal("{http://example.com/zoo}Dog").default("{http://example.com/zoo}Dog")',
-      );
+      expect(schemas).toContain('"xsiType": z.literal("{http://example.com/zoo}Dog")');
       // The root element wraps the union.
       expect(schemas).toContain("export const petSchema = z.lazy(() => AnimalVariantsSchema)");
     });
