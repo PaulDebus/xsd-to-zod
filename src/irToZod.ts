@@ -1886,6 +1886,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // polymorphic declared type.
   const objectConstName = new Map<QName, string>();
   const variantConstName = new Map<QName, string>();
+  const declaredVariantConstName = new Map<QName, string>();
   const unionConstName = new Map<QName, string>();
   for (const name of familyTypes) {
     const local = sanitizeIdentifier(clarkToLocal(name));
@@ -1893,7 +1894,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     variantConstName.set(name, alloc(`${local}VariantSchema`));
   }
   for (const name of variantSets.keys()) {
-    unionConstName.set(name, alloc(`${sanitizeIdentifier(clarkToLocal(name))}VariantsSchema`));
+    const local = sanitizeIdentifier(clarkToLocal(name));
+    declaredVariantConstName.set(name, alloc(`${local}DeclaredVariantSchema`));
+    unionConstName.set(name, alloc(`${local}VariantsSchema`));
   }
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
@@ -1916,8 +1919,8 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // TS type of a polymorphic slot: the declared type plus its derived types,
   // each intersected with its xsiType discriminant. The discriminant is
   // optional on family roots (parsed plain occurrences carry none) and
-  // required on derived types (parsed derived values always carry it; the
-  // schema's .default() fills it for hand-built input).
+  // required on derived types (parsed derived values always carry it; a
+  // mid-chain declared variant's .default() fills it for its own union).
   const tsVariantUnionType = (typeName: QName): string =>
     (variantSets.get(typeName) ?? [typeName])
       .map((variant) => {
@@ -2169,24 +2172,44 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
 
   // xsiType variant schemas (object shape + discriminant property, registered
   // with the type meta so the runtime can read occurrences through them) and
-  // the discriminated union per polymorphic declared type. unionFallback lets
-  // a discriminant-less value at a mid-chain slot (whose declared type's
-  // variant carries a default, so undefined is not among its discriminator
-  // values) still validate as the declared type.
+  // the discriminated union per polymorphic declared type. Within one union,
+  // exactly one option may accept a missing discriminant — zod refuses to
+  // build the lookup otherwise. That option is the declared variant (a
+  // discriminant-less value validates as the declared type), so it is a
+  // separate const from the derived-position variant: a mid-chain type heads
+  // its own union yet sits downstream of its base's. Derived positions carry
+  // a bare literal, claiming only their own qname. The declared variant is
+  // optional at the top of a chain (plain occurrences carry no discriminant)
+  // and carries a default mid-chain, so parsed mid-chain values keep the
+  // xsiType their TS type requires; unionFallback covers hand-built data
+  // whose discriminant names no variant.
   for (const complexType of Object.values(ir.complexTypes)) {
     if (!familyTypes.has(complexType.name)) {
       continue;
     }
     const discriminant = JSON.stringify(complexType.name);
-    const xsiTypeProp = derivedTypeNames.has(complexType.name)
+    schemaLines.push(
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
+    );
+  }
+  for (const complexType of Object.values(ir.complexTypes)) {
+    const variants = variantSets.get(complexType.name);
+    if (variants === undefined) {
+      continue;
+    }
+    const typeName = complexType.name;
+    const discriminant = JSON.stringify(typeName);
+    const xsiTypeProp = derivedTypeNames.has(typeName)
       ? `z.literal(${discriminant}).default(${discriminant})`
       : `z.literal(${discriminant}).optional()`;
     schemaLines.push(
-      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
+      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
     );
-  }
-  for (const [typeName, variants] of variantSets) {
-    const options = variants.map((variant) => variantConstName.get(variant)).join(", ");
+    const derived = variants
+      .slice(1)
+      .map((variant) => variantConstName.get(variant))
+      .join(", ");
+    const options = `${declaredVariantConstName.get(typeName)}${derived ? `, ${derived}` : ""}`;
     schemaLines.push(
       `const ${unionConstName.get(typeName)} = z.discriminatedUnion("xsiType", [${options}], { unionFallback: true });`,
     );
