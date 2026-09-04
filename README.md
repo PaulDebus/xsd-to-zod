@@ -148,6 +148,74 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
 | `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
+| `-c, --config <path>` | Load config from this file instead of auto-discovering one |
+| `--no-config` | Ignore any auto-discovered config file |
+
+#### Configuration file
+
+The generate command reads an optional project config, discovered by walking
+up from the working directory: in each directory the first match of
+`xsd-to-zod.config.js`, `.mjs`, `.cjs`, `.json` wins, then an `"xsd-to-zod"`
+field in that directory's `package.json`. CLI flags override config values,
+`--config <path>` loads a specific file instead of discovering one, and
+`--no-config` disables loading entirely. The `bundle` and `validate`
+subcommands do not read config, and the programmatic API never loads files on
+its own — pass options to `parseXsd`/`irToZod` explicitly (or use the exported
+`loadConfig` helper to read a config yourself).
+
+Every key mirrors a CLI flag:
+
+| Key | CLI flag |
+|-----|----------|
+| `out` | `-o, --out <dir>` |
+| `name` | `-n, --name <name>` |
+| `format` | `-f, --format` |
+| `includeLibraries` | `--include-libraries` |
+| `allowMissingImports` | `--allow-missing-imports` |
+| `silent` | `--silent` |
+| `datatypes` | `--datatypes <mode>` |
+
+Relative paths (`out`, `--config`) resolve against the working directory, not
+the config file's location — relevant when the config is discovered in a
+parent directory of where you run the command. JS configs must default-export
+the config object (in a CommonJS project use `.cjs` with `module.exports`).
+
+```json
+// xsd-to-zod.config.json
+{ "out": "src/generated", "datatypes": "structured", "includeLibraries": true }
+```
+
+```js
+// xsd-to-zod.config.js
+import { defineConfig } from "xsd-to-zod";
+
+export default defineConfig({ out: "src/generated", datatypes: "structured" });
+```
+
+```js
+// xsd-to-zod.config.cjs — CommonJS projects
+module.exports = { out: "src/generated" };
+```
+
+```jsonc
+// package.json
+{
+  "name": "my-app",
+  "xsd-to-zod": { "out": "src/generated", "silent": true }
+}
+```
+
+A CLI flag wins over the config for that run, `--config` points at a specific
+file, and `--no-config` skips loading:
+
+```sh
+npx xsd-to-zod schema.xsd --datatypes string        # config says structured; this run stays on strings
+npx xsd-to-zod schema.xsd --config ci/release.json  # explicit file, no discovery
+npx xsd-to-zod schema.xsd --no-config               # ignore the project config
+```
+
+Unknown keys and wrong types are rejected with a descriptive error, so typos
+fail loudly instead of being silently ignored.
 
 Bundle all imports and includes into a single self-contained XSD:
 

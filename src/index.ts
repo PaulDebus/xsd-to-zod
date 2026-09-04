@@ -1,3 +1,5 @@
+export type { LoadedConfig, XsdToZodConfig } from "./config.js";
+export { defineConfig, findConfigFile, loadConfig, mergeConfig } from "./config.js";
 export { Xsd2ZodError } from "./errors.js";
 export type { IrToZodOptions } from "./irToZod.js";
 export {

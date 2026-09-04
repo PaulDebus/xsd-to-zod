@@ -816,3 +816,132 @@ describe("stripImports (unit)", () => {
     expect(result).toContain('xs:element name="root"');
   });
 });
+
+describe("CLI config file", () => {
+  const XSD_DATETIME = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:element name="when" type="xs:dateTime"/>
+</xs:schema>`;
+
+  // Runs the CLI with the temp dir as cwd (generate resolves config from cwd).
+  const runCliInDir = async (
+    dir: string,
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }> => {
+    const original = process.cwd();
+    process.chdir(dir);
+    try {
+      return await runCli(args);
+    } finally {
+      process.chdir(original);
+    }
+  };
+
+  it("picks up xsd-to-zod.config.json from the working directory", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD_DATETIME);
+      fs.writeFileSync(
+        path.join(dir, "xsd-to-zod.config.json"),
+        JSON.stringify({ datatypes: "structured" }),
+      );
+      const r = await runCliInDir(dir, ["test.xsd", "-o", "gen"]);
+      expect(r.code).toBe(0);
+      const output = fs.readFileSync(path.join(dir, "gen", "test.zod.ts"), "utf8");
+      expect(output).toContain("parseXsdDateTime");
+    });
+  });
+
+  it("lets CLI flags override the config file", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD_DATETIME);
+      fs.writeFileSync(
+        path.join(dir, "xsd-to-zod.config.json"),
+        JSON.stringify({ datatypes: "string" }),
+      );
+      const r = await runCliInDir(dir, ["test.xsd", "-o", "gen", "--datatypes", "structured"]);
+      expect(r.code).toBe(0);
+      const output = fs.readFileSync(path.join(dir, "gen", "test.zod.ts"), "utf8");
+      expect(output).toContain("parseXsdDateTime");
+    });
+  });
+
+  it("honors the configured output directory when -o is absent", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD);
+      const outDir = path.join(dir, "configured-out");
+      fs.writeFileSync(path.join(dir, "xsd-to-zod.config.json"), JSON.stringify({ out: outDir }));
+      const r = await runCliInDir(dir, ["test.xsd"]);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(outDir, "test.zod.ts"))).toBe(true);
+    });
+  });
+
+  it("ignores the config file with --no-config", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD_DATETIME);
+      fs.writeFileSync(
+        path.join(dir, "xsd-to-zod.config.json"),
+        JSON.stringify({ datatypes: "structured" }),
+      );
+      const r = await runCliInDir(dir, ["test.xsd", "-o", "gen", "--no-config"]);
+      expect(r.code).toBe(0);
+      const output = fs.readFileSync(path.join(dir, "gen", "test.zod.ts"), "utf8");
+      expect(output).not.toContain("parseXsdDateTime");
+    });
+  });
+
+  it("loads an explicit --config file from anywhere", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD_DATETIME);
+      const elsewhere = path.join(dir, "elsewhere");
+      fs.mkdirSync(elsewhere);
+      fs.writeFileSync(
+        path.join(elsewhere, "my.json"),
+        JSON.stringify({ datatypes: "structured" }),
+      );
+      const r = await runCliInDir(dir, [
+        "test.xsd",
+        "-o",
+        "gen",
+        "--config",
+        path.join(elsewhere, "my.json"),
+      ]);
+      expect(r.code).toBe(0);
+      const output = fs.readFileSync(path.join(dir, "gen", "test.zod.ts"), "utf8");
+      expect(output).toContain("parseXsdDateTime");
+    });
+  });
+
+  it("fails when the --config file does not exist", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD);
+      const r = await runCliInDir(dir, ["test.xsd", "--config", "gone.json"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("Config file not found");
+    });
+  });
+
+  it("fails with a helpful message for an invalid config file", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD);
+      fs.writeFileSync(path.join(dir, "xsd-to-zod.config.json"), JSON.stringify({ silent: "yes" }));
+      const r = await runCliInDir(dir, ["test.xsd"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("Invalid config");
+    });
+  });
+
+  it("reads the xsd-to-zod field of package.json", async () => {
+    await withTempDirAsync(async (dir) => {
+      fs.writeFileSync(path.join(dir, "test.xsd"), XSD_DATETIME);
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name: "app", "xsd-to-zod": { datatypes: "structured" } }),
+      );
+      const r = await runCliInDir(dir, ["test.xsd", "-o", "gen"]);
+      expect(r.code).toBe(0);
+      const output = fs.readFileSync(path.join(dir, "gen", "test.zod.ts"), "utf8");
+      expect(output).toContain("parseXsdDateTime");
+    });
+  });
+});
