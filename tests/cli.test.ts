@@ -133,6 +133,58 @@ describe("isLibrary", () => {
       );
       expect(isLibrary(file)).toBe(true);
     }));
+
+  it("returns false when first child is self-closing import followed by root element", () =>
+    withTempDir((dir) => {
+      const file = path.join(dir, "import-root.xsd");
+      fs.writeFileSync(
+        file,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:import namespace="urn:x" schemaLocation="x.xsd"/>
+  <xs:element name="doc" type="xs:string"/>
+</xs:schema>`,
+      );
+      expect(isLibrary(file)).toBe(false);
+    }));
+
+  it("returns false when first child is self-closing include followed by root element", () =>
+    withTempDir((dir) => {
+      const file = path.join(dir, "include-root.xsd");
+      fs.writeFileSync(
+        file,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="x.xsd"/>
+  <xs:element name="doc" type="xs:string"/>
+</xs:schema>`,
+      );
+      expect(isLibrary(file)).toBe(false);
+    }));
+
+  it("returns true when self-closing import is followed only by type definition", () =>
+    withTempDir((dir) => {
+      const file = path.join(dir, "import-type.xsd");
+      fs.writeFileSync(
+        file,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:import namespace="urn:x" schemaLocation="x.xsd"/>
+  <xs:complexType name="Foo"/>
+</xs:schema>`,
+      );
+      expect(isLibrary(file)).toBe(true);
+    }));
+
+  it("returns false when first child is annotation followed by root element", () =>
+    withTempDir((dir) => {
+      const file = path.join(dir, "annotation-root.xsd");
+      fs.writeFileSync(
+        file,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:annotation><xs:documentation>docs</xs:documentation></xs:annotation>
+  <xs:element name="doc" type="xs:string"/>
+</xs:schema>`,
+      );
+      expect(isLibrary(file)).toBe(false);
+    }));
 });
 
 describe("CLI e2e", () => {

@@ -153,7 +153,7 @@ export const isLibrary = (filePath: string): boolean => {
         if (depth === 1 && m[1] === "element") {
           return false;
         }
-        if (!tag.endsWith("/")) {
+        if (!tag.endsWith("/>")) {
           depth++;
         }
       }
