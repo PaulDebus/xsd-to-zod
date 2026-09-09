@@ -29,8 +29,7 @@ const declaredEncoding = (raw: Buffer): string | undefined =>
     .toString("ascii", 0, Math.min(raw.length, 200))
     .match(/<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']+)["']/)?.[1];
 
-export const readXmlFile = (filePath: string): string => {
-  const raw = fs.readFileSync(filePath);
+export const decodeXmlContent = (raw: Buffer): string => {
   const encoding = sniffUtf16(raw) ?? declaredEncoding(raw) ?? "utf-8";
   let content: string;
   try {
@@ -51,3 +50,6 @@ export const readXmlFile = (filePath: string): string => {
     (_, pre, attr, _enc, rest) => `${pre}${attr}UTF-8${rest}`,
   );
 };
+
+export const readXmlFile = (filePath: string): string =>
+  decodeXmlContent(fs.readFileSync(filePath));

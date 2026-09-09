@@ -137,6 +137,9 @@ npx xsd-to-zod schemas/ -o src/generated --format
 
 npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 # → src/generated/my-api.zod.ts
+
+npx xsd-to-zod https://example.com/schema.xsd -o src/generated
+# → fetches the schema and its remote imports, then writes schema.zod.ts
 ```
 
 | Flag | Description |
@@ -148,6 +151,12 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
 | `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
+| `--fetch` | Resolve remote imports/includes from local schema inputs. Remote entry URLs always fetch; local inputs never use the network without this flag |
+| `--no-fetch` | Fetch only a remote entry schema and skip its remote imports/includes |
+| `--allow-http` | Permit insecure `http://` schema URLs (`https://` only by default) |
+| `--allow-host <host>` | Repeatable host allowlist for every fetched schema, including the entry URL |
+
+Remote fetches are logged to stderr, use `HTTPS_PROXY`/`HTTP_PROXY` when set, and are capped at 100 files, 10 MB per file, 50 MB total, and 30 seconds per request.
 
 Bundle all imports and includes into a single self-contained XSD:
 
