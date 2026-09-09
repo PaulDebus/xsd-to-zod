@@ -56,7 +56,7 @@ const writeSchema = (dir: string, xsd: string): string => {
 describe("circular simple-type references", () => {
   it("drops the circular union member with a diagnostic", async () => {
     await withTempDirAsync(async (dir) => {
-      const ir = parseXsd([writeSchema(dir, MUTUAL_UNION_XSD)]);
+      const ir = await parseXsd([writeSchema(dir, MUTUAL_UNION_XSD)]);
       expect(ir.diagnostics).toEqual([
         {
           kind: "circular-union-member",
@@ -87,7 +87,7 @@ describe("circular simple-type references", () => {
   it("pure self-loop union empties the member list with a diagnostic", async () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, SELF_LOOP_XSD);
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       expect(ir.diagnostics).toEqual([
         {
           kind: "circular-union-member",
@@ -106,7 +106,7 @@ describe("circular simple-type references", () => {
   it("drops a list whose item type closes a cycle", async () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, LIST_CYCLE_XSD);
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       expect(ir.diagnostics).toEqual([
         {
           kind: "circular-derivation",
@@ -128,7 +128,7 @@ describe("circular simple-type references", () => {
   it("drops a restriction whose base closes a cycle", async () => {
     await withTempDirAsync(async (dir) => {
       const file = writeSchema(dir, RESTRICTION_CYCLE_XSD);
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       expect(ir.diagnostics).toEqual([
         {
           kind: "circular-derivation",

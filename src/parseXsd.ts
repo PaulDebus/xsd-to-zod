@@ -52,34 +52,67 @@ const parser = new XMLParser({
   OutputBuilder: createOutputBuilder(),
 });
 
+const MAX_ENTITY_EXPANSION_BYTES = 10 * 1024 * 1024;
+
 // Expand general entities declared in the document's internal DTD subset.
 // The parser only knows the predefined entities, but some schemas (the wg
 // IRI type library) build pattern facets from <!ENTITY> declarations.
 // First declaration wins (XML spec); references nest, so expansion recurses
-// with a cycle guard.
+// with a cycle guard and a hard expansion budget.
 const expandInternalEntities = (xml: string): string => {
   const doctype = /<!DOCTYPE[^>[]*\[([\s\S]*?)\]\s*>/.exec(xml);
   const subset = doctype?.[1];
   if (subset === undefined) {
     return xml;
   }
+  if (/<!ENTITY\s+(?:%\s*)?[^\s%]+\s+(?:SYSTEM|PUBLIC)\b/i.test(subset)) {
+    throw new Xsd2ZodError("external-entity", "External entities are not supported");
+  }
   const entities = new Map<string, string>();
-  for (const m of subset.matchAll(/<!ENTITY\s+([^\s%]+)\s+"([^"]*)"\s*>/g)) {
+  for (const m of subset.matchAll(/<!ENTITY\s+([^\s%]+)\s+(?:"([^"]*)"|'([^']*)')\s*>/g)) {
     const name = m[1];
     if (name !== undefined && !entities.has(name)) {
-      entities.set(name, m[2] ?? "");
+      entities.set(name, m[2] ?? m[3] ?? "");
     }
   }
   if (entities.size === 0) {
     return xml;
   }
+  const budget = { remaining: MAX_ENTITY_EXPANSION_BYTES };
+  const expandEntity = (value: string, seen: Set<string>, write: (chunk: string) => void): void => {
+    let offset = 0;
+    for (const match of value.matchAll(/&([^\s;&]+);/g)) {
+      write(value.slice(offset, match.index));
+      const ref = match[0];
+      const name = match[1];
+      const replacement = name === undefined ? undefined : entities.get(name);
+      if (replacement === undefined || name === undefined || seen.has(name)) {
+        write(ref);
+      } else {
+        expandEntity(replacement, new Set(seen).add(name), write);
+      }
+      offset = match.index + ref.length;
+    }
+    write(value.slice(offset));
+  };
   const expand = (value: string, seen: Set<string>): string =>
     value.replace(/&([^\s;&]+);/g, (ref, name: string) => {
       const replacement = entities.get(name);
       if (replacement === undefined || seen.has(name)) {
         return ref;
       }
-      return expand(replacement, new Set(seen).add(name));
+      const chunks: string[] = [];
+      expandEntity(replacement, new Set(seen).add(name), (chunk) => {
+        budget.remaining -= Buffer.byteLength(chunk);
+        if (budget.remaining < 0) {
+          throw new Xsd2ZodError(
+            "entity-expansion-too-large",
+            `Internal entity expansion exceeds ${MAX_ENTITY_EXPANSION_BYTES} bytes`,
+          );
+        }
+        chunks.push(chunk);
+      });
+      return chunks.join("");
     });
   const doctypeStart = doctype?.index ?? 0;
   const head = xml.slice(0, doctypeStart + (doctype?.[0].length ?? 0));
@@ -418,19 +451,20 @@ const collectNamespaceMap = (schemaNode: AnyNode): Record<string, string> => {
 const getNodeTagLocalName = (tag: string): string => splitQName(tag).local;
 
 const readSchema = (
-  filePath: string,
+  location: string,
+  content: string,
 ): {
   schemaNode: AnyNode;
   nsMap: Record<string, string>;
   targetNs: string;
   formDefaults: SchemaFormDefaults;
 } => {
-  const xml = normalizeLineEndings(expandInternalEntities(readXmlFile(filePath)));
+  const xml = normalizeLineEndings(expandInternalEntities(content));
   const parsed = parser.parse(xml) as Record<string, AnyNode>;
   const schemaEntry = Object.entries(parsed).find(([key]) => getNodeTagLocalName(key) === "schema");
   if (!schemaEntry) {
-    throw new Xsd2ZodError("no-schema-root", `No schema root found in ${filePath}`, {
-      file: filePath,
+    throw new Xsd2ZodError("no-schema-root", `No schema root found in ${location}`, {
+      file: location,
     });
   }
   const schemaNode = schemaEntry[1];
@@ -1350,10 +1384,38 @@ type DeferredInlineType = {
   formDefaults: SchemaFormDefaults;
 };
 
+export type SchemaResolutionBase = { kind: "file"; path: string } | { kind: "url"; url: string };
+
+export type ResolvedSchema = {
+  /** Decoded XML content. */
+  content: string;
+  /** Final resolved location: an absolute path for local schemas, final URL for remote schemas. */
+  url: string;
+};
+
+export type ResolveSchema = (
+  location: string,
+  base: SchemaResolutionBase,
+) => Promise<ResolvedSchema | undefined>;
+
+export type ParseXsdOptions = {
+  /** When true, unresolved element refs produce a fallback field with z.unknown()
+   *  type instead of being silently dropped. Without this flag, unresolved refs
+   *  are dropped (old behaviour) and only a warning is emitted. */
+  allowMissingImports?: boolean;
+  /** Resolve a schema location relative to the containing file or URL. Returning
+   *  undefined keeps a remote location unresolved; local locations still fall
+   *  back to the default file reader. parseXsd itself never fetches. */
+  resolveSchema?: ResolveSchema;
+  /** Called with the final URL of each schema supplied by the resolver. */
+  onFetch?: (url: string) => void;
+};
+
 type QueueEntry = {
-  file: string;
+  location: string;
+  base: SchemaResolutionBase;
   inheritedTargetNs?: string;
-  /** True when this file was passed directly by the user; errors reading entry points should still throw. */
+  /** True when this schema was passed directly by the user; errors reading entry points should still throw. */
   entryPoint?: boolean;
 };
 
@@ -1364,13 +1426,6 @@ type RedefineOverride = {
   nsMap: Record<string, string>;
   targetNs: string;
   formDefaults: SchemaFormDefaults;
-};
-
-export type ParseXsdOptions = {
-  /** When true, unresolved element refs produce a fallback field with z.unknown()
-   *  type instead of being silently dropped. Without this flag, unresolved refs
-   *  are dropped (old behaviour) and only a warning is emitted. */
-  allowMissingImports?: boolean;
 };
 
 type PendingFile = {
@@ -1453,64 +1508,140 @@ type ScannedFile = {
   formDefaults: SchemaFormDefaults;
 };
 
+const REMOTE_SCHEMA_RE = /^https?:/i;
+
+const isRemoteSchemaLocation = (location: string): boolean => REMOTE_SCHEMA_RE.test(location);
+
+const sourceForLocation = (location: string): SchemaResolutionBase =>
+  isRemoteSchemaLocation(location)
+    ? { kind: "url", url: location }
+    : { kind: "file", path: location };
+
+const defaultResolveSchema = async (
+  location: string,
+  base: SchemaResolutionBase,
+): Promise<ResolvedSchema | undefined> => {
+  if (base.kind !== "file" || isRemoteSchemaLocation(location)) {
+    return undefined;
+  }
+  const filePath = path.resolve(path.dirname(base.path), location);
+  try {
+    return { content: readXmlFile(filePath), url: filePath };
+  } catch {
+    return undefined;
+  }
+};
+
 // Read entry points plus every schema reachable via schemaLocation and
 // return them in dependency order (depth-first, dependencies first).
-const scanSchemaFiles = (files: string[], diagnostics: Diagnostic[]): ScannedFile[] => {
+const scanSchemaFiles = async (
+  files: string[],
+  diagnostics: Diagnostic[],
+  opts?: ParseXsdOptions,
+): Promise<ScannedFile[]> => {
   const allFiles: ScannedFile[] = [];
-  const scanKey = (file: string, inheritedTargetNs?: string): string =>
-    `${file}|${inheritedTargetNs ?? ""}`;
+  const scanKey = (location: string, inheritedTargetNs?: string): string =>
+    `${location}|${inheritedTargetNs ?? ""}`;
   const scanned = new Set<string>();
 
-  const visit = (entry: QueueEntry): void => {
-    const key = scanKey(entry.file, entry.inheritedTargetNs);
+  const resolveSchema = async (
+    location: string,
+    base: SchemaResolutionBase,
+  ): Promise<ResolvedSchema | undefined> => {
+    const resolved = await opts?.resolveSchema?.(location, base);
+    return resolved ?? defaultResolveSchema(location, base);
+  };
+
+  const visit = async (entry: QueueEntry): Promise<void> => {
+    const resolved = await resolveSchema(entry.location, entry.base);
+    if (resolved === undefined) {
+      if (entry.entryPoint) {
+        throw new Xsd2ZodError("unresolved-entry", `Unable to resolve schema "${entry.location}"`, {
+          file: entry.location,
+        });
+      }
+      const remote = isRemoteSchemaLocation(entry.location) || entry.base.kind === "url";
+      if (remote) {
+        report(
+          diagnostics,
+          "remote-schema-location",
+          `remote schemaLocation "${entry.location}" skipped (not resolved)`,
+          entry.location,
+        );
+      } else {
+        const localLocation =
+          entry.base.kind === "file"
+            ? path.resolve(path.dirname(entry.base.path), entry.location)
+            : entry.location;
+        report(
+          diagnostics,
+          "unresolved-import",
+          `unable to read schema "${localLocation}"`,
+          localLocation,
+        );
+      }
+      return;
+    }
+
+    const location = isRemoteSchemaLocation(resolved.url)
+      ? resolved.url
+      : path.resolve(resolved.url);
+    const key = scanKey(location, entry.inheritedTargetNs);
     if (scanned.has(key)) {
       return;
     }
+    if (isRemoteSchemaLocation(location)) {
+      opts?.onFetch?.(location);
+    }
     scanned.add(key);
+    const scannedEntry: QueueEntry = {
+      location,
+      ...optProp("inheritedTargetNs", entry.inheritedTargetNs),
+      ...optProp("entryPoint", entry.entryPoint),
+      base: sourceForLocation(location),
+    };
 
     let schemaNode: AnyNode;
     let nsMap: Record<string, string>;
     let targetNs: string;
     let formDefaults: SchemaFormDefaults;
     try {
-      const result = readSchema(entry.file);
+      const result = readSchema(location, resolved.content);
       ({ schemaNode, nsMap, targetNs, formDefaults } = result);
     } catch (err) {
-      if (entry.entryPoint) {
+      if (
+        entry.entryPoint ||
+        (err instanceof Xsd2ZodError && err.code === "entity-expansion-too-large")
+      ) {
         throw err;
       }
-      report(diagnostics, "unresolved-import", `unable to read schema "${entry.file}"`, entry.file);
+      report(diagnostics, "unresolved-import", `unable to read schema "${location}"`, location);
       return;
     }
 
     for (const [tag, child] of nodeChildren(schemaNode)) {
       const localTag = getNodeTagLocalName(tag);
+      if (localTag !== "import" && localTag !== "include" && localTag !== "redefine") {
+        continue;
+      }
       const schemaLocation = child["@_schemaLocation"] ? String(child["@_schemaLocation"]) : "";
       if (!schemaLocation) {
         continue;
       }
-      if (/^https?:/i.test(schemaLocation)) {
-        report(
-          diagnostics,
-          "remote-schema-location",
-          `remote schemaLocation "${schemaLocation}" skipped (not resolved)`,
-          schemaLocation,
-        );
-        continue;
-      }
-      if (localTag !== "import" && localTag !== "include" && localTag !== "redefine") {
-        continue;
-      }
-      const resolved = path.resolve(path.dirname(entry.file), schemaLocation);
       const ns = localTag === "include" ? targetNs || entry.inheritedTargetNs || "" : undefined;
-      visit({ file: resolved, ...optProp("inheritedTargetNs", ns) });
+      await visit({
+        location: schemaLocation,
+        base: scannedEntry.base,
+        ...optProp("inheritedTargetNs", ns),
+      });
     }
 
-    allFiles.push({ entry, schemaNode, nsMap, targetNs, formDefaults });
+    allFiles.push({ entry: scannedEntry, schemaNode, nsMap, targetNs, formDefaults });
   };
 
   for (const file of files) {
-    visit({ file: path.resolve(file), entryPoint: true });
+    const location = isRemoteSchemaLocation(file) ? file : path.resolve(file);
+    await visit({ location, base: sourceForLocation(location), entryPoint: true });
   }
   return allFiles;
 };
@@ -2210,7 +2341,7 @@ const resolveForwardSimpleContentBases = (state: ParseState): void => {
   }
 };
 
-export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
+export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise<XsdIr> => {
   const state: ParseState = {
     simpleTypes: {},
     complexTypes: {},
@@ -2232,7 +2363,7 @@ export const parseXsd = (files: string[], opts?: ParseXsdOptions): XsdIr => {
     allowMissingImports: opts?.allowMissingImports ?? false,
   };
 
-  const scannedFiles = scanSchemaFiles(files, state.diagnostics);
+  const scannedFiles = await scanSchemaFiles(files, state.diagnostics, opts);
   const { pendingFiles, redefineOverrides } = collectDeclarations(state, scannedFiles);
   applyGroupRedefines(state, redefineOverrides);
   collectTopLevelElements(state, pendingFiles);

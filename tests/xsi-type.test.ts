@@ -102,7 +102,7 @@ describe("xsi:type polymorphism — codegen", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, ZOO_XSD);
-      const { schemas } = irToZod(parseXsd([file]));
+      const { schemas } = irToZod(await parseXsd([file]));
 
       // One union over base + derived, discriminating on xsiType. The
       // declared variant is a separate const from the derived-position one:
@@ -134,7 +134,7 @@ describe("xsi:type polymorphism — codegen", () => {
 </xs:schema>`;
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, xsd);
-      const { schemas } = irToZod(parseXsd([file]));
+      const { schemas } = irToZod(await parseXsd([file]));
       expect(schemas).not.toContain("xsiType");
       expect(schemas).not.toContain("discriminatedUnion");
     });

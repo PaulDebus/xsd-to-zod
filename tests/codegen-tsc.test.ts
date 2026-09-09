@@ -18,14 +18,14 @@ describe("generated code typechecks", () => {
 
   it.each([{ extraFlags: [] }, { extraFlags: ["--exactOptionalPropertyTypes"] }])(
     `tsc --noEmit $extraFlags passes for all ${cases.length} curated cases`,
-    ({ extraFlags }) => {
+    async ({ extraFlags }) => {
       const baseDir = path.resolve(".xsd-to-zod-tests");
       fs.mkdirSync(baseDir, { recursive: true });
       const dir = fs.mkdtempSync(path.join(baseDir, "tsc-smoke-"));
       try {
         const files: string[] = [];
         for (const c of cases) {
-          const { schemas } = irToZod(parseXsd(c.xsdFiles));
+          const { schemas } = irToZod(await parseXsd(c.xsdFiles));
           const file = path.join(dir, `${c.name.replaceAll("/", "--")}.zod.ts`);
           fs.writeFileSync(file, schemas);
           files.push(file);

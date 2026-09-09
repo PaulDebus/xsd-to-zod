@@ -22,7 +22,7 @@ import {
   xsdNMTOKENS,
   xsdTime,
 } from "../src/xsdLexicals.js";
-import { generateAndImport, withTempDir, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Lexical checks for the XSD builtin datatypes in the zod tier: valid W3C
 // lexicals pass, garbage is rejected, values stay strings.
@@ -37,7 +37,7 @@ const cases = (validator: (value: string) => boolean, valid: string[], invalid: 
 };
 
 describe("xsdLexicals validators", () => {
-  it("xs:date", () => {
+  it("xs:date", async () => {
     cases(
       xsdDate,
       [
@@ -70,7 +70,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:dateTime", () => {
+  it("xs:dateTime", async () => {
     cases(
       xsdDateTime,
       [
@@ -98,7 +98,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:time", () => {
+  it("xs:time", async () => {
     cases(
       xsdTime,
       ["12:00:00", "24:00:00", "24:00:00.0", "23:59:59Z", "12:00:00.123+14:00", "00:00:00-14:00"],
@@ -116,7 +116,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:duration", () => {
+  it("xs:duration", async () => {
     cases(
       xsdDuration,
       [
@@ -135,7 +135,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:gYear", () => {
+  it("xs:gYear", async () => {
     cases(
       xsdGYear,
       ["2002", "-2002", "2002Z", "12002", " 2002 "],
@@ -143,7 +143,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:gYearMonth", () => {
+  it("xs:gYearMonth", async () => {
     cases(
       xsdGYearMonth,
       ["2002-10", "-2002-10", "2002-10+05:00"],
@@ -151,11 +151,11 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:gMonth", () => {
+  it("xs:gMonth", async () => {
     cases(xsdGMonth, ["--10", "--01Z", "--12+05:00"], ["--13", "--00", "-10", "--1", ""]);
   });
 
-  it("xs:gMonthDay", () => {
+  it("xs:gMonthDay", async () => {
     cases(
       xsdGMonthDay,
       ["--10-10", "--02-29", "--12-31Z"],
@@ -163,15 +163,15 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:gDay", () => {
+  it("xs:gDay", async () => {
     cases(xsdGDay, ["---01", "---31", "---10Z"], ["---00", "---32", "--10", "---1", ""]);
   });
 
-  it("xs:hexBinary", () => {
+  it("xs:hexBinary", async () => {
     cases(xsdHexBinary, ["", "AB", "ab12", "0FB7", " ab12 "], ["ABC", "A", "ZZ", "AB CD", "0x12"]);
   });
 
-  it("xs:base64Binary", () => {
+  it("xs:base64Binary", async () => {
     cases(
       xsdBase64Binary,
       ["", "QUJD", "QUJDRA==", "QUJD RA==", " Q U J D "],
@@ -179,7 +179,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:language", () => {
+  it("xs:language", async () => {
     cases(
       xsdLanguage,
       ["en", "e", "en-US", "de-CH-1901", "i-klingon", "x-private"],
@@ -187,7 +187,7 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:Name", () => {
+  it("xs:Name", async () => {
     cases(
       xsdName,
       ["foo", ":foo", "a.b-c_d", "élan", "_x"],
@@ -195,36 +195,36 @@ describe("xsdLexicals validators", () => {
     );
   });
 
-  it("xs:NCName (also ID/IDREF/ENTITY)", () => {
+  it("xs:NCName (also ID/IDREF/ENTITY)", async () => {
     cases(xsdNCName, ["foo", "foo.bar", "é-1"], ["foo:bar", ":foo", "1foo", "fo o", ""]);
   });
 
-  it("xs:NMTOKEN", () => {
+  it("xs:NMTOKEN", async () => {
     cases(xsdNMTOKEN, ["foo", "1foo", ".", "-", "a:b", "12.5"], ["", "a b", "a?b"]);
   });
 
-  it("xs:NMTOKENS", () => {
+  it("xs:NMTOKENS", async () => {
     cases(xsdNMTOKENS, ["foo", "foo bar", "foo  bar", " a b "], ["", "  ", "a?b", "a b?"]);
   });
 
-  it("xs:IDREFS / xs:ENTITIES (NCName list)", () => {
+  it("xs:IDREFS / xs:ENTITIES (NCName list)", async () => {
     cases(xsdNCNames, ["a", "a b.c", " a  b "], ["", "  ", "a b:c", ":a", "a 1b"]);
   });
 });
 
-const codeFor = (xsd: string): string => {
+const codeFor = async (xsd: string): Promise<string> => {
   let code = "";
-  withTempDir((dir) => {
+  await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
-    code = irToZod(parseXsd([file])).schemas;
+    code = irToZod(await parseXsd([file])).schemas;
   });
   return code;
 };
 
 describe("builtin lexical codegen", () => {
-  it("emits a refine per covered builtin and imports only the used helpers", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("emits a refine per covered builtin and imports only the used helpers", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
     <xs:complexType>
@@ -246,8 +246,8 @@ describe("builtin lexical codegen", () => {
     expect(code).not.toContain("xsdTime");
   });
 
-  it("emits value-space bounds for bounded integer builtins", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("emits value-space bounds for bounded integer builtins", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
     <xs:complexType>
@@ -266,8 +266,8 @@ describe("builtin lexical codegen", () => {
     expect(code).toContain('"l": z.bigint().min(-9223372036854775808n).max(9223372036854775807n)');
   });
 
-  it("applies the fixed whiteSpace facet of token/normalizedString; anyURI stays plain", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("applies the fixed whiteSpace facet of token/normalizedString; anyURI stays plain", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
     <xs:complexType>

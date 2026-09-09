@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
-import { withTempDir } from "./helpers.js";
+import { withTempDirAsync } from "./helpers.js";
 
 // Static types must survive codegen: z.infer<typeof XSchema> yields the TS
 // type of the XSD complex type, not any (#146). The old
@@ -66,7 +66,7 @@ export { person, manager, status, scores, missing, badStatus, badScores };
 `;
 
 describe("generated schemas preserve static types (#146)", () => {
-  it("z.infer yields the XSD complex type, enforced by tsc", () => {
+  it("z.infer yields the XSD complex type, enforced by tsc", async () => {
     // Under the package-root dotdir so the generated module's bare
     // 'xsd-to-zod' self-reference resolves (it does not from os.tmpdir()).
     const baseDir = path.resolve(".xsd-to-zod-tests");
@@ -75,7 +75,7 @@ describe("generated schemas preserve static types (#146)", () => {
     try {
       const xsdFile = path.join(dir, "schema.xsd");
       fs.writeFileSync(xsdFile, XSD);
-      fs.writeFileSync(path.join(dir, "schema.zod.ts"), irToZod(parseXsd([xsdFile])).schemas);
+      fs.writeFileSync(path.join(dir, "schema.zod.ts"), irToZod(await parseXsd([xsdFile])).schemas);
       fs.writeFileSync(path.join(dir, "consumer.ts"), CONSUMER);
 
       const tsc = path.resolve("node_modules/.bin/tsc");
@@ -103,21 +103,21 @@ describe("generated schemas preserve static types (#146)", () => {
     }
   }, 60_000);
 
-  it("emits interfaces only in TS mode, annotations only in TS mode", () => {
-    withTempDir((dir) => {
+  it("emits interfaces only in TS mode, annotations only in TS mode", async () => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "schema.xsd");
       fs.writeFileSync(xsdFile, XSD);
-      const ts = irToZod(parseXsd([xsdFile])).schemas;
+      const ts = irToZod(await parseXsd([xsdFile])).schemas;
       expect(ts).toContain("export interface PersonType {");
       expect(ts).toContain("const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(");
-      const js = irToZod(parseXsd([xsdFile]), { js: true }).schemas;
+      const js = irToZod(await parseXsd([xsdFile]), { js: true }).schemas;
       expect(js).not.toContain("export interface");
       expect(js).not.toContain("z.ZodType<");
       expect(js).toContain("const PersonTypeSchema = z.lazy(");
     });
   });
 
-  it("renames interfaces that collide with TS type keywords", () => {
+  it("renames interfaces that collide with TS type keywords", async () => {
     const RESERVED_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:reserved" xmlns:t="urn:reserved">
   <xs:complexType name="boolean">
@@ -128,10 +128,10 @@ describe("generated schemas preserve static types (#146)", () => {
   </xs:complexType>
   <xs:element name="root" type="t:any"/>
 </xs:schema>`;
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "schema.xsd");
       fs.writeFileSync(xsdFile, RESERVED_XSD);
-      const code = irToZod(parseXsd([xsdFile])).schemas;
+      const code = irToZod(await parseXsd([xsdFile])).schemas;
       expect(code).toContain("export interface booleanType {");
       expect(code).toContain("export interface anyType {");
       expect(code).toContain('"b": booleanType;');

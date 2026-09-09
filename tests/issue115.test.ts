@@ -3,17 +3,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { irToZod, parseXsd } from "../src/index.js";
-import { generateAndImport, withTempDir, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for length facet units: octets for hex/base64 binary,
 // list items for IDREFS/NMTOKENS/ENTITIES — not string characters.
 
-const codeFor = (xsd: string): string => {
+const codeFor = async (xsd: string): Promise<string> => {
   let code = "";
-  withTempDir((dir) => {
+  await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
-    code = irToZod(parseXsd([file])).schemas;
+    code = irToZod(await parseXsd([file])).schemas;
   });
   return code;
 };
@@ -35,7 +35,7 @@ const XSD = (body: string): string => `<?xml version="1.0"?>
 
 describe("length facet units (#115)", () => {
   it("hexBinary length counts octets, not characters", async () => {
-    const code = codeFor(
+    const code = await codeFor(
       XSD(`
     <xs:simpleType>
       <xs:restriction base="xs:hexBinary">
@@ -56,8 +56,8 @@ describe("length facet units (#115)", () => {
     expect(schema.safeParse("0A1B2C").success).toBe(false); // 3 octets
   });
 
-  it("base64Binary length counts decoded octets", () => {
-    const code = codeFor(
+  it("base64Binary length counts decoded octets", async () => {
+    const code = await codeFor(
       XSD(`
     <xs:simpleType>
       <xs:restriction base="xs:base64Binary">
@@ -81,8 +81,8 @@ describe("length facet units (#115)", () => {
     expect(schema.safeParse("a b c").success).toBe(false); // 3 items
   });
 
-  it("NMTOKENS minLength counts items", () => {
-    const code = codeFor(
+  it("NMTOKENS minLength counts items", async () => {
+    const code = await codeFor(
       XSD(`
     <xs:simpleType>
       <xs:restriction base="xs:NMTOKENS">

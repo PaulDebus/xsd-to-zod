@@ -170,12 +170,17 @@ xsd-to-zod validate data.xml --xsd schema.xsd -e libxml2         # conformance t
 import { parseXsd, irToZod, runPostGenerationFormatting } from 'xsd-to-zod';
 import { writeFileSync } from 'node:fs';
 
-const ir = parseXsd(['schema.xsd']);
+const ir = await parseXsd(['schema.xsd']);
 const { schemas } = irToZod(ir);
 
 writeFileSync('schema.zod.ts', schemas);
 runPostGenerationFormatting(['schema.zod.ts']);
 ```
+
+`parseXsd` is asynchronous and never fetches from the network itself. Library
+consumers can supply `resolveSchema(location, base)` to materialize an http(s)
+entry schema or remote import; returning `undefined` preserves the default
+"remote schemaLocation skipped" diagnostic.
 
 ### Parse and serialize XML
 

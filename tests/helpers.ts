@@ -104,8 +104,8 @@ export async function importGeneratedSchemas(
 }
 
 // parseXsd → irToZod → importGeneratedSchemas in one call (#84).
-export const generateAndImport = (xsdFiles: string[]): Promise<Record<string, unknown>> =>
-  importGeneratedSchemas(irToZod(parseXsd(xsdFiles)).schemas);
+export const generateAndImport = async (xsdFiles: string[]): Promise<Record<string, unknown>> =>
+  importGeneratedSchemas(irToZod(await parseXsd(xsdFiles)).schemas);
 
 const stripProlog = (xml: string): string =>
   xml
@@ -373,7 +373,7 @@ export async function runRoundTrip(
   xmlFile: string,
   expected?: unknown,
 ): Promise<void> {
-  const { schemas } = irToZod(parseXsd(xsdFiles));
+  const { schemas } = irToZod(await parseXsd(xsdFiles));
   const xml = readXmlFile(xmlFile);
   const mod = await importGeneratedSchemas(schemas);
   const rootSchema = findRootSchema(mod, xml);

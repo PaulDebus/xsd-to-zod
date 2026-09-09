@@ -231,7 +231,7 @@ describe("xs:list attribute fixed values", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, LIST_FIXED_XSD);
-      schemas = irToZod(parseXsd([file])).schemas;
+      schemas = irToZod(await parseXsd([file])).schemas;
     });
     expect(schemas).toContain(
       ".refine((val) => val.length === 2 && val.every((item, i) => Object.is(item, [1, 2][i])), { message: 'value does not match the fixed value' })",
@@ -307,7 +307,7 @@ describe("xs:list root element fixed/default values", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, ROOT_LIST_FIXED_XSD);
-      schemas = irToZod(parseXsd([file])).schemas;
+      schemas = irToZod(await parseXsd([file])).schemas;
     });
     expect(schemas).toContain("fixedValue: [1, 2]");
     expect(schemas).not.toContain("NaN");

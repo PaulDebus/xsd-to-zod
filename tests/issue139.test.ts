@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/index.js";
-import { withTempDir } from "./helpers.js";
+import { withTempDirAsync } from "./helpers.js";
 
 // Regression tests for unresolvable schemaLocations: an xs:import/xs:include
 // schemaLocation is only a hint. An http(s) location must never be read as a
@@ -19,11 +19,11 @@ const IMPORT_REMOTE_XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 describe("remote schemaLocation hints", () => {
-  it("are skipped with a remote-schema-location diagnostic, never read as files", () => {
-    withTempDir((dir) => {
+  it("are skipped with a remote-schema-location diagnostic, never read as files", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, IMPORT_REMOTE_XSD);
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       expect(ir.elements["{}doc"]).toBeDefined();
       expect(ir.diagnostics).toEqual([
         {
@@ -50,11 +50,11 @@ const IMPORT_MISSING_LOCAL_XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 describe("unresolvable local schemaLocation hints", () => {
-  it("are skipped with an unresolved-import diagnostic instead of crashing", () => {
-    withTempDir((dir) => {
+  it("are skipped with an unresolved-import diagnostic instead of crashing", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, IMPORT_MISSING_LOCAL_XSD);
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       expect(ir.elements["{}doc"]).toBeDefined();
       const missing = path.join(dir, "missing.xsd");
       expect(ir.diagnostics).toEqual([
@@ -67,9 +67,9 @@ describe("unresolvable local schemaLocation hints", () => {
     });
   });
 
-  it("still throws for an unreadable entry-point file", () => {
-    withTempDir((dir) => {
-      expect(() => parseXsd([path.join(dir, "does-not-exist.xsd")])).toThrow();
+  it("still throws for an unreadable entry-point file", async () => {
+    await withTempDirAsync(async (dir) => {
+      await expect(parseXsd([path.join(dir, "does-not-exist.xsd")])).rejects.toThrow();
     });
   });
 });

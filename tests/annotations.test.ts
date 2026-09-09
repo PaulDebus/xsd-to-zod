@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
-import { withTempDir } from "./helpers.js";
+import { withTempDirAsync } from "./helpers.js";
 
 // Issue #25: xs:annotation/xs:documentation is extracted into the IR and
 // emitted as zod .describe() on types, elements, attributes and fields.
@@ -33,8 +33,8 @@ const REFS_XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 describe("xs:annotation/xs:documentation (#25)", () => {
-  it("extracts documentation into the IR", () => {
-    const ir = parseXsd([FIXTURE]);
+  it("extracts documentation into the IR", async () => {
+    const ir = await parseXsd([FIXTURE]);
 
     expect(ir.simpleTypes["{urn:curated}AmountType"]!.description).toBe(
       "Monetary amount with two fraction digits",
@@ -53,11 +53,11 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     ).toBeUndefined();
   });
 
-  it("falls back to the referenced global declaration and joins multiple documentation entries", () => {
-    withTempDir((dir) => {
+  it("falls back to the referenced global declaration and joins multiple documentation entries", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "refs.xsd");
       fs.writeFileSync(file, REFS_XSD);
-      const fields = parseXsd([file]).complexTypes["{urn:test}InvoiceType"]!.fields;
+      const fields = (await parseXsd([file])).complexTypes["{urn:test}InvoiceType"]!.fields;
 
       expect(fields.find((f) => f.kind === "attribute")?.description).toBe(
         "ISO 4217 currency code",
@@ -66,8 +66,8 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     });
   });
 
-  it("emits JSDoc comments on interfaces and their properties", () => {
-    const { schemas } = irToZod(parseXsd([FIXTURE]));
+  it("emits JSDoc comments on interfaces and their properties", async () => {
+    const { schemas } = irToZod(await parseXsd([FIXTURE]));
 
     // Interface-level JSDoc from complexType description.
     expect(schemas).toContain("/** An invoice line item */\nexport interface InvoiceType");
@@ -78,8 +78,8 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     expect(schemas).toContain("/** Root invoice element */\nexport const invoiceSchema");
   });
 
-  it("falls back to the type description for root const JSDoc", () => {
-    withTempDir((dir) => {
+  it("falls back to the type description for root const JSDoc", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "root-fallback.xsd");
       fs.writeFileSync(
         file,
@@ -91,24 +91,24 @@ describe("xs:annotation/xs:documentation (#25)", () => {
   <xs:element name="Root" type="T"/>
 </xs:schema>`,
       );
-      const { schemas } = irToZod(parseXsd([file]));
+      const { schemas } = irToZod(await parseXsd([file]));
       expect(schemas).toContain("/** Type docs */\nexport const RootSchema");
     });
   });
 
-  it("formats multi-line documentation as multi-line JSDoc", () => {
-    withTempDir((dir) => {
+  it("formats multi-line documentation as multi-line JSDoc", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "refs.xsd");
       fs.writeFileSync(file, REFS_XSD);
-      const { schemas } = irToZod(parseXsd([file]));
+      const { schemas } = irToZod(await parseXsd([file]));
       expect(schemas).toContain(
         '  /**\n   * Line total\n   * Zeilensumme\n   */\n  "amount": number;',
       );
     });
   });
 
-  it("emits .describe() for types, elements, attributes and fields", () => {
-    const { schemas } = irToZod(parseXsd([FIXTURE]));
+  it("emits .describe() for types, elements, attributes and fields", async () => {
+    const { schemas } = irToZod(await parseXsd([FIXTURE]));
 
     expect(schemas).toContain('.describe("Monetary amount with two fraction digits")');
     expect(schemas).toContain('.describe("An invoice line item")');
@@ -117,8 +117,8 @@ describe("xs:annotation/xs:documentation (#25)", () => {
     expect(schemas).toContain('.describe("ISO 4217 currency code")');
   });
 
-  it("leaves generated code unchanged when no annotations are present", () => {
+  it("leaves generated code unchanged when no annotations are present", async () => {
     const fixture = path.resolve("testdata/curated/basic/simpleType.xsd");
-    expect(irToZod(parseXsd([fixture])).schemas).not.toContain(".describe(");
+    expect(irToZod(await parseXsd([fixture])).schemas).not.toContain(".describe(");
   });
 });
