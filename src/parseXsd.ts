@@ -1389,7 +1389,9 @@ export type SchemaResolutionBase = { kind: "file"; path: string } | { kind: "url
 export type ResolvedSchema = {
   /** Decoded XML content. */
   content: string;
-  /** Final resolved location: an absolute path for local schemas, final URL for remote schemas. */
+  /** Final resolved location. Must be an absolute file path for local schemas
+   *  or an absolute URL for remote schemas; a relative local path is resolved
+   *  against the referring base as a safety net. */
   url: string;
 };
 
@@ -1405,7 +1407,8 @@ export type ParseXsdOptions = {
   allowMissingImports?: boolean;
   /** Resolve a schema location relative to the containing file or URL. Returning
    *  undefined keeps a remote location unresolved; local locations still fall
-   *  back to the default file reader. parseXsd itself never fetches. */
+   *  back to the default file reader. parseXsd itself never fetches.
+   *  A resolver that throws rejects parseXsd with that error. */
   resolveSchema?: ResolveSchema;
   /** Called with the final URL of each schema supplied by the resolver. */
   onFetch?: (url: string) => void;
@@ -1517,6 +1520,23 @@ const sourceForLocation = (location: string): SchemaResolutionBase =>
     ? { kind: "url", url: location }
     : { kind: "file", path: location };
 
+const normalizeResolvedUrl = (url: string, base: SchemaResolutionBase): string => {
+  if (isRemoteSchemaLocation(url)) {
+    return url;
+  }
+  if (path.isAbsolute(url)) {
+    return path.resolve(url);
+  }
+  if (base.kind === "url") {
+    try {
+      return new URL(url, base.url).href;
+    } catch {
+      return path.resolve(url);
+    }
+  }
+  return path.resolve(path.dirname(base.path), url);
+};
+
 const defaultResolveSchema = async (
   location: string,
   base: SchemaResolutionBase,
@@ -1583,9 +1603,7 @@ const scanSchemaFiles = async (
       return;
     }
 
-    const location = isRemoteSchemaLocation(resolved.url)
-      ? resolved.url
-      : path.resolve(resolved.url);
+    const location = normalizeResolvedUrl(resolved.url, entry.base);
     const key = scanKey(location, entry.inheritedTargetNs);
     if (scanned.has(key)) {
       return;
@@ -1611,7 +1629,8 @@ const scanSchemaFiles = async (
     } catch (err) {
       if (
         entry.entryPoint ||
-        (err instanceof Xsd2ZodError && err.code === "entity-expansion-too-large")
+        (err instanceof Xsd2ZodError &&
+          (err.code === "entity-expansion-too-large" || err.code === "external-entity"))
       ) {
         throw err;
       }
