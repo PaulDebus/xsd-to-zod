@@ -7,7 +7,6 @@ import {
   asRestriction,
   generateAndImport,
   importGeneratedSchemas,
-  withTempDir,
   withTempDirAsync,
 } from "./helpers.js";
 
@@ -83,7 +82,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
 
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       const generated = irToZod(ir);
       expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
       expect(generated.schemas).toContain('"approved": z.boolean().optional()');
@@ -190,18 +189,18 @@ describe("xsd-to-zod v1 pipeline", () => {
     expect(parsed["@currency"]).toBe("USD");
   });
 
-  it("flattens multi-level complex type extension chains", () => {
-    withTempDir((dir) => {
+  it("flattens multi-level complex type extension chains", async () => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, EXTENSION_XSD);
 
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       const aFields = ir.complexTypes["{urn:test}A"]?.fields.map((field) => field.qname);
       expect(aFields).toEqual(["{urn:test}cField", "{urn:test}bField", "{urn:test}aField"]);
     });
   });
 
-  it("inherits base-type fields for anonymous inline complexType extensions (#76)", () => {
+  it("inherits base-type fields for anonymous inline complexType extensions (#76)", async () => {
     const INLINE_EXT_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-ext" xmlns:t="urn:inline-ext" elementFormDefault="qualified">
   <xs:complexType name="Base">
@@ -238,11 +237,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:complexType>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, INLINE_EXT_XSD);
 
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
 
       // Top-level element with inline type extending a named base
       const docType = ir.complexTypes["{urn:inline-ext}anonymous_doc_Type"];
@@ -269,7 +268,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("resolves cross-file refs regardless of CLI argument order and types attribute refs from global declarations (#77)", () => {
+  it("resolves cross-file refs regardless of CLI argument order and types attribute refs from global declarations (#77)", async () => {
     const DECLARES_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:declares" xmlns:d="urn:declares" elementFormDefault="qualified">
   <xs:element name="shared" type="xs:string"/>
@@ -298,7 +297,7 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="holder" type="Holder"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const declares = path.join(dir, "declares.xsd");
       const uses = path.join(dir, "uses.xsd");
       fs.writeFileSync(declares, DECLARES_XSD);
@@ -310,7 +309,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         [uses, declares],
         [declares, uses],
       ]) {
-        const ir = parseXsd(order);
+        const ir = await parseXsd(order);
         expect(ir.diagnostics).toEqual([]);
 
         const holder = ir.complexTypes["{urn:uses}Holder"];
@@ -337,7 +336,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("reports unresolved references and unknown prefixes instead of silently dropping them (#77)", () => {
+  it("reports unresolved references and unknown prefixes instead of silently dropping them (#77)", async () => {
     const BROKEN_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:broken" xmlns:b="urn:broken" elementFormDefault="qualified">
   <xs:complexType name="Holder">
@@ -353,12 +352,12 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="holder" type="b:Holder"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, BROKEN_XSD);
 
       // Without allowMissingImports: unresolved element ref is dropped (old behaviour).
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       const holder = ir.complexTypes["{urn:broken}Holder"];
       expect(holder!.fields.map((f) => f.qname)).toEqual([
         "{urn:broken}own",
@@ -367,7 +366,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       ]);
 
       // With allowMissingImports: unresolved element ref becomes a fallback field.
-      const irWithFlag = parseXsd([file], { allowMissingImports: true });
+      const irWithFlag = await parseXsd([file], { allowMissingImports: true });
       const holderWithFlag = irWithFlag.complexTypes["{urn:broken}Holder"];
       expect(holderWithFlag!.fields.map((f) => f.qname)).toEqual([
         "{urn:broken}missing",
@@ -408,7 +407,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("redefine of xs:group and xs:attributeGroup affects their consumers (#78)", () => {
+  it("redefine of xs:group and xs:attributeGroup affects their consumers (#78)", async () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
   <xs:group name="G">
@@ -442,11 +441,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="consumer" type="t:Consumer"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "base.xsd"), BASE_XSD);
       fs.writeFileSync(path.join(dir, "redefine.xsd"), REDEFINE_XSD);
 
-      const ir = parseXsd([path.join(dir, "redefine.xsd")]);
+      const ir = await parseXsd([path.join(dir, "redefine.xsd")]);
       const consumer = ir.complexTypes["{urn:redefine-group}Consumer"];
       expect(consumer).toBeDefined();
       expect(consumer!.fields.map((f) => f.qname)).toEqual([
@@ -458,7 +457,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("redefine-by-restriction replaces the original content model", () => {
+  it("redefine-by-restriction replaces the original content model", async () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-test" xmlns:t="urn:redefine-test" elementFormDefault="qualified">
   <xs:complexType name="AddressType">
@@ -486,11 +485,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:redefine>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "base.xsd"), BASE_XSD);
       fs.writeFileSync(path.join(dir, "redefine.xsd"), REDEFINE_XSD);
 
-      const ir = parseXsd([path.join(dir, "redefine.xsd")]);
+      const ir = await parseXsd([path.join(dir, "redefine.xsd")]);
       const addressType = ir.complexTypes["{urn:redefine-test}AddressType"];
       expect(addressType).toBeDefined();
       const fieldNames = addressType?.fields.map((f) => f.qname);
@@ -499,7 +498,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("redefine-by-extension appends to the original content model", () => {
+  it("redefine-by-extension appends to the original content model", async () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-ext" xmlns:t="urn:redefine-ext" elementFormDefault="qualified">
   <xs:complexType name="AddressType">
@@ -525,11 +524,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:redefine>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "base.xsd"), BASE_XSD);
       fs.writeFileSync(path.join(dir, "redefine.xsd"), REDEFINE_XSD);
 
-      const ir = parseXsd([path.join(dir, "redefine.xsd")]);
+      const ir = await parseXsd([path.join(dir, "redefine.xsd")]);
       const addressType = ir.complexTypes["{urn:redefine-ext}AddressType"];
       expect(addressType).toBeDefined();
       const fieldNames = addressType?.fields.map((f) => f.qname);
@@ -541,7 +540,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("resolves element ref attributes", () => {
+  it("resolves element ref attributes", async () => {
     const REF_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:ref-test" xmlns:t="urn:ref-test" elementFormDefault="qualified">
   <xs:element name="shared" type="xs:string"/>
@@ -554,11 +553,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="container" type="t:Container"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, REF_XSD);
 
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
       const containerType = ir.complexTypes["{urn:ref-test}Container"];
       expect(containerType).toBeDefined();
       const sharedField = containerType?.fields.find((f) => f.qname === "{urn:ref-test}shared");
@@ -568,7 +567,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("parses inline xs:simpleType on elements and attributes into synthetic simple types (#75)", () => {
+  it("parses inline xs:simpleType on elements and attributes into synthetic simple types (#75)", async () => {
     const INLINE_SIMPLE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-simple" xmlns:t="urn:inline-simple" elementFormDefault="qualified">
   <xs:element name="age">
@@ -601,11 +600,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="person" type="t:Person"/>
 </xs:schema>`;
 
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, INLINE_SIMPLE_XSD);
 
-      const ir = parseXsd([file]);
+      const ir = await parseXsd([file]);
 
       // Top-level element: inline simpleType becomes a named simple type, not xs:string
       const age = ir.elements["{urn:inline-simple}age"];
@@ -776,17 +775,19 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="task" type="t:TaskType"/>
 </xs:schema>`;
 
-    const runFacetTest = (fn: (dir: string, file: string) => void): void => {
-      withTempDir((dir) => {
+    const runFacetTest = async (
+      fn: (dir: string, file: string) => void | Promise<void>,
+    ): Promise<void> => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, FACET_XSD);
-        fn(dir, file);
+        await fn(dir, file);
       });
     };
 
-    it("stores facets in IR", () => {
-      runFacetTest((_dir, file) => {
-        const ir = parseXsd([file]);
+    it("stores facets in IR", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const ir = await parseXsd([file]);
         const countryCode = asRestriction(ir.simpleTypes["{urn:facets}CountryCode"]!);
         expect(countryCode).toBeDefined();
         expect(countryCode.facets).toEqual([
@@ -818,36 +819,36 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits pattern + length for CountryCode", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits pattern + length for CountryCode", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const CountryCodeSchema = z.string().length(2).regex(xsdPattern("[A-Z]{2}")).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
         );
       });
     });
 
-    it("emits z.enum for StatusCode", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits z.enum for StatusCode", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const StatusCodeSchema = z.enum(["active", "inactive", "pending"]).register(xmlRegistry, { qname: "{urn:facets}StatusCode" });',
         );
       });
     });
 
-    it("emits min/max for Quantity", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits min/max for Quantity", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const QuantitySchema = z.bigint().min(1n).max(100n).register(xmlRegistry, { qname: "{urn:facets}Quantity" });',
         );
       });
     });
 
-    it("emits fractionDigits refine + decimal-exact min for Price", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits fractionDigits refine + decimal-exact min for Price", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         // Decimal order facets compare the original lexicals exactly in the
         // runtime (facet meta) — the schema keeps the value-space checks.
         expect(generated.schemas).toContain(
@@ -856,9 +857,9 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("imports the digit-check helpers from xsd-to-zod when digit facets are used", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("imports the digit-check helpers from xsd-to-zod when digit facets are used", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         // totalDigits on the integer-based LargeInt is an inline bigint
         // digit-count refine; only fractionDigits still needs the helper.
         // Decimal order facets moved to the runtime's facet meta (#136).
@@ -868,56 +869,56 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits decimal-exact gt/lt refines for Temperature", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits decimal-exact gt/lt refines for Temperature", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const TemperatureSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Temperature", facets: {"minExclusive":"-273.15","maxExclusive":"10000","whiteSpace":"collapse"} });',
         );
       });
     });
 
-    it("emits refine for mixed pattern + enumeration", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits refine for mixed pattern + enumeration", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const ShortCodeSchema = z.string().regex(xsdPattern("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val), { message: \'value is not one of the allowed values\' }).register(xmlRegistry, { qname: "{urn:facets}ShortCode" });',
         );
       });
     });
 
-    it("emits totalDigits as a digit-count refine on the bigint value", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits totalDigits as a digit-count refine on the bigint value", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const LargeIntSchema = z.bigint().refine((val) => String(val < 0n ? -val : val).length <= 5, { message: "expected at most 5 total digits" }).register(xmlRegistry, { qname: "{urn:facets}LargeInt" });',
         );
       });
     });
 
-    it("emits minLength/maxLength for NameType", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits minLength/maxLength for NameType", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const NameTypeSchema = z.string().min(2).max(50).register(xmlRegistry, { qname: "{urn:facets}NameType" });',
         );
       });
     });
 
-    it("emits whiteSpace collapse as a z.preprocess wrapper", () => {
-      runFacetTest((_dir, file) => {
-        const generated = irToZod(parseXsd([file]));
+    it("emits whiteSpace collapse as a z.preprocess wrapper", async () => {
+      await runFacetTest(async (_dir, file) => {
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const TokenTypeSchema = z.clone(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string())).register(xmlRegistry, { qname: "{urn:facets}TokenType", facets: {"whiteSpace":"collapse"} });',
         );
       });
     });
 
-    it("emits z.union of z.literal for numeric enum", () => {
-      withTempDir((dir) => {
+    it("emits z.union of z.literal for numeric enum", async () => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "num-enum.xsd");
         fs.writeFileSync(file, NUM_ENUM_XSD);
-        const generated = irToZod(parseXsd([file]));
+        const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
           'const PrioritySchema = z.union([z.literal(1n), z.literal(2n), z.literal(3n)]).register(xmlRegistry, { qname: "{urn:numEnum}Priority" });',
         );
@@ -940,7 +941,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, TYPED_DEFAULTS_XSD);
-        const generated = irToZod(parseXsd([file]));
+        const generated = irToZod(await parseXsd([file]));
         // fixed → z.literal. Element defaults are NOT zod .default(): XSD
         // applies them to present-but-empty elements, not absent ones, so they
         // live in the field's registry meta as defaultValue (#66).
@@ -1094,7 +1095,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       const xsdFile = path.join(dir, "cyclic.xsd");
       fs.writeFileSync(xsdFile, CYCLIC_XSD);
 
-      const ir = parseXsd([xsdFile]);
+      const ir = await parseXsd([xsdFile]);
       const { schemas } = irToZod(ir);
 
       expect(schemas).toContain(
@@ -1253,7 +1254,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       expect(reparsed).toEqual(parsed);
     });
 
-    it("drops orphaned synthetic item/member types when redefine swaps list → union", () => {
+    it("drops orphaned synthetic item/member types when redefine swaps list → union", async () => {
       const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-swap" xmlns:t="urn:redefine-swap" elementFormDefault="qualified">
   <xs:simpleType name="SwapType">
@@ -1276,10 +1277,10 @@ describe("xsd-to-zod v1 pipeline", () => {
     </xs:simpleType>
   </xs:redefine>
 </xs:schema>`;
-      withTempDir((dir) => {
+      await withTempDirAsync(async (dir) => {
         fs.writeFileSync(path.join(dir, "base.xsd"), BASE_XSD);
         fs.writeFileSync(path.join(dir, "redefine.xsd"), REDEFINE_XSD);
-        const ir = parseXsd([path.join(dir, "redefine.xsd")]);
+        const ir = await parseXsd([path.join(dir, "redefine.xsd")]);
 
         const orphanItem = Object.keys(ir.simpleTypes).find((name) =>
           name.endsWith("}SwapType_itemType"),
@@ -1294,17 +1295,17 @@ describe("xsd-to-zod v1 pipeline", () => {
   });
 
   describe("misc robustness (#79)", () => {
-    it("populates targetNamespaces in the returned IR", () => {
-      withTempDir((dir) => {
+    it("populates targetNamespaces in the returned IR", async () => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, XSD);
 
-        const ir = parseXsd([file]);
+        const ir = await parseXsd([file]);
         expect(ir.targetNamespaces).toEqual(["urn:test"]);
       });
     });
 
-    it("cuts circular complexContent extensions without duplicating fields", () => {
+    it("cuts circular complexContent extensions without duplicating fields", async () => {
       const CYCLE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:cycle" xmlns:t="urn:cycle" elementFormDefault="qualified">
   <xs:complexType name="A">
@@ -1327,11 +1328,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:complexType>
 </xs:schema>`;
 
-      withTempDir((dir) => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, CYCLE_XSD);
 
-        const ir = parseXsd([file]);
+        const ir = await parseXsd([file]);
         expect(ir.complexTypes["{urn:cycle}A"]!.fields.map((f) => f.qname)).toEqual([
           "{urn:cycle}bField",
           "{urn:cycle}aField",
@@ -1343,7 +1344,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("does not alias IrField objects across simpleContent derivations", () => {
+    it("does not alias IrField objects across simpleContent derivations", async () => {
       const ALIAS_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:alias" xmlns:t="urn:alias">
   <xs:complexType name="Base">
@@ -1360,11 +1361,11 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:complexType>
 </xs:schema>`;
 
-      withTempDir((dir) => {
+      await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
         fs.writeFileSync(file, ALIAS_XSD);
 
-        const ir = parseXsd([file]);
+        const ir = await parseXsd([file]);
         const baseAttr = ir.complexTypes["{urn:alias}Base"]!.fields.find((f) => f.qname === "{}a");
         const derivedAttr = ir.complexTypes["{urn:alias}Derived"]!.fields.find(
           (f) => f.qname === "{}a",
@@ -1375,7 +1376,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("rejects invalid minOccurs/maxOccurs values instead of producing NaN", () => {
+    it("rejects invalid minOccurs/maxOccurs values instead of producing NaN", async () => {
       const BAD_MIN_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:occurs" xmlns:t="urn:occurs">
   <xs:complexType name="C">
@@ -1393,14 +1394,14 @@ describe("xsd-to-zod v1 pipeline", () => {
   </xs:complexType>
 </xs:schema>`;
 
-      withTempDir((dir) => {
+      await withTempDirAsync(async (dir) => {
         const minFile = path.join(dir, "min.xsd");
         const maxFile = path.join(dir, "max.xsd");
         fs.writeFileSync(minFile, BAD_MIN_XSD);
         fs.writeFileSync(maxFile, BAD_MAX_XSD);
 
-        expect(() => parseXsd([minFile])).toThrow('Invalid minOccurs value "many"');
-        expect(() => parseXsd([maxFile])).toThrow('Invalid maxOccurs value "lots"');
+        await expect(parseXsd([minFile])).rejects.toThrow('Invalid minOccurs value "many"');
+        await expect(parseXsd([maxFile])).rejects.toThrow('Invalid maxOccurs value "lots"');
       });
     });
   });

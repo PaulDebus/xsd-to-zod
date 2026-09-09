@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/index.js";
-import { withTempDir } from "./helpers.js";
+import { withTempDirAsync } from "./helpers.js";
 
 // Regression tests for redefine self-references: a group/attributeGroup/
 // simpleType redefined in terms of itself must resolve the self-reference
@@ -49,36 +49,36 @@ const MAIN = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
-const parse = (): ReturnType<typeof parseXsd> => {
-  let ir: ReturnType<typeof parseXsd> | undefined;
-  withTempDir((dir) => {
+const parse = async (): Promise<Awaited<ReturnType<typeof parseXsd>>> => {
+  let ir: Awaited<ReturnType<typeof parseXsd>> | undefined;
+  await withTempDirAsync(async (dir) => {
     fs.writeFileSync(path.join(dir, "module.xsd"), REDEFINED_MODULE);
     const main = path.join(dir, "main.xsd");
     fs.writeFileSync(main, MAIN);
-    ir = parseXsd([main]);
+    ir = await parseXsd([main]);
   });
   return ir!;
 };
 
 describe("xs:redefine self-references", () => {
-  it("attributeGroup self-ref expands the original instead of overflowing the stack", () => {
-    const ir = parse();
+  it("attributeGroup self-ref expands the original instead of overflowing the stack", async () => {
+    const ir = await parse();
     const doc = ir.complexTypes[ir.elements["{}doc"]!.typeName]!;
     const attrNames = doc.fields.filter((f) => f.kind === "attribute").map((f) => f.qname);
     expect(attrNames).toContain("{}attFix");
     expect(attrNames).toContain("{}foo");
   });
 
-  it("group self-ref expands the original members", () => {
-    const ir = parse();
+  it("group self-ref expands the original members", async () => {
+    const ir = await parse();
     const doc = ir.complexTypes[ir.elements["{}doc"]!.typeName]!;
     const elemNames = doc.fields.filter((f) => f.kind === "element").map((f) => f.qname);
     expect(elemNames).toContain("{}orig");
     expect(elemNames).toContain("{}added");
   });
 
-  it("simpleType self-base restriction derives from the preserved original", () => {
-    const ir = parse();
+  it("simpleType self-base restriction derives from the preserved original", async () => {
+    const ir = await parse();
     const yn = ir.simpleTypes["{}yn"]!;
     expect(yn.kind).toBe("restriction");
     if (yn.kind !== "restriction") {
@@ -95,8 +95,8 @@ describe("xs:redefine self-references", () => {
 const ATTGC010 = path.resolve("testdata/upstream/w3c-xsdtests/msData/attributeGroup/attgC010.xsd");
 
 describe("circular attributeGroup self-reference (XSD 1.1)", () => {
-  it("does not overflow the stack on a direct attributeGroup self-ref and emits a diagnostic", () => {
-    const ir = parseXsd([ATTGC010]);
+  it("does not overflow the stack on a direct attributeGroup self-ref and emits a diagnostic", async () => {
+    const ir = await parseXsd([ATTGC010]);
     expect(ir.diagnostics).toEqual([
       {
         kind: "circular-attribute-group-ref",
@@ -127,12 +127,12 @@ const CIRCULAR_GROUP = `<?xml version="1.0"?>
 </xs:schema>`;
 
 describe("circular group self-reference (XSD 1.1)", () => {
-  it("does not overflow the stack on a direct group self-ref and emits a diagnostic", () => {
-    let ir: ReturnType<typeof parseXsd> | undefined;
-    withTempDir((dir) => {
+  it("does not overflow the stack on a direct group self-ref and emits a diagnostic", async () => {
+    let ir: Awaited<ReturnType<typeof parseXsd>> | undefined;
+    await withTempDirAsync(async (dir) => {
       const main = path.join(dir, "main.xsd");
       fs.writeFileSync(main, CIRCULAR_GROUP);
-      ir = parseXsd([main]);
+      ir = await parseXsd([main]);
     });
     expect(ir!.diagnostics).toEqual([
       {

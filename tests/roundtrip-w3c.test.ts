@@ -15,7 +15,7 @@ const KNOWN_FAILURES = new Map<string, string>([]);
 // directories. Test names carry the group's XSD spec anchors.
 describe("W3C smoke round-trip", () => {
   if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
-    it("skip — W3C submodule not checked out", () => {});
+    it("skip — W3C submodule not checked out", async () => {});
     return;
   }
 
@@ -25,7 +25,7 @@ describe("W3C smoke round-trip", () => {
 
   // Every KNOWN_FAILURES key must match a discovered case — a stale key means
   // the testSet changed or the case was renamed.
-  it("has no stale KNOWN_FAILURES entries", () => {
+  it("has no stale KNOWN_FAILURES entries", async () => {
     const discovered = new Set(boeingCases.map((c) => c.name));
     const stale = [...KNOWN_FAILURES.keys()].filter((k) => !discovered.has(k));
     expect(stale).toEqual([]);
@@ -51,7 +51,7 @@ describe("W3C smoke round-trip", () => {
 });
 
 describe("upstream parse benchmark", () => {
-  it("parseXsds all upstream XSDs under 5s", () => {
+  it("parseXsds all upstream XSDs under 5s", async () => {
     const upstreamDir = path.resolve("testdata/upstream");
 
     const allXsdFiles: string[] = [];
@@ -72,6 +72,6 @@ describe("upstream parse benchmark", () => {
     // NOTE: duration check removed — see issue #19.
     // We only assert that all upstream XSDs parse without error.
     // If parse time becomes a concern, add a proper benchmark script.
-    parseXsd(allXsdFiles);
+    await parseXsd(allXsdFiles);
   });
 });

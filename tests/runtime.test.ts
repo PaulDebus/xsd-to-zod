@@ -8,7 +8,7 @@ import {
   parseXsd,
   serializeXml as serializeXmlRuntime,
 } from "../src/index.js";
-import { importGeneratedSchemas, withTempDir } from "./helpers.js";
+import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:rt" xmlns:t="urn:rt" elementFormDefault="qualified">
@@ -36,10 +36,10 @@ const doc = (inner: string, attrs = 'version="007" active="1"'): string =>
 
 beforeAll(async () => {
   let schemasCode = "";
-  withTempDir((dir) => {
+  await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, XSD);
-    schemasCode = irToZod(parseXsd([file])).schemas;
+    schemasCode = irToZod(await parseXsd([file])).schemas;
   });
   const mod = await importGeneratedSchemas(schemasCode);
   rootSchema = mod["docSchema"] as z.ZodType;
@@ -69,14 +69,14 @@ describe("validation modes", () => {
 });
 
 describe("entities in character data (#64)", () => {
-  it("decodes predefined and numeric entities in text", () => {
+  it("decodes predefined and numeric entities in text", async () => {
     const parsed = parseXml(
       doc("<text>a &lt; b &amp; c &gt; d &#65;&#x42;</text><count>1</count><flag>true</flag>"),
     );
     expect(parsed["text"]).toBe("a < b & c > d AB");
   });
 
-  it("decodes entities in attribute values", () => {
+  it("decodes entities in attribute values", async () => {
     const parsed = parseXml(
       `<doc xmlns="urn:rt" version="1" active="true"><text>x</text><count>1</count><flag>0</flag></doc>`.replace(
         'version="1"',
@@ -87,62 +87,62 @@ describe("entities in character data (#64)", () => {
     expect(parsed["@version"]).toBe(1);
   });
 
-  it("does not double-decode &amp;lt;", () => {
+  it("does not double-decode &amp;lt;", async () => {
     const parsed = parseXml(doc("<text>&amp;lt;</text><count>1</count><flag>1</flag>"));
     expect(parsed["text"]).toBe("&lt;");
   });
 
-  it("keeps CDATA content verbatim, including entity-looking text", () => {
+  it("keeps CDATA content verbatim, including entity-looking text", async () => {
     const parsed = parseXml(
       doc("<text><![CDATA[a &lt; b &amp; <tag>]]></text><count>1</count><flag>0</flag>"),
     );
     expect(parsed["text"]).toBe("a &lt; b &amp; <tag>");
   });
 
-  it("round-trips serialized entity text", () => {
+  it("round-trips serialized entity text", async () => {
     const parsed = parseXml(doc("<text>a &lt; b &amp; c</text><count>2</count><flag>false</flag>"));
     const reparsed = parseXml(serializeXml(parsed));
     expect(reparsed).toEqual(parsed);
   });
 
-  it("skips leading comments and processing instructions", () => {
+  it("skips leading comments and processing instructions", async () => {
     const xml = `<?xml version="1.0"?>\n<!-- a comment -->\n<?pi data?>\n${doc("<text>x</text><count>1</count><flag>1</flag>")}`;
     expect(parseXml(xml)["text"]).toBe("x");
   });
 });
 
 describe("type coercion (#65)", () => {
-  it("coerces attribute values through their declared type", () => {
+  it("coerces attribute values through their declared type", async () => {
     const parsed = parseXml(doc("<text>x</text><count>1</count><flag>0</flag>"));
     expect(parsed["@version"]).toBe(7);
     expect(parsed["@active"]).toBe(true);
     expect(parsed["flag"]).toBe(false);
   });
 
-  it("preserves numeric-looking xs:string lexicals", () => {
+  it("preserves numeric-looking xs:string lexicals", async () => {
     const parsed = parseXml(doc("<text>3.50</text><count>1</count><flag>1</flag>"));
     expect(parsed["text"]).toBe("3.50");
   });
 
-  it("rejects invalid xs:int lexicals instead of producing NaN", () => {
+  it("rejects invalid xs:int lexicals instead of producing NaN", async () => {
     expect(() => parseXml(doc("<text>x</text><count>abc</count><flag>1</flag>"))).toThrow(
       "Invalid xs:int lexical",
     );
   });
 
-  it("rejects empty xs:int elements instead of inventing 0", () => {
+  it("rejects empty xs:int elements instead of inventing 0", async () => {
     expect(() => parseXml(doc("<text>x</text><count/><flag>1</flag>"))).toThrow(
       "Invalid xs:int lexical",
     );
   });
 
-  it("rejects non-boolean lexicals for xs:boolean", () => {
+  it("rejects non-boolean lexicals for xs:boolean", async () => {
     expect(() => parseXml(doc("<text>x</text><count>1</count><flag>yes</flag>"))).toThrow(
       "Invalid xs:boolean lexical",
     );
   });
 
-  it("parses and serializes INF/-INF/NaN for xs:double (#116)", () => {
+  it("parses and serializes INF/-INF/NaN for xs:double (#116)", async () => {
     // The generated xs:double schema accepts non-finite numbers via an
     // explicit union; serialization maps them back to the XSD lexicals.
     const negInf = parseXml(
@@ -155,7 +155,7 @@ describe("type coercion (#65)", () => {
     expect(serializeXml(nan)).toContain(">NaN</ns0:measure>");
   });
 
-  it("preserves the sign of -0 through the round-trip (#117)", () => {
+  it("preserves the sign of -0 through the round-trip (#117)", async () => {
     const parsed = parseXml(
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-0</measure>"),
     );
@@ -163,7 +163,7 @@ describe("type coercion (#65)", () => {
     expect(serializeXml(parsed)).toContain(">-0</ns0:measure>");
   });
 
-  it("returns null for an xsi:nil root", () => {
+  it("returns null for an xsi:nil root", async () => {
     const xml =
       '<doc xmlns="urn:rt" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>';
     expect(parseXml(xml)).toBeNull();
@@ -185,10 +185,10 @@ describe("QName-typed values", () => {
 
   const load = async (): Promise<Record<string, unknown>> => {
     let schemasCode = "";
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "qname.xsd");
       fs.writeFileSync(file, QNAME_XSD);
-      schemasCode = irToZod(parseXsd([file])).schemas;
+      schemasCode = irToZod(await parseXsd([file])).schemas;
     });
     return importGeneratedSchemas(schemasCode);
   };
@@ -234,10 +234,10 @@ describe("QName-typed values", () => {
   <xs:element name="holder" type="t:HolderType"/>
 </xs:schema>`;
     let schemasCode = "";
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "qname-ns.xsd");
       fs.writeFileSync(file, NS_XSD);
-      schemasCode = irToZod(parseXsd([file])).schemas;
+      schemasCode = irToZod(await parseXsd([file])).schemas;
     });
     const mod = await importGeneratedSchemas(schemasCode);
     const schema = mod["holderSchema"] as z.ZodType;
@@ -266,10 +266,10 @@ describe("QName-typed values", () => {
   <xs:element name="holder" type="t:HolderType"/>
 </xs:schema>`;
     let schemasCode = "";
-    withTempDir((dir) => {
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "qname-ns.xsd");
       fs.writeFileSync(file, NS_XSD);
-      schemasCode = irToZod(parseXsd([file])).schemas;
+      schemasCode = irToZod(await parseXsd([file])).schemas;
     });
     const mod = await importGeneratedSchemas(schemasCode);
     const schema = mod["holderSchema"] as z.ZodType;

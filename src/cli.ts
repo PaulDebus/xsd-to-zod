@@ -238,7 +238,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     return;
   }
 
-  const ir = parseXsd(nonLibraryFiles, {
+  const ir = await parseXsd(nonLibraryFiles, {
     ...(allowMissingImports !== undefined && { allowMissingImports }),
   });
 
@@ -290,7 +290,7 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
     return;
   }
 
-  const ir = parseXsd([xsdFile]);
+  const ir = await parseXsd([xsdFile]);
   warnDiagnostics(ir);
   const { schemas } = irToZod(ir, { js: true });
   const mod = await importGeneratedModule(schemas);

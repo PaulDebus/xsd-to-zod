@@ -6,7 +6,12 @@ export {
   rootSchemaExportNames,
   sanitizeIdentifier,
 } from "./irToZod.js";
-export type { ParseXsdOptions } from "./parseXsd.js";
+export type {
+  ParseXsdOptions,
+  ResolvedSchema,
+  ResolveSchema,
+  SchemaResolutionBase,
+} from "./parseXsd.js";
 export { parseXsd } from "./parseXsd.js";
 export { runPostGenerationFormatting } from "./postProcess.js";
 export { readXmlFile } from "./readXmlFile.js";

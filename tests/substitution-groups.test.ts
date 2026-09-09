@@ -54,11 +54,11 @@ const SIMPLE_HEAD_XSD = `<?xml version="1.0"?>
 
 describe("substitution groups — parse", () => {
   it("records the head qname on the member element declaration", async () => {
-    let ir: ReturnType<typeof parseXsd> | undefined;
-    await withTempDirAsync((dir) => {
+    let ir: Awaited<ReturnType<typeof parseXsd>> | undefined;
+    await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, SIMPLE_HEAD_XSD);
-      ir = parseXsd([file]);
+      ir = await parseXsd([file]);
     });
     expect(ir?.elements["{urn:sg}member"]?.substitutionGroup).toBe("{urn:sg}head");
     expect(ir?.elements["{urn:sg}head"]?.substitutionGroup).toBeUndefined();

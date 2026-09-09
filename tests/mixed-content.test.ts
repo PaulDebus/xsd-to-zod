@@ -106,7 +106,7 @@ describe("mixed content models", () => {
       );
       // The derived type restates mixed on an already-mixed base: the merged
       // fields must carry exactly one text field.
-      fields = parseXsd([file]).complexTypes["{urn:mixed}Derived"]?.fields ?? [];
+      fields = (await parseXsd([file])).complexTypes["{urn:mixed}Derived"]?.fields ?? [];
       const mod = await generateAndImport([file]);
       const xml = `<doc xmlns="urn:mixed">t<a>1</a><b>2</b></doc>`;
       expect(parseXml(findRootSchema(mod, xml), xml)).toEqual({ _text: "t", a: "1", b: "2" });

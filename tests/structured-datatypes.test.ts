@@ -43,7 +43,7 @@ const fixedPoint = <T extends XsdStructuredValue>(
 };
 
 describe("xsdDateTime parsers and canonical writers", () => {
-  it("xs:date", () => {
+  it("xs:date", async () => {
     expect(fixedPoint(parseXsdDate, writeXsdDate, "2002-10-10")).toEqual({
       year: 2002,
       month: 10,
@@ -93,7 +93,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     });
   });
 
-  it("xs:dateTime", () => {
+  it("xs:dateTime", async () => {
     expect(fixedPoint(parseXsdDateTime, writeXsdDateTime, "2002-10-10T12:00:00")).toEqual({
       year: 2002,
       month: 10,
@@ -128,7 +128,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     );
   });
 
-  it("xs:time", () => {
+  it("xs:time", async () => {
     expect(fixedPoint(parseXsdTime, writeXsdTime, "13:20:00")).toEqual({
       hour: 13,
       minute: 20,
@@ -154,7 +154,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     });
   });
 
-  it("xs:gYear / xs:gYearMonth", () => {
+  it("xs:gYear / xs:gYearMonth", async () => {
     expect(fixedPoint(parseXsdGYear, writeXsdGYear, "2002")).toEqual({ year: 2002 });
     expect(writeXsdGYear(parseXsdGYear("2002+05:00"))).toBe("2001Z");
     expect(fixedPoint(parseXsdGYear, writeXsdGYear, "-2002")).toEqual({ year: -2002 });
@@ -166,7 +166,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     expect(writeXsdGYearMonth(parseXsdGYearMonth("2002-01-14:00"))).toBe("2002-01Z");
   });
 
-  it("xs:gMonth / xs:gMonthDay / xs:gDay", () => {
+  it("xs:gMonth / xs:gMonthDay / xs:gDay", async () => {
     expect(fixedPoint(parseXsdGMonth, writeXsdGMonth, "--05")).toEqual({ month: 5 });
     expect(writeXsdGMonth(parseXsdGMonth("--05Z"))).toBe("--05Z");
     expect(fixedPoint(parseXsdGMonthDay, writeXsdGMonthDay, "--02-29")).toEqual({
@@ -178,7 +178,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     expect(writeXsdGDay(parseXsdGDay("---01+14:00"))).toBe("---31Z");
   });
 
-  it("xs:duration", () => {
+  it("xs:duration", async () => {
     expect(fixedPoint(parseXsdDuration, writeXsdDuration, "P1Y2M3DT4H5M6S")).toEqual({
       sign: 1,
       years: 1,
@@ -202,7 +202,7 @@ describe("xsdDateTime parsers and canonical writers", () => {
     expect(writeXsdDuration(parseXsdDuration("P1YT2H"))).toBe("P1YT2H");
   });
 
-  it("rejects lexicals outside the expected shape", () => {
+  it("rejects lexicals outside the expected shape", async () => {
     // The parsers assume prior lexical validation (the refine runs first) and
     // only fail on input outside the regex shape altogether.
     expect(() => parseXsdDate("2002-13-10")).toThrow();
@@ -240,7 +240,7 @@ const ALL_TYPES_XSD = `
 </xs:schema>`;
 
 const withXsd = async (xsd: string, fn: (file: string) => void | Promise<void>): Promise<void> =>
-  withTempDirAsync(async (dir) => {
+  await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
     await fn(file);
@@ -248,8 +248,8 @@ const withXsd = async (xsd: string, fn: (file: string) => void | Promise<void>):
 
 describe("datatypes: structured codegen", () => {
   it("emits transforms, structured TS types and datatype metadata", async () => {
-    await withXsd(ALL_TYPES_XSD, (file) => {
-      const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+    await withXsd(ALL_TYPES_XSD, async (file) => {
+      const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       // Transform pipeline after the lexical refine, for all nine builtins.
       for (const [validator, parser] of [
         ["xsdDate", "parseXsdDate"],
@@ -280,8 +280,8 @@ describe("datatypes: structured codegen", () => {
   });
 
   it("leaves default (string) mode output unchanged", async () => {
-    await withXsd(ALL_TYPES_XSD, (file) => {
-      const ir = parseXsd([file]);
+    await withXsd(ALL_TYPES_XSD, async (file) => {
+      const ir = await parseXsd([file]);
       const structured = irToZod(ir, { datatypes: "structured" }).schemas;
       const plain = irToZod(ir).schemas;
       const explicit = irToZod(ir, { datatypes: "string" }).schemas;
@@ -305,8 +305,8 @@ describe("datatypes: structured codegen", () => {
     <xs:attribute name="tz" type="xs:time" default="12:00:00-05:00"/>
   </xs:complexType>
 </xs:schema>`,
-      (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+      async (file) => {
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         // Meta defaults/fixed hold the lexical (validation transforms it);
         // attribute defaults are zod .default() of the structured object.
         expect(schemas).toContain('defaultValue: "2002-10-10"');
@@ -331,8 +331,8 @@ describe("datatypes: structured codegen", () => {
     </xs:attribute>
   </xs:complexType>
 </xs:schema>`,
-      (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+      async (file) => {
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         // Each list token becomes a structured object literal in the array.
         expect(schemas).toContain(
           '.default([{"year":2002,"month":10,"day":10}, {"year":2003,"month":11,"day":11}])',
@@ -345,7 +345,7 @@ describe("datatypes: structured codegen", () => {
 describe("datatypes: structured runtime round-trip", () => {
   it("parses to structured values and serializes to canonical lexicals", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
-      const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+      const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       const mod = await importGeneratedSchemas(schemas);
       const schema = mod["eventSchema"] as z.ZodType;
       expect(xmlRegistry.get(schema)?.root).toBe("{}event");
@@ -396,7 +396,7 @@ describe("datatypes: structured runtime round-trip", () => {
 
   it("passes plain strings through the serializer unchanged", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
-      const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+      const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       const mod = await importGeneratedSchemas(schemas);
       const schema = mod["eventSchema"] as z.ZodType;
       const data = {
@@ -432,7 +432,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:complexType>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = mod["cfgSchema"] as z.ZodType;
         // Element default on present-but-empty, fixed on the fixed element,
@@ -464,7 +464,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:complexType>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = mod["cfgSchema"] as z.ZodType;
         const parsed = parseXml(schema, "<cfg/>");
@@ -493,7 +493,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:complexType>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = mod["cfgSchema"] as z.ZodType;
         // Fixed applies on absence too, as structured values.
@@ -525,7 +525,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:complexType>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
         const parsed = parseXml(schema, "<cfg/>");
@@ -551,7 +551,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:complexType>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
         expect(parseXml(schema, "<cfg/>")).toEqual({ "@days": [] });
@@ -573,7 +573,7 @@ describe("datatypes: structured runtime round-trip", () => {
   </xs:element>
 </xs:schema>`,
       async (file) => {
-        const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+        const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = (mod as { daysSchema: z.ZodType }).daysSchema;
         const parsed = parseXml(schema, "<days/>");
@@ -589,7 +589,7 @@ describe("datatypes: structured runtime round-trip", () => {
 
   it("rejects invalid lexicals through the generated schema", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
-      const { schemas } = irToZod(parseXsd([file]), { datatypes: "structured" });
+      const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       const mod = await importGeneratedSchemas(schemas);
       const schema = mod["eventSchema"] as z.ZodType;
       const xml =

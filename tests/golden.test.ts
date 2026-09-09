@@ -17,8 +17,8 @@ const representative = discoverCuratedCases().filter((c) => {
 
 describe("golden generated output (#84)", () => {
   for (const c of representative) {
-    it(`matches the golden output for ${c.name}`, () => {
-      expect(irToZod(parseXsd(c.xsdFiles)).schemas).toMatchSnapshot();
+    it(`matches the golden output for ${c.name}`, async () => {
+      expect(irToZod(await parseXsd(c.xsdFiles)).schemas).toMatchSnapshot();
     });
   }
 });

@@ -2,24 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd, safeParseXml } from "../src/index.js";
-import { generateAndImport, withTempDir, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for the issue-#114 facet codegen fixes: facet
 // checks must only be emitted in a form the mapped Zod schema supports.
 
-const codeFor = (xsd: string): string => {
+const codeFor = async (xsd: string): Promise<string> => {
   let code = "";
-  withTempDir((dir) => {
+  await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
-    code = irToZod(parseXsd([file])).schemas;
+    code = irToZod(await parseXsd([file])).schemas;
   });
   return code;
 };
 
 describe("facet codegen on incompatible Zod types (#114)", () => {
-  it("routes pattern on non-string bases to the lexical-facet meta", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("routes pattern on non-string bases to the lexical-facet meta", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="FiveDigits">
     <xs:restriction base="xs:integer">
@@ -34,8 +34,8 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     expect(code).toContain('facets: {"patterns":[["[0-9]{5}"]],"whiteSpace":"collapse"}');
   });
 
-  it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="Window">
     <xs:restriction base="xs:date">
@@ -51,8 +51,8 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     expect(code).toContain("facet maxExclusive skipped");
   });
 
-  it("skips length facets on NOTATION/QName restrictions (vacuous in XSD 1.0)", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("skips length facets on NOTATION/QName restrictions (vacuous in XSD 1.0)", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns:t="urn:t">
   <xs:simpleType name="Notations">
     <xs:restriction base="xs:NOTATION">
@@ -70,8 +70,8 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
     expect(code).not.toContain(".length(4)");
   });
 
-  it("emits length facets as a .length refine on enum/reference bases", () => {
-    const code = codeFor(`<?xml version="1.0"?>
+  it("emits length facets as a .length refine on enum/reference bases", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" xmlns:t="urn:t">
   <xs:simpleType name="Base">
     <xs:restriction base="xs:string">
