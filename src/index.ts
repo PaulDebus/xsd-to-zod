@@ -1,4 +1,6 @@
 export { Xsd2ZodError } from "./errors.js";
+export type { FetchSchemaResolverOptions } from "./fetchSchema.js";
+export { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 export type { IrToZodOptions } from "./irToZod.js";
 export {
   fieldKeyFromIr,

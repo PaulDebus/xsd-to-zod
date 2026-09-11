@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { z } from "zod";
 import { Xsd2ZodError } from "./errors.js";
-import { createFetchSchemaResolver } from "./fetchSchema.js";
+import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 import { irToZod } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import type { XsdIr } from "./types.js";
@@ -298,10 +298,9 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
         allowedHosts: opts.allowHost ?? [],
         entryUrls: [...entryUrls],
         fetchTransitive: !entryOnlyFetch,
+        fetchRemoteFromLocal: opts.fetch === true,
         onFetch: (url, base) => {
-          const via = entryUrls.has(url)
-            ? ""
-            : ` (imported by ${base.kind === "file" ? base.path : base.url})`;
+          const via = entryUrls.has(url) ? "" : ` (imported by ${describeSchemaBase(base)})`;
           console.error(`fetching ${url}${via}`);
         },
         onRedirect: (fromUrl, toUrl) => {

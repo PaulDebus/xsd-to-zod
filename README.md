@@ -156,7 +156,7 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--allow-http` | Permit insecure `http://` schema URLs (`https://` only by default) |
 | `--allow-host <host>` | Repeatable host allowlist for every fetched schema, including the entry URL |
 
-Remote fetches are logged to stderr, use `HTTPS_PROXY`/`HTTP_PROXY` when set, and are capped at 100 files, 10 MB per file, 50 MB total, and 30 seconds per request.
+Remote fetches are logged to stderr, use `HTTPS_PROXY`/`HTTP_PROXY` when set, and are capped at 100 files, 10 MB per file, 50 MB total, 32 import levels, and 30 seconds per request. In mixed runs local inputs still stay offline unless `--fetch` is passed.
 
 Bundle all imports and includes into a single self-contained XSD:
 
@@ -188,8 +188,9 @@ runPostGenerationFormatting(['schema.zod.ts']);
 
 `parseXsd` is asynchronous and never fetches from the network itself. Library
 consumers can supply `resolveSchema(location, base)` to materialize an http(s)
-entry schema or remote import; returning `undefined` preserves the default
-"remote schemaLocation skipped" diagnostic.
+entry schema or remote import — `createFetchSchemaResolver` from `'xsd-to-zod'`
+provides the same fetching, caps, and host policy the CLI uses; returning
+`undefined` preserves the default "remote schemaLocation skipped" diagnostic.
 
 ### Parse and serialize XML
 

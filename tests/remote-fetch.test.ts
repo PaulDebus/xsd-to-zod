@@ -278,6 +278,116 @@ describe("CLI remote schema input", () => {
     });
   });
 
+  it("rejects XHTML and sniffed HTML error pages served as plain text", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/login.xhtml": { body: "<html>login</html>", contentType: "application/xhtml+xml" },
+          "/error.xsd": {
+            body: "<!DOCTYPE html><html><body>oops</body></html>",
+            contentType: "text/plain",
+          },
+          "/real.xsd": { body: typeSchema("ThingType"), contentType: "text/plain" },
+        },
+        async (server) => {
+          const xhtml = await runCli([`${server.origin}/login.xhtml`, "-o", dir, "--allow-http"]);
+          expect(xhtml.code).toBe(1);
+          expect(xhtml.stderr).toContain("Expected XSD");
+          expect(xhtml.stderr).toContain("application/xhtml+xml");
+          expect(xhtml.stderr).toContain("[remote-content-type]");
+
+          const sniffed = await runCli([`${server.origin}/error.xsd`, "-o", dir, "--allow-http"]);
+          expect(sniffed.code).toBe(1);
+          expect(sniffed.stderr).toContain("Expected XSD");
+          expect(sniffed.stderr).toContain("[remote-content-type]");
+
+          const plain = await runCli([`${server.origin}/real.xsd`, "-o", dir, "--allow-http"]);
+          expect(plain.code).toBe(0);
+          expect(fs.existsSync(path.join(dir, "real.zod.ts"))).toBe(true);
+        },
+      );
+    });
+  });
+
+  it("keeps local inputs offline in mixed runs unless --fetch is passed", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/remote-entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="types-remote.xsd"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/types-remote.xsd": { body: typeSchema("ThingType") },
+          "/local-types.xsd": { body: typeSchema("LocalType") },
+        },
+        async (server) => {
+          const localMain = path.join(dir, "local-main.xsd");
+          fs.writeFileSync(
+            localMain,
+            `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="${server.origin}/local-types.xsd"/>
+              <xs:element name="localDoc" type="t:LocalType"/>
+            </xs:schema>`,
+          );
+
+          const mixed = await runCli([
+            localMain,
+            `${server.origin}/remote-entry.xsd`,
+            "-o",
+            dir,
+            "-n",
+            "mixed",
+            "--allow-http",
+          ]);
+          expect(mixed.code).toBe(0);
+          expect(server.requests).toEqual(["/remote-entry.xsd", "/types-remote.xsd"]);
+          expect(mixed.stderr).toContain("remote-schema-location");
+
+          server.requests.length = 0;
+          const fetched = await runCli([
+            localMain,
+            `${server.origin}/remote-entry.xsd`,
+            "-o",
+            dir,
+            "-n",
+            "mixed",
+            "--allow-http",
+            "--fetch",
+          ]);
+          expect(fetched.code).toBe(0);
+          expect(server.requests).toEqual([
+            "/local-types.xsd",
+            "/remote-entry.xsd",
+            "/types-remote.xsd",
+          ]);
+        },
+      );
+    });
+  });
+
+  it("enforces the import depth limit on long remote chains", async () => {
+    await withTempDirAsync(async (dir) => {
+      const chainLength = 40;
+      const routes: Record<string, Route> = {};
+      for (let level = 0; level < chainLength; level++) {
+        routes[`/s${level}.xsd`] = {
+          body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:import namespace="urn:chain" schemaLocation="s${level + 1}.xsd"/>
+          </xs:schema>`,
+        };
+      }
+      routes[`/s${chainLength}.xsd`] = { body: typeSchema("ThingType") };
+      await withServer(routes, async (server) => {
+        const result = await runCli([`${server.origin}/s0.xsd`, "-o", dir, "--allow-http"]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain("[remote-depth-limit]");
+      });
+    });
+  });
   it("reports DNS failures distinctly", async () => {
     const url = "https://schemas.example.test/entry.xsd";
     const resolveSchema = createFetchSchemaResolver({

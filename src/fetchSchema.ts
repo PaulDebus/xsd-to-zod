@@ -20,6 +20,13 @@ export type FetchSchemaResolverOptions = {
   entryUrls?: string[];
   /** Resolve imports/includes reachable from remote schemas. */
   fetchTransitive?: boolean;
+  /**
+   * Resolve remote imports/includes referenced from local files.
+   * Defaults to true; the CLI sets it from --fetch so local inputs
+   * stay offline unless the flag is passed, even in mixed runs that
+   * also contain remote entries.
+   */
+  fetchRemoteFromLocal?: boolean;
   onFetch?: (url: string, base: SchemaResolutionBase) => void;
   onRedirect?: (fromUrl: string, toUrl: string) => void;
   /** Test hook for exercising transport failures without external network access. */
@@ -37,27 +44,29 @@ type FetchImplementation = (
   },
 ) => Promise<FetchResponse>;
 
-const errorCode = (error: unknown): string | undefined => {
+const walkCauses = (error: unknown): unknown[] => {
+  const chain: unknown[] = [];
   let current = error;
   for (let depth = 0; depth < 5; depth++) {
-    if (current && typeof current === "object" && "code" in current) {
-      return String(current.code);
-    }
+    chain.push(current);
     current = current instanceof Error ? current.cause : undefined;
+  }
+  return chain;
+};
+
+const errorCode = (error: unknown): string | undefined => {
+  for (const cause of walkCauses(error)) {
+    if (cause && typeof cause === "object" && "code" in cause) {
+      return String(cause.code);
+    }
   }
   return undefined;
 };
 
 const errorName = (error: unknown): string | undefined => {
-  let current = error;
-  for (let depth = 0; depth < 5; depth++) {
-    if (current instanceof Error) {
-      if (current.name === "TimeoutError" || current.name === "AbortError") {
-        return current.name;
-      }
-      current = current.cause;
-    } else {
-      return undefined;
+  for (const cause of walkCauses(error)) {
+    if (cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError")) {
+      return cause.name;
     }
   }
   return undefined;
@@ -109,12 +118,39 @@ const assertFetchable = (url: URL, allowHttp: boolean, allowedHosts: ReadonlySet
   }
 };
 
-const readResponseBody = async (response: FetchResponse, url: URL): Promise<Buffer> => {
+const fileTooLarge = (url: URL): Xsd2ZodError =>
+  new Xsd2ZodError(
+    "remote-file-too-large",
+    `Remote schema "${url.href}" exceeds the ${MAX_FILE_BYTES}-byte file limit`,
+  );
+
+/** Human-readable origin of a schema for fetch logging. */
+export const describeSchemaBase = (base: SchemaResolutionBase): string =>
+  base.kind === "file" ? base.path : base.url;
+
+/** Sniff an HTML error/login page served under a non-XML content type. */
+const looksLikeHtml = (body: Buffer): boolean => {
+  const head = body
+    .toString("utf8", 0, 1024)
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .toLowerCase();
+  return head.startsWith("<html") || head.startsWith("<!doctype html");
+};
+
+const readResponseBody = async (
+  response: FetchResponse,
+  url: URL,
+  totalBudget: { remaining: number },
+): Promise<Buffer> => {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > MAX_FILE_BYTES) {
+    throw fileTooLarge(url);
+  }
+  if (contentLength > totalBudget.remaining) {
     throw new Xsd2ZodError(
-      "remote-file-too-large",
-      `Remote schema "${url.href}" exceeds the ${MAX_FILE_BYTES}-byte file limit`,
+      "remote-total-too-large",
+      `Remote schema graph exceeds the ${MAX_TOTAL_BYTES}-byte total limit`,
     );
   }
   if (!response.body) {
@@ -135,9 +171,12 @@ const readResponseBody = async (response: FetchResponse, url: URL): Promise<Buff
       const chunk = Buffer.from(value);
       size += chunk.length;
       if (size > MAX_FILE_BYTES) {
+        throw fileTooLarge(url);
+      }
+      if (size > totalBudget.remaining) {
         throw new Xsd2ZodError(
-          "remote-file-too-large",
-          `Remote schema "${url.href}" exceeds the ${MAX_FILE_BYTES}-byte file limit`,
+          "remote-total-too-large",
+          `Remote schema graph exceeds the ${MAX_TOTAL_BYTES}-byte total limit`,
         );
       }
       chunks.push(chunk);
@@ -155,6 +194,7 @@ export const createFetchSchemaResolver = ({
   allowedHosts = [],
   entryUrls = [],
   fetchTransitive = true,
+  fetchRemoteFromLocal = true,
   onFetch,
   onRedirect,
   fetchImplementation = undiciFetch,
@@ -239,13 +279,21 @@ export const createFetchSchemaResolver = ({
         ?.split(";", 1)[0]
         ?.trim()
         .toLowerCase();
-      if (contentType === "text/html") {
+      if (contentType?.includes("html")) {
         throw new Xsd2ZodError(
           "remote-content-type",
           `Expected XSD from "${currentUrl.href}", got ${contentType}`,
         );
       }
-      const body = await readResponseBody(response, currentUrl);
+      const body = await readResponseBody(response, currentUrl, {
+        remaining: MAX_TOTAL_BYTES - totalBytes,
+      });
+      if (!contentType?.includes("xml") && looksLikeHtml(body)) {
+        throw new Xsd2ZodError(
+          "remote-content-type",
+          `Expected XSD from "${currentUrl.href}", got ${contentType ?? "unknown content type"}`,
+        );
+      }
       totalBytes += body.length;
       if (totalBytes > MAX_TOTAL_BYTES) {
         throw new Xsd2ZodError(
@@ -253,6 +301,10 @@ export const createFetchSchemaResolver = ({
           `Remote schema graph exceeds the ${MAX_TOTAL_BYTES}-byte total limit`,
         );
       }
+      // Entries resolve relative imports against the final URL after
+      // redirects, so record the depth under both the requested and the
+      // final href; otherwise a redirected chain undercounts its depth.
+      depthByUrl.set(url.href, depth);
       depthByUrl.set(currentUrl.href, depth);
       return { content: decodeXmlContent(body), url: currentUrl.href };
     }
@@ -278,7 +330,11 @@ export const createFetchSchemaResolver = ({
     if (!fetchTransitive && !isEntry) {
       return undefined;
     }
+    if (base.kind === "file" && !isEntry && !fetchRemoteFromLocal) {
+      return undefined;
+    }
     const depth = isEntry ? 0 : (depthByUrl.get(base.kind === "url" ? base.url : "") ?? 0) + 1;
+    // Entry schemas sit at depth 0, so this permits 32 import hops below them.
     if (depth > MAX_DEPTH) {
       throw new Xsd2ZodError(
         "remote-depth-limit",
