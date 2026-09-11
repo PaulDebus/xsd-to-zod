@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { z } from "zod";
 import { Xsd2ZodError } from "./errors.js";
+import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 import { irToZod } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import type { XsdIr } from "./types.js";
@@ -32,9 +33,13 @@ import { readXmlFile } from "./readXmlFile.js";
 import { safeParseXml } from "./runtime.js";
 import { xmlRegistry } from "./xmlMeta.js";
 
-const warnDiagnostics = (ir: XsdIr): void => {
+const warnDiagnostics = (ir: XsdIr, suggestFetch = false): void => {
   for (const diagnostic of ir.diagnostics) {
-    console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}`);
+    const hint =
+      suggestFetch && diagnostic.kind === "remote-schema-location"
+        ? "; re-run with --fetch to resolve it"
+        : "";
+    console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}${hint}`);
   }
 };
 
@@ -60,6 +65,44 @@ const importGeneratedModule = async (schemasCode: string): Promise<Record<string
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+};
+
+const asHttpUrl = (input: string): URL | undefined => {
+  if (!/^https?:\/\//i.test(input)) {
+    return undefined;
+  }
+  try {
+    return new URL(input);
+  } catch {
+    throw new Xsd2ZodError("remote-url-invalid", `Invalid remote schema URL "${input}"`);
+  }
+};
+
+const decodeUrlPathSegment = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
+const inputStem = (input: string | undefined): string | undefined => {
+  if (input === undefined) {
+    return undefined;
+  }
+  const url = asHttpUrl(input);
+  const rawName = url
+    ? url.pathname.split("/").filter(Boolean).pop()
+    : input
+        .replace(/\.xsd$/i, "")
+        .split(/[\\/]/)
+        .filter(Boolean)
+        .pop();
+  if (rawName === undefined) {
+    return undefined;
+  }
+  const decodedName = url ? decodeUrlPathSegment(rawName) : rawName;
+  return decodedName.replace(/\.xsd$/i, "");
 };
 
 export const expandDirectories = (files: string[], visitedDirs = new Set<string>()): string[] => {
@@ -176,6 +219,9 @@ type GenerateOptions = {
   allowMissingImports?: boolean;
   silent?: boolean;
   datatypes?: string;
+  fetch?: boolean;
+  allowHttp?: boolean;
+  allowHost?: string[];
 };
 
 type ValidateOptions = {
@@ -189,6 +235,8 @@ type BundleOptions = {
   format?: boolean;
 };
 
+const collectOption = (value: string, previous: string[]): string[] => [...previous, value];
+
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
@@ -200,6 +248,14 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
   }
   const files = expandDirectories(filesOrDirs);
+  const remoteInputs = filesOrDirs.flatMap((input) => {
+    const url = asHttpUrl(input);
+    return url ? [url] : [];
+  });
+  const skipTransitiveFetch = opts.fetch === false;
+  if (skipTransitiveFetch && remoteInputs.length === 0) {
+    throw new Error("--no-fetch only applies to remote http(s) inputs");
+  }
 
   if (files.length === 0) {
     throw new Error("no .xsd files found in the given directories");
@@ -209,13 +265,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     throw new Error("--name/-n is required when processing multiple XSD files");
   }
 
-  const resolvedName =
-    name ??
-    filesOrDirs[0]
-      ?.replace(/\.xsd$/i, "")
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .pop();
+  const resolvedName = name ?? inputStem(filesOrDirs[0]);
   if (!resolvedName || resolvedName === ".") {
     throw new Error("cannot derive an output name from the input; pass --name/-n");
   }
@@ -227,7 +277,9 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   // All-or-nothing: compile everything in memory first, then write on
   // success only. If parseXsd or irToZod throws, no files are written.
 
-  const nonLibraryFiles = includeLibraries ? files : files.filter((file) => !isLibrary(file));
+  const nonLibraryFiles = includeLibraries
+    ? files
+    : files.filter((file) => asHttpUrl(file) !== undefined || !isLibrary(file));
 
   if (nonLibraryFiles.length === 0) {
     if (!silent) {
@@ -238,12 +290,32 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     return;
   }
 
+  const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
+  const entryUrls = new Set(remoteInputs.map((url) => url.href));
+  const resolveSchema = fetchRemote
+    ? createFetchSchemaResolver({
+        allowHttp: opts.allowHttp === true,
+        allowedHosts: opts.allowHost ?? [],
+        entryUrls: [...entryUrls],
+        fetchTransitive: !skipTransitiveFetch,
+        fetchRemoteFromLocal: opts.fetch === true,
+        onFetch: (url, base) => {
+          const via = entryUrls.has(url) ? "" : ` (imported by ${describeSchemaBase(base)})`;
+          console.error(`fetching ${url}${via}`);
+        },
+        onRedirect: (fromUrl, toUrl) => {
+          console.error(`warning: cross-origin redirect: ${fromUrl} -> ${toUrl}`);
+        },
+      })
+    : undefined;
+
   const ir = await parseXsd(nonLibraryFiles, {
     ...(allowMissingImports !== undefined && { allowMissingImports }),
+    ...(resolveSchema !== undefined && { resolveSchema }),
   });
 
   if (!allowMissingImports) {
-    warnDiagnostics(ir);
+    warnDiagnostics(ir, !fetchRemote);
   }
 
   const { schemas } = irToZod(ir, { datatypes });
@@ -367,6 +439,15 @@ const program = new Command()
     "--datatypes <mode>",
     'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
   )
+  .option("--fetch", "Resolve remote imports/includes for local schema inputs")
+  .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
+  .option("--allow-http", "Permit insecure http:// schema URLs")
+  .option(
+    "--allow-host <host>",
+    "Allow fetching from a host (repeatable; applies to entry URLs too)",
+    collectOption,
+    [],
+  )
   .action(generate);
 
 program
@@ -439,6 +520,10 @@ program
 // ---------------------------------------------------------------------------
 
 export const main = async (args: string[]): Promise<number> => {
+  if (args.includes("--fetch") && args.includes("--no-fetch")) {
+    console.error("error: --fetch and --no-fetch cannot be used together");
+    return 1;
+  }
   try {
     await program.parseAsync(args, { from: "user" });
     return 0;
