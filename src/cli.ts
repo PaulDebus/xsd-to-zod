@@ -252,8 +252,8 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     const url = asHttpUrl(input);
     return url ? [url] : [];
   });
-  const entryOnlyFetch = opts.fetch === false;
-  if (entryOnlyFetch && remoteInputs.length === 0) {
+  const skipTransitiveFetch = opts.fetch === false;
+  if (skipTransitiveFetch && remoteInputs.length === 0) {
     throw new Error("--no-fetch only applies to remote http(s) inputs");
   }
 
@@ -297,7 +297,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
         allowHttp: opts.allowHttp === true,
         allowedHosts: opts.allowHost ?? [],
         entryUrls: [...entryUrls],
-        fetchTransitive: !entryOnlyFetch,
+        fetchTransitive: !skipTransitiveFetch,
         fetchRemoteFromLocal: opts.fetch === true,
         onFetch: (url, base) => {
           const via = entryUrls.has(url) ? "" : ` (imported by ${describeSchemaBase(base)})`;
@@ -444,7 +444,7 @@ const program = new Command()
   .option("--allow-http", "Permit insecure http:// schema URLs")
   .option(
     "--allow-host <host>",
-    "Allow fetching from a host (repeatable; entry URLs included)",
+    "Allow fetching from a host (repeatable; applies to entry URLs too)",
     collectOption,
     [],
   )

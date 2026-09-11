@@ -210,6 +210,64 @@ describe("CLI remote schema input", () => {
     });
   });
 
+  it("--no-fetch skips transitive imports without applying policy checks", async () => {
+    await withTempDirAsync(async (dir) => {
+      const entryRoute: Route = { body: "" };
+      await withServer({ "/entry.xsd": entryRoute }, async (server) => {
+        entryRoute.body = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="http://user:secret@${new URL(server.origin).host}/types.xsd"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`;
+
+        const result = await runCli([
+          `${server.origin}/entry.xsd`,
+          "-o",
+          dir,
+          "--allow-http",
+          "--no-fetch",
+        ]);
+
+        expect(result.code).toBe(0);
+        expect(server.requests).toEqual(["/entry.xsd"]);
+        expect(result.stderr).toContain("remote-schema-location");
+        expect(result.stderr).not.toContain("remote-credentials-not-allowed");
+      });
+    });
+  });
+
+  it("skips policy checks for transitive imports when fetchTransitive is false", async () => {
+    const entry = "https://schemas.example.test/entry.xsd";
+    const resolveSchema = createFetchSchemaResolver({
+      entryUrls: [entry],
+      fetchTransitive: false,
+      fetchImplementation: async () => {
+        throw new Error("must not fetch");
+      },
+    });
+
+    const skipped = await resolveSchema("http://user:secret@other.example.test/types.xsd", {
+      kind: "url",
+      url: entry,
+    });
+    expect(skipped).toBeUndefined();
+  });
+
+  it("skips policy checks for local-file remote imports when fetchRemoteFromLocal is false", async () => {
+    const resolveSchema = createFetchSchemaResolver({
+      fetchRemoteFromLocal: false,
+      fetchImplementation: async () => {
+        throw new Error("must not fetch");
+      },
+    });
+
+    const skipped = await resolveSchema("http://user:secret@example.test/types.xsd", {
+      kind: "file",
+      path: "/tmp/main.xsd",
+    });
+    expect(skipped).toBeUndefined();
+  });
+
   it("refuses plain http and disallowed hosts before fetching", async () => {
     await withTempDirAsync(async (dir) => {
       await withServer({ "/entry.xsd": { body: typeSchema("ThingType") } }, async (server) => {
