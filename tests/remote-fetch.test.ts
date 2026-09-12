@@ -10,7 +10,9 @@ type Route = {
   body: string;
   contentLength?: number;
   contentType?: string;
+  etag?: string;
   redirectTo?: string;
+  status?: number;
 };
 
 type TestServer = {
@@ -35,9 +37,10 @@ const startServer = async (routes: Record<string, Route>): Promise<TestServer> =
       response.end();
       return;
     }
-    response.writeHead(200, {
+    response.writeHead(route.status ?? 200, {
       "content-type": route.contentType ?? "application/xml",
       ...(route.contentLength !== undefined && { "content-length": route.contentLength }),
+      ...(route.etag !== undefined && { etag: route.etag }),
     });
     response.end(route.body);
   });
@@ -71,11 +74,24 @@ const withServer = async (
   }
 };
 
+let cacheCounter = 0;
+
 const runCli = async (
   args: string[],
+  options?: { cacheDir?: string },
 ): Promise<{ code: number; stdout: string; stderr: string }> => {
   const logs: string[] = [];
   const errors: string[] = [];
+  const outIndex = args.findIndex((arg) => arg === "-o" || arg === "--out");
+  const cwd = outIndex >= 0 ? path.resolve(args[outIndex + 1] ?? "") : undefined;
+  const previousCwd = process.cwd();
+  const previousCacheHome = process.env["XDG_CACHE_HOME"];
+  if (cwd !== undefined) {
+    fs.mkdirSync(cwd, { recursive: true });
+    process.chdir(cwd);
+    process.env["XDG_CACHE_HOME"] =
+      options?.cacheDir ?? path.join(cwd, `.cache-${process.pid}-${cacheCounter++}`);
+  }
   const logSpy = vi.spyOn(console, "log").mockImplementation((...values: unknown[]) => {
     logs.push(values.map(String).join(" "));
   });
@@ -87,6 +103,14 @@ const runCli = async (
   } finally {
     logSpy.mockRestore();
     errorSpy.mockRestore();
+    if (cwd !== undefined) {
+      process.chdir(previousCwd);
+      if (previousCacheHome === undefined) {
+        delete process.env["XDG_CACHE_HOME"];
+      } else {
+        process.env["XDG_CACHE_HOME"] = previousCacheHome;
+      }
+    }
   }
 };
 
@@ -563,6 +587,213 @@ describe("CLI remote schema input", () => {
       const inapplicable = await runCli([input, "-o", dir, "--no-fetch"]);
       expect(inapplicable.code).toBe(1);
       expect(inapplicable.stderr).toContain("only applies to remote");
+    });
+  });
+});
+
+type Lockfile = {
+  version: number;
+  schemas: Record<string, { sha256: string; finalUrl: string; fetchedAt: string; etag?: string }>;
+};
+
+const readLockfile = (dir: string): Lockfile =>
+  JSON.parse(fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8")) as Lockfile;
+
+const storedCacheDir = (cacheRoot: string): string => path.join(cacheRoot, "xsd-to-zod", "schemas");
+
+describe("remote schema lockfile and cache", () => {
+  const entrySchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:t="urn:types" targetNamespace="urn:main">
+    <xs:import namespace="urn:types" schemaLocation="types.xsd"/>
+    <xs:element name="doc" type="t:ThingType"/>
+  </xs:schema>`;
+
+  it("writes a lockfile and serves later runs, including --offline, from the cache", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer(
+        {
+          "/entry.xsd": { body: entrySchema, etag: '"entry-v1"' },
+          "/types.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          const args = [`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+          const first = await runCli(args, { cacheDir });
+          expect(first.code).toBe(0);
+          expect(first.stdout).toContain("recorded 2 remote schemas");
+          expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+
+          const lockfile = readLockfile(dir);
+          expect(lockfile.version).toBe(1);
+          expect(Object.keys(lockfile.schemas)).toEqual([
+            `${server.origin}/entry.xsd`,
+            `${server.origin}/types.xsd`,
+          ]);
+          expect(lockfile.schemas[`${server.origin}/entry.xsd`]?.etag).toBe('"entry-v1"');
+          expect(
+            fs.readdirSync(storedCacheDir(cacheDir)).filter((file) => file.endsWith(".xsd")),
+          ).toHaveLength(2);
+
+          server.requests.length = 0;
+          const cached = await runCli(args, { cacheDir });
+          expect(cached.code).toBe(0);
+          expect(cached.stdout).not.toContain("recorded");
+          expect(cached.stderr).not.toContain("fetching ");
+          expect(server.requests).toEqual([]);
+
+          const offline = await runCli([...args, "--offline"], { cacheDir });
+          expect(offline.code).toBe(0);
+          expect(server.requests).toEqual([]);
+
+          const missing = await runCli(
+            [`${server.origin}/missing.xsd`, "-o", dir, "--allow-http", "--offline"],
+            { cacheDir },
+          );
+          expect(missing.code).toBe(1);
+          expect(missing.stderr).toContain("[remote-cache-miss]");
+          expect(server.requests).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it("enforces --frozen against cached and fetched content without rewriting the lockfile", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const routes: Record<string, Route> = {
+        "/entry.xsd": { body: entrySchema },
+        "/types.xsd": { body: typeSchema("ThingType") },
+      };
+      await withServer(routes, async (server) => {
+        const args = [`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+        expect((await runCli(args, { cacheDir })).code).toBe(0);
+        const lockfileText = fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8");
+
+        server.requests.length = 0;
+        const frozen = await runCli([...args, "--frozen"], { cacheDir });
+        expect(frozen.code).toBe(0);
+        expect(server.requests).toEqual([]);
+        expect(fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8")).toBe(lockfileText);
+
+        const cachedFiles = fs
+          .readdirSync(storedCacheDir(cacheDir))
+          .filter((file) => file.endsWith(".xsd"))
+          .map((file) => path.join(storedCacheDir(cacheDir), file));
+        fs.appendFileSync(cachedFiles[0]!, "tampered");
+        const tampered = await runCli([...args, "--frozen"], { cacheDir });
+        expect(tampered.code).toBe(1);
+        expect(tampered.stderr).toContain("[remote-integrity]");
+        expect(server.requests).toEqual([]);
+
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+        routes["/types.xsd"]!.body = typeSchema("ChangedType");
+        const changed = await runCli([...args, "--frozen"], { cacheDir });
+        expect(changed.code).toBe(1);
+        expect(changed.stderr).toContain("[remote-integrity]");
+        expect(fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8")).toBe(lockfileText);
+        expect(fs.existsSync(cacheDir)).toBe(false);
+
+        const missing = await runCli(
+          [`${server.origin}/other.xsd`, "-o", dir, "--allow-http", "--frozen"],
+          { cacheDir },
+        );
+        expect(missing.code).toBe(1);
+        expect(missing.stderr).toContain("[remote-lock-missing]");
+      });
+    });
+  });
+
+  it("requires an existing lockfile for --frozen and --offline", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer({ "/entry.xsd": { body: entrySchema } }, async (server) => {
+        for (const flag of ["--frozen", "--offline"]) {
+          const result = await runCli(
+            [`${server.origin}/entry.xsd`, "-o", dir, "--allow-http", flag],
+            { cacheDir: path.join(dir, `cache-${flag.slice(2)}`) },
+          );
+          expect(result.code).toBe(1);
+          expect(result.stderr).toContain("[remote-lockfile-missing]");
+          expect(result.stderr).toContain(flag);
+        }
+      });
+      expect(fs.existsSync(path.join(dir, "xsd-to-zod.lock.json"))).toBe(false);
+    });
+  });
+
+  it("detects final-URL drift under --frozen", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const rootSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+        <xs:element name="doc" type="xs:string"/>
+      </xs:schema>`;
+      const routes: Record<string, Route> = {
+        "/entry.xsd": { body: "", redirectTo: "" },
+        "/v1.xsd": { body: rootSchema },
+        "/v2.xsd": { body: rootSchema },
+      };
+      await withServer(routes, async (server) => {
+        routes["/entry.xsd"]!.redirectTo = `${server.origin}/v1.xsd`;
+        const args = [`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+        expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+        routes["/entry.xsd"]!.redirectTo = `${server.origin}/v2.xsd`;
+        const drifted = await runCli([...args, "--frozen"], { cacheDir });
+        expect(drifted.code).toBe(1);
+        expect(drifted.stderr).toContain("[remote-final-url-mismatch]");
+      });
+    });
+  });
+
+  it("rejects malformed lockfile entries before reading the cache", async () => {
+    await withTempDirAsync(async (dir) => {
+      const url = "https://schemas.example.test/entry.xsd";
+      fs.writeFileSync(
+        path.join(dir, "xsd-to-zod.lock.json"),
+        `${JSON.stringify({
+          version: 1,
+          schemas: {
+            [url]: {
+              sha256: "not-a-sha256",
+              finalUrl: url,
+              fetchedAt: new Date().toISOString(),
+            },
+          },
+        })}\n`,
+      );
+
+      const result = await runCli([url, "-o", dir, "--frozen"], {
+        cacheDir: path.join(dir, "cache"),
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("[remote-lockfile-invalid]");
+    });
+  });
+
+  it("leaves no committed cache or lockfile after a partially fetched closure", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer(
+        {
+          "/entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="broken.xsd"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/broken.xsd": { body: "broken", status: 500 },
+        },
+        async (server) => {
+          const result = await runCli([`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"], {
+            cacheDir,
+          });
+          expect(result.code).toBe(1);
+          expect(result.stderr).toContain("[remote-http-status]");
+          expect(fs.existsSync(path.join(dir, "xsd-to-zod.lock.json"))).toBe(false);
+          expect(fs.existsSync(cacheDir)).toBe(false);
+        },
+      );
     });
   });
 });

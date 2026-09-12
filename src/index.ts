@@ -1,5 +1,5 @@
 export { Xsd2ZodError } from "./errors.js";
-export type { FetchSchemaResolverOptions } from "./fetchSchema.js";
+export type { FetchSchemaResolver, FetchSchemaResolverOptions } from "./fetchSchema.js";
 export { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 export type { IrToZodOptions } from "./irToZod.js";
 export {
@@ -17,6 +17,13 @@ export type {
 export { parseXsd } from "./parseXsd.js";
 export { runPostGenerationFormatting } from "./postProcess.js";
 export { readXmlFile } from "./readXmlFile.js";
+export type {
+  CachedRemoteSchema,
+  FetchedRemoteSchema,
+  RemoteSchemaLockEntry,
+  RemoteSchemaStoreOptions,
+} from "./remoteSchemaStore.js";
+export { REMOTE_SCHEMA_LOCKFILE, RemoteSchemaStore } from "./remoteSchemaStore.js";
 export type { ParseXmlOptions } from "./runtime.js";
 export {
   decodeTagNameCharRefs,

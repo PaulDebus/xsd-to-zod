@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import { Xsd2ZodError } from "./errors.js";
-import type { ResolvedSchema, SchemaResolutionBase } from "./parseXsd.js";
+import type { ResolvedSchema, ResolveSchema, SchemaResolutionBase } from "./parseXsd.js";
 import { decodeXmlContent } from "./readXmlFile.js";
+import type { RemoteSchemaStore } from "./remoteSchemaStore.js";
 
 const MAX_FILES = 100;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -27,6 +28,10 @@ export type FetchSchemaResolverOptions = {
    * also contain remote entries.
    */
   fetchRemoteFromLocal?: boolean;
+  /** Resolve remote schemas from the local cache without network access. */
+  offline?: boolean;
+  /** Lockfile/cache store used for persisted resolution and integrity checks. */
+  store?: RemoteSchemaStore;
   onFetch?: (url: string, base: SchemaResolutionBase) => void;
   onRedirect?: (fromUrl: string, toUrl: string) => void;
   /** Test hook for exercising transport failures without external network access. */
@@ -196,16 +201,23 @@ const readResponseBody = async (
   return Buffer.concat(chunks, size);
 };
 
+export type FetchSchemaResolver = ResolveSchema & {
+  resolve: ResolveSchema;
+  commit: () => Promise<number>;
+};
+
 export const createFetchSchemaResolver = ({
   allowHttp = false,
   allowedHosts = [],
   entryUrls = [],
   fetchTransitive = true,
   fetchRemoteFromLocal = true,
+  offline = false,
+  store,
   onFetch,
   onRedirect,
   fetchImplementation = undiciFetch,
-}: FetchSchemaResolverOptions) => {
+}: FetchSchemaResolverOptions): FetchSchemaResolver => {
   const allowed = new Set(allowedHosts.map((host) => host.toLowerCase()));
   const entries = new Set(entryUrls.map((url) => new URL(url).href));
   const dispatcher = new EnvHttpProxyAgent();
@@ -300,6 +312,13 @@ export const createFetchSchemaResolver = ({
         );
       }
       totalBytes += body.length;
+      const etag = response.headers.get("etag") ?? undefined;
+      store?.stage({
+        requestedUrl: url.href,
+        finalUrl: currentUrl.href,
+        content: body,
+        ...(etag !== undefined && { etag }),
+      });
       // Entries resolve relative imports against the final URL after
       // redirects, so record the depth under both the requested and the
       // final href; otherwise a redirected chain undercounts its depth.
@@ -309,7 +328,7 @@ export const createFetchSchemaResolver = ({
     }
   };
 
-  return async (
+  const resolve = async (
     location: string,
     base: SchemaResolutionBase,
   ): Promise<ResolvedSchema | undefined> => {
@@ -347,6 +366,25 @@ export const createFetchSchemaResolver = ({
     if (cached) {
       return cached;
     }
+    if (store) {
+      const stored = await store.read(url.href);
+      if (stored !== undefined) {
+        depthByUrl.set(url.href, depth);
+        depthByUrl.set(stored.url, depth);
+        const resolved = Promise.resolve({
+          content: decodeXmlContent(stored.content),
+          url: stored.url,
+        });
+        cache.set(url.href, resolved);
+        cache.set(stored.url, resolved);
+        return resolved;
+      }
+    } else if (offline) {
+      throw new Xsd2ZodError(
+        "remote-cache-miss",
+        `Remote schema "${url.href}" is not present in the local cache`,
+      );
+    }
     const fetched = fetchSchema(url, depth, base).catch((error: unknown) => {
       throw error instanceof Xsd2ZodError ? error : fetchError(url.href, error);
     });
@@ -359,4 +397,9 @@ export const createFetchSchemaResolver = ({
     );
     return fetched;
   };
+
+  return Object.assign(resolve, {
+    resolve,
+    commit: async () => store?.commit() ?? 0,
+  });
 };
