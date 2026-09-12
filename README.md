@@ -156,6 +156,7 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--no-fetch` | Fetch only a remote entry schema and skip its remote imports/includes |
 | `--frozen` | Verify every cached or fetched remote schema against `xsd-to-zod.lock.json`; fail on missing entries or drift and never update the lockfile |
 | `--offline` | Resolve remote schemas from the local cache only; fail on a cache miss |
+| `--revalidate` | Revalidate cached remote schemas against the server with conditional ETag/`If-None-Match` requests; a 304 serves the integrity-checked cache instead of re-downloading |
 | `--allow-http` | Permit insecure `http://` schema URLs (`https://` only by default) |
 | `--allow-host <host>` | Repeatable host allowlist for every fetched schema, including the entry URL |
 
@@ -177,6 +178,11 @@ Successful fetches write `xsd-to-zod.lock.json` in the current directory and pop
 }
 ```
 
+The recorded `etag` enables conditional revalidation with `--revalidate`:
+cached entries are checked against the server and reused unchanged on a 304.
+Revalidation relies on ETags only (`Last-Modified` is not used); entries
+without a recorded ETag are fetched in full.
+
 Vendor a remote schema closure to self-contained local files for the
 commit-to-repo flow:
 
@@ -195,7 +201,9 @@ xsd-to-zod download ./local.xsd -o vendor/schemas   # local entry, remote import
 its relative structure), accepts `--allow-http`, `--allow-host`, and `--offline`
 (vendoring from the local cache), and updates the lockfile on every run.
 Re-running always fetches fresh bytes, so upstream changes surface as
-reviewable diffs in the vendored files and the lockfile. Locations that
+reviewable diffs in the vendored files and the lockfile. With `--revalidate`,
+repeat runs send `If-None-Match` for entries with a recorded ETag, and a 304
+reuses the cache instead of re-downloading full bodies. Locations that
 cannot be resolved are left as-is and reported; the output then states the
 closure is partial.
 

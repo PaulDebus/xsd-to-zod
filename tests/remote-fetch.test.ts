@@ -19,14 +19,18 @@ type Route = {
 type TestServer = {
   origin: string;
   requests: string[];
+  validators: (string | undefined)[];
   close: () => Promise<void>;
 };
 
 const startServer = async (routes: Record<string, Route>): Promise<TestServer> => {
   const requests: string[] = [];
+  const validators: (string | undefined)[] = [];
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
     requests.push(pathname);
+    const ifNoneMatch = request.headers["if-none-match"];
+    validators.push(typeof ifNoneMatch === "string" ? ifNoneMatch : undefined);
     const route = routes[pathname];
     if (!route) {
       response.writeHead(404, { "content-type": "text/plain" });
@@ -35,6 +39,11 @@ const startServer = async (routes: Record<string, Route>): Promise<TestServer> =
     }
     if (route.redirectTo !== undefined) {
       response.writeHead(302, { location: route.redirectTo });
+      response.end();
+      return;
+    }
+    if (route.etag !== undefined && ifNoneMatch === route.etag) {
+      response.writeHead(304);
       response.end();
       return;
     }
@@ -56,6 +65,7 @@ const startServer = async (routes: Record<string, Route>): Promise<TestServer> =
   return {
     origin: `http://127.0.0.1:${address.port}`,
     requests,
+    validators,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -1268,6 +1278,233 @@ describe("download subcommand", () => {
       // The unresolvable location is left as-is rather than rewritten.
       expect(fs.readFileSync(path.join(vendorDir, "main.xsd"), "utf8")).toContain(
         'schemaLocation="missing.xsd"',
+      );
+    });
+  });
+});
+
+describe("ETag revalidation", () => {
+  const entrySchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:t="urn:types" targetNamespace="urn:main">
+    <xs:import namespace="urn:types" schemaLocation="types.xsd"/>
+    <xs:element name="doc" type="t:ThingType"/>
+  </xs:schema>`;
+
+  it("sends If-None-Match with --revalidate and serves 304s from the cache", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer(
+        {
+          "/entry.xsd": { body: entrySchema, etag: '"entry-v1"' },
+          "/types.xsd": { body: typeSchema("ThingType"), etag: '"types-v1"' },
+        },
+        async (server) => {
+          const args = ["download", `${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+          expect((await runCli(args, { cacheDir })).code).toBe(0);
+          expect(server.validators).toEqual([undefined, undefined]);
+
+          const host = hostSegment(server.origin);
+          const vendoredEntry = path.join(dir, host, "entry.xsd");
+          const vendoredTypes = path.join(dir, host, "types.xsd");
+          const entrySnapshot = fs.readFileSync(vendoredEntry, "utf8");
+          const typesSnapshot = fs.readFileSync(vendoredTypes, "utf8");
+          const lockfileSnapshot = fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8");
+
+          server.requests.length = 0;
+          server.validators.length = 0;
+          const revalidated = await runCli([...args, "--revalidate"], { cacheDir });
+          expect(revalidated.code).toBe(0);
+          expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+          expect(server.validators).toEqual(['"entry-v1"', '"types-v1"']);
+          // 304s: vendored files and lockfile are byte-identical.
+          expect(fs.readFileSync(vendoredEntry, "utf8")).toBe(entrySnapshot);
+          expect(fs.readFileSync(vendoredTypes, "utf8")).toBe(typesSnapshot);
+          expect(fs.readFileSync(path.join(dir, "xsd-to-zod.lock.json"), "utf8")).toBe(
+            lockfileSnapshot,
+          );
+
+          // Contrast: without --revalidate a repeat run downloads full bodies.
+          server.requests.length = 0;
+          server.validators.length = 0;
+          expect((await runCli(args, { cacheDir })).code).toBe(0);
+          expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+          expect(server.validators).toEqual([undefined, undefined]);
+        },
+      );
+    });
+  });
+
+  it("vendors changed content and records the new sha256/etag when revalidation gets a 200", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const routes: Record<string, Route> = {
+        "/entry.xsd": { body: entrySchema, etag: '"entry-v1"' },
+        "/types.xsd": { body: typeSchema("ThingType"), etag: '"types-v1"' },
+      };
+      await withServer(routes, async (server) => {
+        const args = ["download", `${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+        expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+        routes["/types.xsd"] = { body: typeSchema("ChangedType"), etag: '"types-v2"' };
+        server.requests.length = 0;
+        server.validators.length = 0;
+        const revalidated = await runCli([...args, "--revalidate"], { cacheDir });
+        expect(revalidated.code).toBe(0);
+        expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+        expect(server.validators).toEqual(['"entry-v1"', '"types-v1"']);
+
+        const vendoredTypes = path.join(dir, hostSegment(server.origin), "types.xsd");
+        expect(fs.readFileSync(vendoredTypes, "utf8")).toContain("ChangedType");
+        const lockfile = readLockfile(dir);
+        const entry = lockfile.schemas[`${server.origin}/types.xsd`];
+        expect(entry?.etag).toBe('"types-v2"');
+        expect(entry?.sha256).toBe(
+          createHash("sha256").update(typeSchema("ChangedType")).digest("hex"),
+        );
+      });
+    });
+  });
+
+  it("sends no If-None-Match and downloads full bodies for routes without an etag", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer(
+        {
+          "/entry.xsd": { body: entrySchema },
+          "/types.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          const args = ["download", `${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+          expect((await runCli(args, { cacheDir })).code).toBe(0);
+          expect(readLockfile(dir).schemas[`${server.origin}/entry.xsd`]?.etag).toBeUndefined();
+
+          server.requests.length = 0;
+          server.validators.length = 0;
+          const revalidated = await runCli([...args, "--revalidate"], { cacheDir });
+          expect(revalidated.code).toBe(0);
+          expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+          expect(server.validators).toEqual([undefined, undefined]);
+          const vendoredTypes = path.join(dir, hostSegment(server.origin), "types.xsd");
+          expect(fs.readFileSync(vendoredTypes, "utf8")).toContain("ThingType");
+        },
+      );
+    });
+  });
+
+  it("rejects --revalidate combined with --offline or with local-only inputs", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        { "/entry.xsd": { body: entrySchema, etag: '"entry-v1"' } },
+        async (server) => {
+          const url = `${server.origin}/entry.xsd`;
+          const downloadConflict = await runCli([
+            "download",
+            url,
+            "-o",
+            dir,
+            "--allow-http",
+            "--offline",
+            "--revalidate",
+          ]);
+          expect(downloadConflict.code).toBe(1);
+          expect(downloadConflict.stderr).toContain(
+            "--revalidate and --offline cannot be used together",
+          );
+
+          const generateConflict = await runCli([
+            url,
+            "-o",
+            dir,
+            "--allow-http",
+            "--offline",
+            "--revalidate",
+          ]);
+          expect(generateConflict.code).toBe(1);
+          expect(generateConflict.stderr).toContain(
+            "--revalidate and --offline cannot be used together",
+          );
+
+          const local = path.join(dir, "local.xsd");
+          fs.writeFileSync(
+            local,
+            `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+              <xs:element name="doc" type="xs:string"/>
+            </xs:schema>`,
+          );
+          const localOnly = await runCli([local, "-o", dir, "--revalidate"]);
+          expect(localOnly.code).toBe(1);
+          expect(localOnly.stderr).toContain("--revalidate only applies to remote http(s) inputs");
+
+          expect(server.requests).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it("accepts a 304 under --frozen --revalidate and rejects changed bytes", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const routes: Record<string, Route> = {
+        "/entry.xsd": { body: entrySchema, etag: '"entry-v1"' },
+        "/types.xsd": { body: typeSchema("ThingType"), etag: '"types-v1"' },
+      };
+      await withServer(routes, async (server) => {
+        const args = [`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+        expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+        server.requests.length = 0;
+        server.validators.length = 0;
+        const frozen = await runCli([...args, "--frozen", "--revalidate"], { cacheDir });
+        expect(frozen.code).toBe(0);
+        expect(server.requests).toEqual(["/entry.xsd", "/types.xsd"]);
+        expect(server.validators).toEqual(['"entry-v1"', '"types-v1"']);
+
+        routes["/types.xsd"] = { body: typeSchema("ChangedType"), etag: '"types-v2"' };
+        const changed = await runCli([...args, "--frozen", "--revalidate"], { cacheDir });
+        expect(changed.code).toBe(1);
+        expect(changed.stderr).toContain("[remote-integrity]");
+      });
+    });
+  });
+
+  it("drops the conditional validator when a redirect crosses origins", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const standalone = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+        <xs:element name="doc" type="xs:string"/>
+      </xs:schema>`;
+      const originRoutes: Record<string, Route> = {
+        "/entry.xsd": { body: standalone, etag: '"origin-v1"' },
+      };
+      await withServer(
+        { "/entry.xsd": { body: standalone, etag: '"target-v1"' } },
+        async (target) => {
+          await withServer(originRoutes, async (origin) => {
+            const args = ["download", `${origin.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+            expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+            // The entry now redirects cross-origin to the target server.
+            originRoutes["/entry.xsd"] = {
+              body: "",
+              redirectTo: `${target.origin}/entry.xsd`,
+            };
+            origin.validators.length = 0;
+            target.validators.length = 0;
+
+            const revalidated = await runCli([...args, "--revalidate"], { cacheDir });
+            expect(revalidated.code).toBe(0);
+            // The origin still receives the recorded validator ...
+            expect(origin.validators).toEqual(['"origin-v1"']);
+            // ... but it is never forwarded across origins.
+            expect(target.validators).toEqual([undefined]);
+
+            // The unconditional fetch staged fresh bytes, so the lockfile
+            // records the redirect drift instead of hiding it behind a 304.
+            const entry = readLockfile(dir).schemas[`${origin.origin}/entry.xsd`];
+            expect(entry?.finalUrl).toBe(`${target.origin}/entry.xsd`);
+            expect(entry?.etag).toBe('"target-v1"');
+          });
+        },
       );
     });
   });
