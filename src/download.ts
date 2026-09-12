@@ -31,6 +31,11 @@ export type DownloadedSchemaClosure = {
   files: string[];
   /** Diagnostics collected while walking the closure. */
   diagnostics: Diagnostic[];
+  /**
+   * Raw schemaLocations that could not be resolved and were left as-is in the
+   * vendored files, so callers can tell a partial closure from a complete one.
+   */
+  unresolved: string[];
   /** Number of remote schemas recorded in the lockfile by the store commit. */
   recorded: number;
 };
@@ -147,7 +152,11 @@ export const downloadSchemaClosure = async (
   const edges = new Map<string, Map<string, string>>();
   let entryDocKey: string | undefined;
 
-  const record = (base: SchemaResolutionBase, location: string, resolved: ResolvedSchema): void => {
+  const trackResolvedDocument = (
+    base: SchemaResolutionBase,
+    location: string,
+    resolved: ResolvedSchema,
+  ): void => {
     docs.set(resolved.url, resolved.content);
     const container = base.kind === "url" ? base.url : base.path;
     let edgeMap = edges.get(container);
@@ -182,7 +191,7 @@ export const downloadSchemaClosure = async (
       const filePath = path.resolve(path.dirname(base.path), location);
       try {
         const resolved = { content: readXmlFile(filePath), url: filePath };
-        record(base, location, resolved);
+        trackResolvedDocument(base, location, resolved);
         return resolved;
       } catch {
         return undefined;
@@ -190,7 +199,7 @@ export const downloadSchemaClosure = async (
     }
     const resolved = await fetchResolver.resolve(location, base);
     if (resolved !== undefined) {
-      record(base, location, resolved);
+      trackResolvedDocument(base, location, resolved);
     }
     return resolved;
   };
@@ -296,10 +305,21 @@ export const downloadSchemaClosure = async (
   }
 
   const recorded = (await store?.commit()) ?? 0;
+  const unresolved = [
+    ...new Set(
+      ir.diagnostics
+        .filter(
+          (diagnostic) =>
+            diagnostic.kind === "remote-schema-location" || diagnostic.kind === "unresolved-import",
+        )
+        .map((diagnostic) => diagnostic.ref ?? diagnostic.message),
+    ),
+  ].sort();
   return {
     entry: relByKey.get(entryDocKey) ?? entryLocation,
     files,
     diagnostics: ir.diagnostics,
+    unresolved,
     recorded,
   };
 };

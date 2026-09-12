@@ -278,6 +278,11 @@ const download = async (entry: string, opts: DownloadOptions): Promise<void> => 
   for (const diagnostic of result.diagnostics) {
     console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}`);
   }
+  if (result.unresolved.length > 0) {
+    console.error(
+      `warning: ${result.unresolved.length} schemaLocation${result.unresolved.length === 1 ? "" : "s"} could not be vendored and ${result.unresolved.length === 1 ? "was" : "were"} left as-is; the vendored closure is partial`,
+    );
+  }
   if (result.recorded > 0 && !opts.silent) {
     console.log(
       `recorded ${result.recorded} remote schema${result.recorded === 1 ? "" : "s"} in xsd-to-zod.lock.json`,
@@ -285,8 +290,12 @@ const download = async (entry: string, opts: DownloadOptions): Promise<void> => 
   }
   if (!opts.silent) {
     const outDir = resolve(opts.out);
+    const partial =
+      result.unresolved.length > 0
+        ? ` (${result.unresolved.length} location${result.unresolved.length === 1 ? "" : "s"} unresolved; closure is partial)`
+        : "";
     console.log(
-      `Vendored ${result.files.length} schema${result.files.length === 1 ? "" : "s"} to ${outDir}`,
+      `Vendored ${result.files.length} schema${result.files.length === 1 ? "" : "s"} to ${outDir}${partial}`,
     );
     console.log(`entry: ${join(outDir, ...result.entry.split("/"))}`);
   }

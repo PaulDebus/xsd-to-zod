@@ -194,7 +194,9 @@ xsd-to-zod download ./local.xsd -o vendor/schemas   # local entry, remote import
 its relative structure), accepts `--allow-http`, `--allow-host`, and `--offline`
 (vendoring from the local cache), and updates the lockfile on every run.
 Re-running always fetches fresh bytes, so upstream changes surface as
-reviewable diffs in the vendored files and the lockfile.
+reviewable diffs in the vendored files and the lockfile. Locations that
+cannot be resolved are left as-is and reported; the output then states the
+closure is partial.
 
 Bundle all imports and includes into a single self-contained XSD:
 

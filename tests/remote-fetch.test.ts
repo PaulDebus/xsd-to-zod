@@ -899,11 +899,10 @@ describe("remote schema lockfile and cache", () => {
   });
 });
 
-const hostSegment = (origin: string): string =>
-  new URL(origin).host.replace(/[^\p{L}\p{N}._~-]/gu, "_");
-
-const queryHash = (search: string): string =>
-  createHash("sha256").update(search).digest("hex").slice(0, 8);
+// Test servers always bind 127.0.0.1:<port>, so only the colon needs
+// sanitizing. This intentionally does not mirror the implementation's
+// general-purpose sanitizer.
+const hostSegment = (origin: string): string => new URL(origin).host.replace(":", "_");
 
 describe("download subcommand", () => {
   it("vendors a remote closure with rewritten locations consumable with zero flags", async () => {
@@ -1048,8 +1047,9 @@ describe("download subcommand", () => {
           expect(server.requests).toEqual(["/q/entry.xsd", "/q/shared.xsd", "/q/shared.xsd"]);
 
           const host = hostSegment(server.origin);
-          const first = `shared-${queryHash("?v=1")}.xsd`;
-          const second = `shared-${queryHash("?v=2")}.xsd`;
+          // Hash-suffixed for the "?v=1" / "?v=2" query variants.
+          const first = "shared-055e0114.xsd";
+          const second = "shared-5de144d3.xsd";
           expect(fs.existsSync(path.join(dir, host, "q", first))).toBe(true);
           expect(fs.existsSync(path.join(dir, host, "q", second))).toBe(true);
           const entryContent = fs.readFileSync(path.join(dir, host, "q", "entry.xsd"), "utf8");
@@ -1132,7 +1132,7 @@ describe("download subcommand", () => {
             { cacheDir: path.join(dir, "cache") },
           );
           expect(result.code).toBe(0);
-          const hashed = `shared-${queryHash("?a=1&b=2")}.xsd`;
+          const hashed = "shared-eef4d40b.xsd"; // "?a=1&b=2"
           const host = hostSegment(server.origin);
           expect(fs.existsSync(path.join(dir, host, "e", hashed))).toBe(true);
           const entryContent = fs.readFileSync(path.join(dir, host, "e", "entry.xsd"), "utf8");
@@ -1246,6 +1246,29 @@ describe("download subcommand", () => {
       );
       expect(missing.code).toBe(1);
       expect(missing.stderr).toContain("[remote-lockfile-missing]");
+    });
+  });
+
+  it("marks the closure partial when a local include cannot be vendored", async () => {
+    await withTempDirAsync(async (dir) => {
+      const entry = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        entry,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:include schemaLocation="missing.xsd"/>
+          <xs:element name="doc" type="xs:string"/>
+        </xs:schema>`,
+      );
+      const vendorDir = path.join(dir, "vendor");
+      const result = await runCli(["download", entry, "-o", vendorDir]);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain("[unresolved-import]");
+      expect(result.stderr).toContain("could not be vendored");
+      expect(result.stdout).toContain("closure is partial");
+      // The unresolvable location is left as-is rather than rewritten.
+      expect(fs.readFileSync(path.join(vendorDir, "main.xsd"), "utf8")).toContain(
+        'schemaLocation="missing.xsd"',
+      );
     });
   });
 });
