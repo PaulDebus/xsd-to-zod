@@ -898,3 +898,377 @@ describe("remote schema lockfile and cache", () => {
     });
   });
 });
+
+// Test servers always bind 127.0.0.1:<port>, so only the colon needs
+// sanitizing. This intentionally does not mirror the implementation's
+// general-purpose sanitizer.
+const hostSegment = (origin: string): string => new URL(origin).host.replace(":", "_");
+
+describe("download subcommand", () => {
+  it("vendors a remote closure with rewritten locations consumable with zero flags", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/api/entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:unused"/>
+              <xs:import namespace="urn:types" schemaLocation="types/common.xsd"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/api/types/common.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:types">
+              <xs:include schemaLocation="/shared.xsd"/>
+              <xs:complexType name="ThingType">
+                <xs:sequence><xs:element name="shared" type="t:SharedType"/></xs:sequence>
+              </xs:complexType>
+            </xs:schema>`,
+          },
+          "/shared.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+              <xs:simpleType name="SharedType"><xs:restriction base="xs:string"/></xs:simpleType>
+            </xs:schema>`,
+          },
+        },
+        async (server) => {
+          const result = await runCli(
+            ["download", `${server.origin}/api/entry.xsd`, "-o", dir, "--allow-http"],
+            { cacheDir: path.join(dir, "cache") },
+          );
+          expect(result.code).toBe(0);
+          expect(result.stderr).toContain("fetching ");
+          expect(result.stdout).toContain("Vendored 3 schemas");
+          expect(result.stdout).toContain("recorded 3 remote schemas");
+
+          const host = hostSegment(server.origin);
+          const vendoredEntry = path.join(dir, host, "api", "entry.xsd");
+          const vendoredCommon = path.join(dir, host, "api", "types", "common.xsd");
+          const vendoredShared = path.join(dir, host, "shared.xsd");
+          expect(fs.existsSync(vendoredEntry)).toBe(true);
+          expect(fs.existsSync(vendoredCommon)).toBe(true);
+          expect(fs.existsSync(vendoredShared)).toBe(true);
+
+          // Already-relative locations and namespace-only imports stay untouched.
+          const entryContent = fs.readFileSync(vendoredEntry, "utf8");
+          expect(entryContent).toContain('schemaLocation="types/common.xsd"');
+          expect(entryContent).toContain('<xs:import namespace="urn:unused"/>');
+          // Root-absolute locations are rewritten to relative paths.
+          expect(fs.readFileSync(vendoredCommon, "utf8")).toContain(
+            'schemaLocation="../../shared.xsd"',
+          );
+
+          const lockfile = readLockfile(dir);
+          expect(Object.keys(lockfile.schemas)).toEqual([
+            `${server.origin}/api/entry.xsd`,
+            `${server.origin}/api/types/common.xsd`,
+            `${server.origin}/shared.xsd`,
+          ]);
+
+          // The vendored closure is self-contained: generation needs no flags
+          // and performs no network access.
+          server.requests.length = 0;
+          const genOut = path.join(dir, "gen");
+          const generated = await runCli([vendoredEntry, "-o", genOut]);
+          expect(generated.code).toBe(0);
+          expect(generated.stderr).not.toContain("fetching ");
+          expect(generated.stderr).not.toContain("remote-schema-location");
+          expect(server.requests).toEqual([]);
+          expect(fs.readFileSync(path.join(genOut, "entry.zod.ts"), "utf8")).toContain(
+            "ThingTypeSchema",
+          );
+        },
+      );
+    });
+  });
+
+  it("vendors a local entry with remote imports and rewrites the remote locations", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer({ "/v1/types.xsd": { body: typeSchema("ThingType") } }, async (server) => {
+        const entry = path.join(dir, "main.xsd");
+        fs.writeFileSync(
+          entry,
+          `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+            xmlns:t="urn:types" targetNamespace="urn:main">
+            <xs:import namespace="urn:types" schemaLocation="${server.origin}/v1/types.xsd"/>
+            <xs:element name="doc" type="t:ThingType"/>
+          </xs:schema>`,
+        );
+        const vendorDir = path.join(dir, "vendor");
+        const result = await runCli(["download", entry, "-o", vendorDir, "--allow-http"], {
+          cacheDir: path.join(dir, "cache"),
+        });
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain("Vendored 2 schemas");
+
+        const host = hostSegment(server.origin);
+        const vendoredEntry = path.join(vendorDir, "main.xsd");
+        const vendoredTypes = path.join(vendorDir, host, "v1", "types.xsd");
+        expect(fs.existsSync(vendoredTypes)).toBe(true);
+        expect(fs.readFileSync(vendoredEntry, "utf8")).toContain(
+          `schemaLocation="${host}/v1/types.xsd"`,
+        );
+        // The source entry is not modified in place.
+        expect(fs.readFileSync(entry, "utf8")).toContain(`${server.origin}/v1/types.xsd`);
+
+        server.requests.length = 0;
+        const genOut = path.join(dir, "gen");
+        const generated = await runCli([vendoredEntry, "-o", genOut]);
+        expect(generated.code).toBe(0);
+        expect(generated.stderr).not.toContain("remote-schema-location");
+        expect(server.requests).toEqual([]);
+      });
+    });
+  });
+
+  it("fetches repeated imports once and disambiguates query strings", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/q/entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="shared.xsd?v=1"/>
+              <xs:import namespace="urn:types" schemaLocation="shared.xsd?v=2"/>
+              <xs:import namespace="urn:types" schemaLocation="shared.xsd?v=1"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/q/shared.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          const result = await runCli(
+            ["download", `${server.origin}/q/entry.xsd`, "-o", dir, "--allow-http"],
+            { cacheDir: path.join(dir, "cache") },
+          );
+          expect(result.code).toBe(0);
+          // Three imports, two distinct URLs.
+          expect(server.requests).toEqual(["/q/entry.xsd", "/q/shared.xsd", "/q/shared.xsd"]);
+
+          const host = hostSegment(server.origin);
+          // Hash-suffixed for the "?v=1" / "?v=2" query variants.
+          const first = "shared-055e0114.xsd";
+          const second = "shared-5de144d3.xsd";
+          expect(fs.existsSync(path.join(dir, host, "q", first))).toBe(true);
+          expect(fs.existsSync(path.join(dir, host, "q", second))).toBe(true);
+          const entryContent = fs.readFileSync(path.join(dir, host, "q", "entry.xsd"), "utf8");
+          expect(entryContent).toContain(`schemaLocation="${first}"`);
+          expect(entryContent).toContain(`schemaLocation="${second}"`);
+        },
+      );
+    });
+  });
+
+  it("keeps local deps inside the entry tree relative and flattens escaping ones", async () => {
+    await withTempDirAsync(async (dir) => {
+      const schemasDir = path.join(dir, "schemas");
+      fs.mkdirSync(path.join(schemasDir, "types"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "shared"), { recursive: true });
+      fs.writeFileSync(
+        path.join(schemasDir, "main.xsd"),
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:include schemaLocation="types/common.xsd"/>
+          <xs:include schemaLocation="../shared/base.xsd"/>
+          <xs:element name="doc" type="xs:string"/>
+        </xs:schema>`,
+      );
+      fs.writeFileSync(
+        path.join(schemasDir, "types", "common.xsd"),
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:complexType name="CommonType">
+            <xs:sequence><xs:element name="value" type="xs:string"/></xs:sequence>
+          </xs:complexType>
+        </xs:schema>`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "shared", "base.xsd"),
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:simpleType name="BaseType"><xs:restriction base="xs:string"/></xs:simpleType>
+        </xs:schema>`,
+      );
+
+      const vendorDir = path.join(dir, "vendor");
+      const result = await runCli(["download", path.join(schemasDir, "main.xsd"), "-o", vendorDir]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Vendored 3 schemas");
+      // No remote schemas: nothing fetched, no lockfile written.
+      expect(result.stdout).not.toContain("recorded");
+      expect(fs.existsSync(path.join(vendorDir, "xsd-to-zod.lock.json"))).toBe(false);
+
+      // A dep inside the entry tree keeps its relative path and location.
+      expect(fs.existsSync(path.join(vendorDir, "types", "common.xsd"))).toBe(true);
+      // A dep outside the entry tree is flattened under _external/ and rewritten.
+      const external = fs.readdirSync(path.join(vendorDir, "_external"));
+      expect(external).toHaveLength(1);
+      expect(external[0]).toMatch(/^[0-9a-f]{8}-base\.xsd$/);
+      const vendoredEntry = path.join(vendorDir, "main.xsd");
+      const entryContent = fs.readFileSync(vendoredEntry, "utf8");
+      expect(entryContent).toContain('schemaLocation="types/common.xsd"');
+      expect(entryContent).toContain(`schemaLocation="_external/${external[0]}"`);
+
+      const genOut = path.join(dir, "gen");
+      const generated = await runCli([vendoredEntry, "-o", genOut]);
+      expect(generated.code).toBe(0);
+    });
+  });
+
+  it("matches schemaLocations with XML-escaped characters when rewriting", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/e/entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="shared.xsd?a=1&amp;b=2"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/e/shared.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          const result = await runCli(
+            ["download", `${server.origin}/e/entry.xsd`, "-o", dir, "--allow-http"],
+            { cacheDir: path.join(dir, "cache") },
+          );
+          expect(result.code).toBe(0);
+          const hashed = "shared-eef4d40b.xsd"; // "?a=1&b=2"
+          const host = hostSegment(server.origin);
+          expect(fs.existsSync(path.join(dir, host, "e", hashed))).toBe(true);
+          const entryContent = fs.readFileSync(path.join(dir, host, "e", "entry.xsd"), "utf8");
+          expect(entryContent).toContain(`schemaLocation="${hashed}"`);
+          expect(entryContent).not.toContain("shared.xsd?a=1");
+        },
+      );
+    });
+  });
+
+  it("collapses traversal segments in remote locations and stays under the output directory", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer(
+        {
+          "/safe/entry.xsd": {
+            body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:t="urn:types" targetNamespace="urn:main">
+              <xs:import namespace="urn:types" schemaLocation="/%2e%2e/%2e%2e/escaped.xsd"/>
+              <xs:element name="doc" type="t:ThingType"/>
+            </xs:schema>`,
+          },
+          "/escaped.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          const result = await runCli(
+            ["download", `${server.origin}/safe/entry.xsd`, "-o", dir, "--allow-http"],
+            { cacheDir: path.join(dir, "cache") },
+          );
+          expect(result.code).toBe(0);
+          const host = hostSegment(server.origin);
+          expect(fs.existsSync(path.join(dir, host, "escaped.xsd"))).toBe(true);
+          expect(fs.readFileSync(path.join(dir, host, "safe", "entry.xsd"), "utf8")).toContain(
+            'schemaLocation="../escaped.xsd"',
+          );
+        },
+      );
+    });
+  });
+
+  it("enforces --allow-http and --allow-host on the entry URL", async () => {
+    await withTempDirAsync(async (dir) => {
+      await withServer({ "/entry.xsd": { body: typeSchema("ThingType") } }, async (server) => {
+        const insecure = await runCli(["download", `${server.origin}/entry.xsd`, "-o", dir], {
+          cacheDir: path.join(dir, "cache"),
+        });
+        expect(insecure.code).toBe(1);
+        expect(insecure.stderr).toContain("[remote-http-not-allowed]");
+
+        const wrongHost = await runCli(
+          [
+            "download",
+            `${server.origin}/entry.xsd`,
+            "-o",
+            dir,
+            "--allow-http",
+            "--allow-host",
+            "example.com",
+          ],
+          { cacheDir: path.join(dir, "cache") },
+        );
+        expect(wrongHost.code).toBe(1);
+        expect(wrongHost.stderr).toContain("[remote-host-not-allowed]");
+        expect(wrongHost.stderr).toContain("127.0.0.1");
+      });
+    });
+  });
+
+  it("re-fetches fresh bytes on repeat runs and vendors from the cache with --offline", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const routes: Record<string, Route> = {
+        "/entry.xsd": {
+          body: `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+            xmlns:t="urn:types" targetNamespace="urn:main">
+            <xs:import namespace="urn:types" schemaLocation="types.xsd"/>
+            <xs:element name="doc" type="t:ThingType"/>
+          </xs:schema>`,
+        },
+        "/types.xsd": { body: typeSchema("ThingType") },
+      };
+      const server = await startServer(routes);
+      const args = ["download", `${server.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+      try {
+        expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+        // A repeat run fetches live bytes again instead of serving the cache,
+        // so upstream changes surface as vendored and lockfile diffs.
+        routes["/types.xsd"]!.body = typeSchema("ChangedType");
+        const refreshed = await runCli(args, { cacheDir });
+        expect(refreshed.code).toBe(0);
+        expect(server.requests).toEqual(["/entry.xsd", "/types.xsd", "/entry.xsd", "/types.xsd"]);
+        const vendoredTypes = path.join(dir, hostSegment(server.origin), "types.xsd");
+        expect(fs.readFileSync(vendoredTypes, "utf8")).toContain("ChangedType");
+      } finally {
+        await server.close();
+      }
+
+      const offline = await runCli([...args, "--offline"], { cacheDir });
+      expect(offline.code).toBe(0);
+
+      const missing = await runCli(
+        [
+          "download",
+          `${server.origin}/entry.xsd`,
+          "-o",
+          path.join(dir, "empty"),
+          "--allow-http",
+          "--offline",
+        ],
+        { cacheDir },
+      );
+      expect(missing.code).toBe(1);
+      expect(missing.stderr).toContain("[remote-lockfile-missing]");
+    });
+  });
+
+  it("marks the closure partial when a local include cannot be vendored", async () => {
+    await withTempDirAsync(async (dir) => {
+      const entry = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        entry,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:include schemaLocation="missing.xsd"/>
+          <xs:element name="doc" type="xs:string"/>
+        </xs:schema>`,
+      );
+      const vendorDir = path.join(dir, "vendor");
+      const result = await runCli(["download", entry, "-o", vendorDir]);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain("[unresolved-import]");
+      expect(result.stderr).toContain("could not be vendored");
+      expect(result.stdout).toContain("closure is partial");
+      // The unresolvable location is left as-is rather than rewritten.
+      expect(fs.readFileSync(path.join(vendorDir, "main.xsd"), "utf8")).toContain(
+        'schemaLocation="missing.xsd"',
+      );
+    });
+  });
+});
