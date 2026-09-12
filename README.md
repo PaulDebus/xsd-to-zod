@@ -104,6 +104,7 @@ const xml = serializeXml(orderSchema, data);
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
 - **CLI**: directory input (recursive `.xsd` discovery), `--include-libraries` (auto-skip type-definition-only schemas), `--allow-missing-imports` (suppress unresolved ref warnings), `--silent`, and `bundle` subcommand for merging imports into one self-contained XSD
+- **Remote schemas**: http(s) URLs accepted directly as CLI input (host allowlists, https-only by default, resource caps, proxy support), `xsd-to-zod.lock.json` integrity pinning with a content cache (`--frozen`, `--offline`), and a `download` subcommand that vendors a remote schema closure to self-contained local files
 - **Encoding detection**: BOM and declaration sniffing (UTF-16LE/BE, CP1252, UTF-8) via `iconv-lite`
 - **Cardinality**: `minOccurs`/`maxOccurs` → `.optional()` / `z.array()` with `.min()`/`.max()` bounds; defaults/fixed with XSD-correct semantics (attribute defaults on absence, element defaults on present-but-empty)
 - **Nillable**: `xsi:nil="true"` → `.nullable()` in schema, round-trips through `serializeXml`
@@ -231,6 +232,21 @@ consumers can supply `resolveSchema(location, base)` to materialize an http(s)
 entry schema or remote import — `createFetchSchemaResolver` from `'xsd-to-zod'`
 provides the same fetching, caps, and host policy the CLI uses; returning
 `undefined` preserves the default "remote schemaLocation skipped" diagnostic.
+
+The vendoring flow is available too, with the same lockfile/cache store the CLI
+uses:
+
+```ts
+import { downloadSchemaClosure, RemoteSchemaStore } from 'xsd-to-zod';
+
+const store = await RemoteSchemaStore.open({ cwd: process.cwd() });
+const result = await downloadSchemaClosure('https://example.com/schema.xsd', {
+  outDir: 'vendor/schemas',
+  store,
+});
+// result.entry / result.files — vendored paths relative to outDir
+// result.unresolved — schemaLocations left as-is (partial closure when non-empty)
+```
 
 ### Parse and serialize XML
 
