@@ -33,8 +33,10 @@ export type FetchSchemaResolverOptions = {
   /**
    * Revalidate cacheable remote schemas against the server: when the
    * lockfile holds an ETag for a URL, send a conditional If-None-Match
-   * request and serve the integrity-checked cached bytes on 304. Ignored
-   * when offline is set: offline resolution must read the cache.
+   * request and serve the integrity-checked cached bytes on 304. URLs
+   * without a recorded ETag follow the normal paths (served from cache,
+   * or fetched live when refresh is set). Ignored when offline is set:
+   * offline resolution must read the cache.
    */
   revalidate?: boolean;
   /**
@@ -257,6 +259,9 @@ export const createFetchSchemaResolver = ({
     }
 
     let currentUrl = url;
+    // Cross-origin redirects drop the validator (see below), so track the
+    // effective conditional header per hop instead of using the parameter.
+    let conditional = ifNoneMatch;
     for (let redirects = 0; ; redirects++) {
       onFetch?.(currentUrl.href, base);
       const response = await fetchImplementation(currentUrl, {
@@ -264,7 +269,7 @@ export const createFetchSchemaResolver = ({
         redirect: "manual",
         credentials: "omit",
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        ...(ifNoneMatch !== undefined && { headers: { "if-none-match": ifNoneMatch } }),
+        ...(conditional !== undefined && { headers: { "if-none-match": conditional } }),
       });
 
       if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -294,6 +299,11 @@ export const createFetchSchemaResolver = ({
         assertFetchable(redirectUrl, allowHttp, allowed);
         if (redirectUrl.origin !== currentUrl.origin) {
           onRedirect?.(currentUrl.href, redirectUrl.href);
+          // Never forward a validator to another origin: the ETag belongs
+          // to the host that recorded it, and a 304 from the new host
+          // would serve bytes pinned to the old final URL, hiding the
+          // redirect drift the lockfile is meant to surface.
+          conditional = undefined;
         }
         currentUrl = redirectUrl;
         continue;
@@ -301,7 +311,7 @@ export const createFetchSchemaResolver = ({
 
       // A 304 answers a conditional request: the cached bytes are still
       // current. Without a validator sent, 304 is just a failed response.
-      if (response.status === 304 && ifNoneMatch !== undefined) {
+      if (response.status === 304 && conditional !== undefined) {
         await response.body?.cancel().catch(() => undefined);
         return null;
       }
@@ -350,6 +360,31 @@ export const createFetchSchemaResolver = ({
       depthByUrl.set(currentUrl.href, depth);
       return { content: decodeXmlContent(body), url: currentUrl.href };
     }
+  };
+
+  // Serve integrity-checked cached bytes for a URL. Returns undefined on a
+  // cache miss so the caller can fall through to a live fetch.
+  const serveFromStore = async (
+    fromStore: RemoteSchemaStore,
+    url: URL,
+    depth: number,
+  ): Promise<ResolvedSchema | undefined> => {
+    const stored = await fromStore.read(url.href);
+    if (stored === undefined) {
+      return undefined;
+    }
+    // The lockfile final URL is a second fetch surface: it must pass
+    // the same protocol and allowlist policy as a live fetch.
+    assertFetchable(new URL(stored.url), allowHttp, allowed);
+    depthByUrl.set(url.href, depth);
+    depthByUrl.set(stored.url, depth);
+    const resolved = Promise.resolve({
+      content: decodeXmlContent(stored.content),
+      url: stored.url,
+    });
+    cache.set(url.href, resolved);
+    cache.set(stored.url, resolved);
+    return resolved;
   };
 
   const resolve = async (
@@ -407,20 +442,9 @@ export const createFetchSchemaResolver = ({
             return fresh;
           }
           // 304 Not Modified: serve the integrity-checked cached bytes.
-          const stored = await store.read(url.href);
-          if (stored !== undefined) {
-            // The lockfile final URL is a second fetch surface: it must pass
-            // the same protocol and allowlist policy as a live fetch.
-            assertFetchable(new URL(stored.url), allowHttp, allowed);
-            depthByUrl.set(url.href, depth);
-            depthByUrl.set(stored.url, depth);
-            const resolved = Promise.resolve({
-              content: decodeXmlContent(stored.content),
-              url: stored.url,
-            });
-            cache.set(url.href, resolved);
-            cache.set(stored.url, resolved);
-            return resolved;
+          const served = await serveFromStore(store, url, depth);
+          if (served !== undefined) {
+            return served;
           }
           // The cache file was evicted; fall through to an unconditional
           // fetch below (the failed conditional fetch may double-count one
@@ -428,20 +452,9 @@ export const createFetchSchemaResolver = ({
         }
       }
       if (!refresh || offline) {
-        const stored = await store.read(url.href);
-        if (stored !== undefined) {
-          // The lockfile final URL is a second fetch surface: it must pass
-          // the same protocol and allowlist policy as a live fetch.
-          assertFetchable(new URL(stored.url), allowHttp, allowed);
-          depthByUrl.set(url.href, depth);
-          depthByUrl.set(stored.url, depth);
-          const resolved = Promise.resolve({
-            content: decodeXmlContent(stored.content),
-            url: stored.url,
-          });
-          cache.set(url.href, resolved);
-          cache.set(stored.url, resolved);
-          return resolved;
+        const served = await serveFromStore(store, url, depth);
+        if (served !== undefined) {
+          return served;
         }
       }
     } else if (offline) {

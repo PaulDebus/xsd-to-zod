@@ -180,6 +180,8 @@ Successful fetches write `xsd-to-zod.lock.json` in the current directory and pop
 
 The recorded `etag` enables conditional revalidation with `--revalidate`:
 cached entries are checked against the server and reused unchanged on a 304.
+Revalidation relies on ETags only (`Last-Modified` is not used); entries
+without a recorded ETag are fetched in full.
 
 Vendor a remote schema closure to self-contained local files for the
 commit-to-repo flow:

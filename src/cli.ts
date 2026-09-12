@@ -256,6 +256,9 @@ const collectOption = (value: string, previous: string[]): string[] => [...previ
 // ---------------------------------------------------------------------------
 
 const download = async (entry: string, opts: DownloadOptions): Promise<void> => {
+  if (opts.revalidate === true && opts.offline === true) {
+    throw new Error("--revalidate and --offline cannot be used together");
+  }
   const entryUrl = asHttpUrl(entry);
   const result = await downloadSchemaClosure(entry, {
     outDir: resolve(opts.out),
@@ -309,6 +312,9 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   const datatypes = opts.datatypes ?? "string";
   if (datatypes !== "string" && datatypes !== "structured") {
     throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
+  }
+  if (opts.revalidate === true && opts.offline === true) {
+    throw new Error("--revalidate and --offline cannot be used together");
   }
   const files = expandDirectories(filesOrDirs);
   const remoteInputs = filesOrDirs.flatMap((input) => {
@@ -641,10 +647,6 @@ program
 export const main = async (args: string[]): Promise<number> => {
   if (args.includes("--fetch") && args.includes("--no-fetch")) {
     console.error("error: --fetch and --no-fetch cannot be used together");
-    return 1;
-  }
-  if (args.includes("--revalidate") && args.includes("--offline")) {
-    console.error("error: --revalidate and --offline cannot be used together");
     return 1;
   }
   try {

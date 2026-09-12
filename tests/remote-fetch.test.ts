@@ -1466,4 +1466,46 @@ describe("ETag revalidation", () => {
       });
     });
   });
+
+  it("drops the conditional validator when a redirect crosses origins", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      const standalone = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+        <xs:element name="doc" type="xs:string"/>
+      </xs:schema>`;
+      const originRoutes: Record<string, Route> = {
+        "/entry.xsd": { body: standalone, etag: '"origin-v1"' },
+      };
+      await withServer(
+        { "/entry.xsd": { body: standalone, etag: '"target-v1"' } },
+        async (target) => {
+          await withServer(originRoutes, async (origin) => {
+            const args = ["download", `${origin.origin}/entry.xsd`, "-o", dir, "--allow-http"];
+            expect((await runCli(args, { cacheDir })).code).toBe(0);
+
+            // The entry now redirects cross-origin to the target server.
+            originRoutes["/entry.xsd"] = {
+              body: "",
+              redirectTo: `${target.origin}/entry.xsd`,
+            };
+            origin.validators.length = 0;
+            target.validators.length = 0;
+
+            const revalidated = await runCli([...args, "--revalidate"], { cacheDir });
+            expect(revalidated.code).toBe(0);
+            // The origin still receives the recorded validator ...
+            expect(origin.validators).toEqual(['"origin-v1"']);
+            // ... but it is never forwarded across origins.
+            expect(target.validators).toEqual([undefined]);
+
+            // The unconditional fetch staged fresh bytes, so the lockfile
+            // records the redirect drift instead of hiding it behind a 304.
+            const entry = readLockfile(dir).schemas[`${origin.origin}/entry.xsd`];
+            expect(entry?.finalUrl).toBe(`${target.origin}/entry.xsd`);
+            expect(entry?.etag).toBe('"target-v1"');
+          });
+        },
+      );
+    });
+  });
 });
