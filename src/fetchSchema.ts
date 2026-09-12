@@ -31,6 +31,13 @@ export type FetchSchemaResolverOptions = {
   /** Resolve remote schemas from the local cache without network access. */
   offline?: boolean;
   /**
+   * Revalidate cacheable remote schemas against the server: when the
+   * lockfile holds an ETag for a URL, send a conditional If-None-Match
+   * request and serve the integrity-checked cached bytes on 304. Ignored
+   * when offline is set: offline resolution must read the cache.
+   */
+  revalidate?: boolean;
+  /**
    * Skip cache reads and always fetch live bytes. Fetched results are still
    * staged so the store commit updates the lockfile and cache. Ignored when
    * offline is set: offline resolution must read the cache.
@@ -52,6 +59,7 @@ type FetchImplementation = (
     redirect: "manual";
     credentials: "omit";
     signal: AbortSignal;
+    headers?: Record<string, string>;
   },
 ) => Promise<FetchResponse>;
 
@@ -220,6 +228,7 @@ export const createFetchSchemaResolver = ({
   fetchRemoteFromLocal = true,
   offline = false,
   refresh = false,
+  revalidate = false,
   store,
   onFetch,
   onRedirect,
@@ -237,7 +246,8 @@ export const createFetchSchemaResolver = ({
     url: URL,
     depth: number,
     base: SchemaResolutionBase,
-  ): Promise<ResolvedSchema> => {
+    ifNoneMatch?: string,
+  ): Promise<ResolvedSchema | null> => {
     fileCount++;
     if (fileCount > MAX_FILES) {
       throw new Xsd2ZodError(
@@ -254,6 +264,7 @@ export const createFetchSchemaResolver = ({
         redirect: "manual",
         credentials: "omit",
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        ...(ifNoneMatch !== undefined && { headers: { "if-none-match": ifNoneMatch } }),
       });
 
       if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -288,6 +299,12 @@ export const createFetchSchemaResolver = ({
         continue;
       }
 
+      // A 304 answers a conditional request: the cached bytes are still
+      // current. Without a validator sent, 304 is just a failed response.
+      if (response.status === 304 && ifNoneMatch !== undefined) {
+        await response.body?.cancel().catch(() => undefined);
+        return null;
+      }
       if (response.status === 404) {
         throw new Xsd2ZodError(
           "remote-not-found",
@@ -373,21 +390,59 @@ export const createFetchSchemaResolver = ({
     if (cached) {
       return cached;
     }
-    if (store && (!refresh || offline)) {
-      const stored = await store.read(url.href);
-      if (stored !== undefined) {
-        // The lockfile final URL is a second fetch surface: it must pass
-        // the same protocol and allowlist policy as a live fetch.
-        assertFetchable(new URL(stored.url), allowHttp, allowed);
-        depthByUrl.set(url.href, depth);
-        depthByUrl.set(stored.url, depth);
-        const resolved = Promise.resolve({
-          content: decodeXmlContent(stored.content),
-          url: stored.url,
-        });
-        cache.set(url.href, resolved);
-        cache.set(stored.url, resolved);
-        return resolved;
+    if (store) {
+      if (revalidate && !offline) {
+        const validator = store.entry(url.href)?.etag;
+        if (validator !== undefined) {
+          let fresh: ResolvedSchema | null;
+          try {
+            fresh = await fetchSchema(url, depth, base, validator);
+          } catch (error) {
+            throw error instanceof Xsd2ZodError ? error : fetchError(url.href, error);
+          }
+          if (fresh !== null) {
+            const resolved = Promise.resolve(fresh);
+            cache.set(url.href, resolved);
+            cache.set(fresh.url, resolved);
+            return fresh;
+          }
+          // 304 Not Modified: serve the integrity-checked cached bytes.
+          const stored = await store.read(url.href);
+          if (stored !== undefined) {
+            // The lockfile final URL is a second fetch surface: it must pass
+            // the same protocol and allowlist policy as a live fetch.
+            assertFetchable(new URL(stored.url), allowHttp, allowed);
+            depthByUrl.set(url.href, depth);
+            depthByUrl.set(stored.url, depth);
+            const resolved = Promise.resolve({
+              content: decodeXmlContent(stored.content),
+              url: stored.url,
+            });
+            cache.set(url.href, resolved);
+            cache.set(stored.url, resolved);
+            return resolved;
+          }
+          // The cache file was evicted; fall through to an unconditional
+          // fetch below (the failed conditional fetch may double-count one
+          // file against the limits, which is acceptable).
+        }
+      }
+      if (!refresh || offline) {
+        const stored = await store.read(url.href);
+        if (stored !== undefined) {
+          // The lockfile final URL is a second fetch surface: it must pass
+          // the same protocol and allowlist policy as a live fetch.
+          assertFetchable(new URL(stored.url), allowHttp, allowed);
+          depthByUrl.set(url.href, depth);
+          depthByUrl.set(stored.url, depth);
+          const resolved = Promise.resolve({
+            content: decodeXmlContent(stored.content),
+            url: stored.url,
+          });
+          cache.set(url.href, resolved);
+          cache.set(stored.url, resolved);
+          return resolved;
+        }
       }
     } else if (offline) {
       throw new Xsd2ZodError(
@@ -395,9 +450,21 @@ export const createFetchSchemaResolver = ({
         `Remote schema "${url.href}" is not present in the local cache`,
       );
     }
-    const fetched = fetchSchema(url, depth, base).catch((error: unknown) => {
-      throw error instanceof Xsd2ZodError ? error : fetchError(url.href, error);
-    });
+    const fetched = fetchSchema(url, depth, base)
+      .then((resolved) => {
+        // Null means "304 Not Modified", which only a conditional request
+        // can produce; this call sent no validator.
+        if (resolved === null) {
+          throw new Xsd2ZodError(
+            "remote-http-status",
+            `Remote schema request failed with HTTP 304: "${url.href}"`,
+          );
+        }
+        return resolved;
+      })
+      .catch((error: unknown) => {
+        throw error instanceof Xsd2ZodError ? error : fetchError(url.href, error);
+      });
     cache.set(url.href, fetched);
     fetched.then(
       (resolved) => {

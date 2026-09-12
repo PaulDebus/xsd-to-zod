@@ -18,6 +18,11 @@ export type DownloadSchemaOptions = {
   allowedHosts?: string[];
   /** Resolve remote schemas from the local cache without network access. */
   offline?: boolean;
+  /**
+   * Revalidate cached remote schemas via ETag conditional requests: a 304
+   * reuses the cache instead of re-downloading the full body.
+   */
+  revalidate?: boolean;
   /** Lockfile/cache store used for persisted resolution and integrity checks. */
   store?: RemoteSchemaStore;
   onFetch?: (url: string, base: SchemaResolutionBase) => void;
@@ -128,6 +133,7 @@ export const downloadSchemaClosure = async (
     allowHttp = false,
     allowedHosts = [],
     offline = false,
+    revalidate = false,
     store,
     onFetch,
     onRedirect,
@@ -178,6 +184,7 @@ export const downloadSchemaClosure = async (
     fetchRemoteFromLocal: true,
     offline,
     refresh: true,
+    revalidate,
     ...(store !== undefined && { store }),
     ...(onFetch !== undefined && { onFetch }),
     ...(onRedirect !== undefined && { onRedirect }),

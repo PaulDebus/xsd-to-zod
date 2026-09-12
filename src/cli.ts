@@ -224,6 +224,7 @@ type GenerateOptions = {
   fetch?: boolean;
   frozen?: boolean;
   offline?: boolean;
+  revalidate?: boolean;
   allowHttp?: boolean;
   allowHost?: string[];
 };
@@ -242,6 +243,7 @@ type BundleOptions = {
 type DownloadOptions = {
   out: string;
   offline?: boolean;
+  revalidate?: boolean;
   allowHttp?: boolean;
   allowHost?: string[];
   silent?: boolean;
@@ -260,6 +262,7 @@ const download = async (entry: string, opts: DownloadOptions): Promise<void> => 
     allowHttp: opts.allowHttp === true,
     allowedHosts: opts.allowHost ?? [],
     offline: opts.offline === true,
+    revalidate: opts.revalidate === true,
     store: await RemoteSchemaStore.open({
       cwd: process.cwd(),
       offline: opts.offline === true,
@@ -319,7 +322,13 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
   if (!fetchRemote) {
     const flag =
-      opts.frozen === true ? "--frozen" : opts.offline === true ? "--offline" : undefined;
+      opts.frozen === true
+        ? "--frozen"
+        : opts.offline === true
+          ? "--offline"
+          : opts.revalidate === true
+            ? "--revalidate"
+            : undefined;
     if (flag !== undefined) {
       throw new Error(`${flag} only applies to remote http(s) inputs`);
     }
@@ -367,6 +376,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
         fetchTransitive: !skipTransitiveFetch,
         fetchRemoteFromLocal: opts.fetch === true,
         offline: opts.offline === true,
+        revalidate: opts.revalidate === true,
         store: await RemoteSchemaStore.open({
           cwd: process.cwd(),
           frozen: opts.frozen === true,
@@ -524,6 +534,10 @@ const program = new Command()
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
   .option("--frozen", "Verify remote schemas against xsd-to-zod.lock.json without updating it")
   .option("--offline", "Resolve remote schemas from the local cache only")
+  .option(
+    "--revalidate",
+    "Revalidate cached remote schemas against the server (ETag/If-None-Match) instead of serving them from the cache unchecked",
+  )
   .option("--allow-http", "Permit insecure http:// schema URLs")
   .option(
     "--allow-host <host>",
@@ -541,6 +555,10 @@ program
   .argument("<entry>", "Entry schema: http(s) URL or local .xsd file")
   .requiredOption("-o, --out <dir>", "Directory to vendor the schema closure into")
   .option("--offline", "Vendor remote schemas from the local cache only; fail on a cache miss")
+  .option(
+    "--revalidate",
+    "Check upstream for changes via ETag (304 reuses the cache) instead of always downloading full bodies",
+  )
   .option("--allow-http", "Permit insecure http:// schema URLs")
   .option(
     "--allow-host <host>",
@@ -623,6 +641,10 @@ program
 export const main = async (args: string[]): Promise<number> => {
   if (args.includes("--fetch") && args.includes("--no-fetch")) {
     console.error("error: --fetch and --no-fetch cannot be used together");
+    return 1;
+  }
+  if (args.includes("--revalidate") && args.includes("--offline")) {
+    console.error("error: --revalidate and --offline cannot be used together");
     return 1;
   }
   try {

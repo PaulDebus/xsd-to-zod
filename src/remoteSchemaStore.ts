@@ -181,6 +181,11 @@ export class RemoteSchemaStore {
     return this.#lockfile.schemas[url];
   }
 
+  /** Pure lockfile lookup: no cache I/O and no frozen/offline policy checks. */
+  entry(url: string): RemoteSchemaLockEntry | undefined {
+    return this.#findEntry(url);
+  }
+
   #cachePath(hash: string): string {
     return path.join(this.#cacheDir, `${hash}.xsd`);
   }
