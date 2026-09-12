@@ -176,6 +176,26 @@ Successful fetches write `xsd-to-zod.lock.json` in the current directory and pop
 }
 ```
 
+Vendor a remote schema closure to self-contained local files for the
+commit-to-repo flow:
+
+```sh
+xsd-to-zod download https://example.com/schema.xsd -o vendor/schemas
+# → fetches the schema and its remote imports into vendor/schemas,
+#   rewriting schemaLocations to relative paths
+
+xsd-to-zod vendor/schemas/example.com/schema.xsd -o src/generated
+# → works with zero flags; no network access needed
+
+xsd-to-zod download ./local.xsd -o vendor/schemas   # local entry, remote imports
+```
+
+`download` lays remote schemas out by host and URL path (a local entry keeps
+its relative structure), accepts `--allow-http`, `--allow-host`, and `--offline`
+(vendoring from the local cache), and updates the lockfile on every run.
+Re-running always fetches fresh bytes, so upstream changes surface as
+reviewable diffs in the vendored files and the lockfile.
+
 Bundle all imports and includes into a single self-contained XSD:
 
 ```sh

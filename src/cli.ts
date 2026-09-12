@@ -14,6 +14,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { z } from "zod";
+import { downloadSchemaClosure } from "./download.js";
 import { Xsd2ZodError } from "./errors.js";
 import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 import { irToZod } from "./irToZod.js";
@@ -238,11 +239,58 @@ type BundleOptions = {
   format?: boolean;
 };
 
+type DownloadOptions = {
+  out: string;
+  offline?: boolean;
+  allowHttp?: boolean;
+  allowHost?: string[];
+  silent?: boolean;
+};
+
 const collectOption = (value: string, previous: string[]): string[] => [...previous, value];
 
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+const download = async (entry: string, opts: DownloadOptions): Promise<void> => {
+  const entryUrl = asHttpUrl(entry);
+  const result = await downloadSchemaClosure(entry, {
+    outDir: resolve(opts.out),
+    allowHttp: opts.allowHttp === true,
+    allowedHosts: opts.allowHost ?? [],
+    offline: opts.offline === true,
+    store: await RemoteSchemaStore.open({
+      cwd: process.cwd(),
+      offline: opts.offline === true,
+    }),
+    onFetch: (url, base) => {
+      const via =
+        entryUrl !== undefined && url === entryUrl.href
+          ? ""
+          : ` (imported by ${describeSchemaBase(base)})`;
+      console.error(`fetching ${url}${via}`);
+    },
+    onRedirect: (fromUrl, toUrl) => {
+      console.error(`warning: cross-origin redirect: ${fromUrl} -> ${toUrl}`);
+    },
+  });
+  for (const diagnostic of result.diagnostics) {
+    console.error(`warning: [${diagnostic.kind}] ${diagnostic.message}`);
+  }
+  if (result.recorded > 0 && !opts.silent) {
+    console.log(
+      `recorded ${result.recorded} remote schema${result.recorded === 1 ? "" : "s"} in xsd-to-zod.lock.json`,
+    );
+  }
+  if (!opts.silent) {
+    const outDir = resolve(opts.out);
+    console.log(
+      `Vendored ${result.files.length} schema${result.files.length === 1 ? "" : "s"} to ${outDir}`,
+    );
+    console.log(`entry: ${join(outDir, ...result.entry.split("/"))}`);
+  }
+};
 
 const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<void> => {
   const { out, name, format, includeLibraries, allowMissingImports, silent } = opts;
@@ -475,6 +523,24 @@ const program = new Command()
     [],
   )
   .action(generate);
+
+program
+  .command("download")
+  .description(
+    "Vendor a schema and its remote import/include closure to self-contained local files",
+  )
+  .argument("<entry>", "Entry schema: http(s) URL or local .xsd file")
+  .requiredOption("-o, --out <dir>", "Directory to vendor the schema closure into")
+  .option("--offline", "Vendor remote schemas from the local cache only; fail on a cache miss")
+  .option("--allow-http", "Permit insecure http:// schema URLs")
+  .option(
+    "--allow-host <host>",
+    "Allow fetching from a host (repeatable; applies to entry URLs too)",
+    collectOption,
+    [],
+  )
+  .option("--silent", "Suppress informational output (warnings are still shown)")
+  .action(download);
 
 program
   .command("validate")

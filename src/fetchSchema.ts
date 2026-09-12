@@ -30,6 +30,12 @@ export type FetchSchemaResolverOptions = {
   fetchRemoteFromLocal?: boolean;
   /** Resolve remote schemas from the local cache without network access. */
   offline?: boolean;
+  /**
+   * Skip cache reads and always fetch live bytes. Fetched results are still
+   * staged so the store commit updates the lockfile and cache. Ignored when
+   * offline is set: offline resolution must read the cache.
+   */
+  refresh?: boolean;
   /** Lockfile/cache store used for persisted resolution and integrity checks. */
   store?: RemoteSchemaStore;
   onFetch?: (url: string, base: SchemaResolutionBase) => void;
@@ -213,6 +219,7 @@ export const createFetchSchemaResolver = ({
   fetchTransitive = true,
   fetchRemoteFromLocal = true,
   offline = false,
+  refresh = false,
   store,
   onFetch,
   onRedirect,
@@ -366,7 +373,7 @@ export const createFetchSchemaResolver = ({
     if (cached) {
       return cached;
     }
-    if (store) {
+    if (store && (!refresh || offline)) {
       const stored = await store.read(url.href);
       if (stored !== undefined) {
         // The lockfile final URL is a second fetch surface: it must pass

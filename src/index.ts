@@ -1,3 +1,5 @@
+export type { DownloadedSchemaClosure, DownloadSchemaOptions } from "./download.js";
+export { downloadSchemaClosure } from "./download.js";
 export { Xsd2ZodError } from "./errors.js";
 export type { FetchSchemaResolver, FetchSchemaResolverOptions } from "./fetchSchema.js";
 export { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
