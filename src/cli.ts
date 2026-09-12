@@ -259,6 +259,14 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (skipTransitiveFetch && remoteInputs.length === 0) {
     throw new Error("--no-fetch only applies to remote http(s) inputs");
   }
+  const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
+  if (!fetchRemote) {
+    const flag =
+      opts.frozen === true ? "--frozen" : opts.offline === true ? "--offline" : undefined;
+    if (flag !== undefined) {
+      throw new Error(`${flag} only applies to remote http(s) inputs`);
+    }
+  }
 
   if (files.length === 0) {
     throw new Error("no .xsd files found in the given directories");
@@ -293,7 +301,6 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     return;
   }
 
-  const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
   const entryUrls = new Set(remoteInputs.map((url) => url.href));
   const remoteResolver = fetchRemote
     ? createFetchSchemaResolver({
@@ -328,7 +335,6 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   }
 
   const { schemas } = irToZod(ir, { datatypes });
-  const recorded = (await remoteResolver?.commit()) ?? 0;
 
   const outDir = resolve(out);
   if (!existsSync(outDir)) {
@@ -343,6 +349,8 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
       "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
     );
   }
+
+  const recorded = (await remoteResolver?.commit()) ?? 0;
 
   if (!silent && recorded > 0) {
     console.log(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -767,6 +768,106 @@ describe("remote schema lockfile and cache", () => {
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("[remote-lockfile-invalid]");
+    });
+  });
+
+  it("leaves no committed cache or lockfile when the output write fails", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer(
+        {
+          "/entry.xsd": { body: entrySchema },
+          "/types.xsd": { body: typeSchema("ThingType") },
+        },
+        async (server) => {
+          fs.mkdirSync(path.join(dir, "entry.zod.ts"));
+          const result = await runCli([`${server.origin}/entry.xsd`, "-o", dir, "--allow-http"], {
+            cacheDir,
+          });
+          expect(result.code).toBe(1);
+          expect(fs.existsSync(path.join(dir, "xsd-to-zod.lock.json"))).toBe(false);
+          expect(fs.existsSync(cacheDir)).toBe(false);
+        },
+      );
+    });
+  });
+
+  it("rejects lockfile entries keyed by non-URLs", async () => {
+    await withTempDirAsync(async (dir) => {
+      const url = "https://schemas.example.test/entry.xsd";
+      fs.writeFileSync(
+        path.join(dir, "xsd-to-zod.lock.json"),
+        `${JSON.stringify({
+          version: 1,
+          schemas: {
+            "not-a-url": {
+              sha256: createHash("sha256").update("x").digest("hex"),
+              finalUrl: url,
+              fetchedAt: new Date().toISOString(),
+            },
+          },
+        })}\n`,
+      );
+
+      const result = await runCli([url, "-o", dir, "--frozen"], {
+        cacheDir: path.join(dir, "cache"),
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("[remote-lockfile-invalid]");
+    });
+  });
+
+  it("applies fetch policy to cached lockfile final URLs", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cacheDir = path.join(dir, "cache");
+      await withServer({}, async (server) => {
+        const content = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:element name="doc" type="xs:string"/>
+        </xs:schema>`;
+        const digest = createHash("sha256").update(content).digest("hex");
+        const requestedUrl = `${server.origin}/entry.xsd`;
+        fs.writeFileSync(
+          path.join(dir, "xsd-to-zod.lock.json"),
+          `${JSON.stringify({
+            version: 1,
+            schemas: {
+              [requestedUrl]: {
+                sha256: digest,
+                finalUrl: "http://example.test/v1.xsd",
+                fetchedAt: new Date().toISOString(),
+              },
+            },
+          })}\n`,
+        );
+        const cacheSchemas = path.join(cacheDir, "xsd-to-zod", "schemas");
+        fs.mkdirSync(cacheSchemas, { recursive: true });
+        fs.writeFileSync(path.join(cacheSchemas, `${digest}.xsd`), content);
+
+        const result = await runCli(
+          [requestedUrl, "-o", dir, "--allow-http", "--allow-host", "127.0.0.1"],
+          { cacheDir },
+        );
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain("[remote-host-not-allowed]");
+        expect(server.requests).toEqual([]);
+      });
+    });
+  });
+
+  it("rejects --frozen and --offline for local-only inputs", async () => {
+    await withTempDirAsync(async (dir) => {
+      const input = path.join(dir, "local.xsd");
+      fs.writeFileSync(
+        input,
+        `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:element name="doc" type="xs:string"/>
+        </xs:schema>`,
+      );
+      for (const flag of ["--frozen", "--offline"]) {
+        const result = await runCli([input, "-o", dir, flag]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(`${flag} only applies to remote http(s) inputs`);
+      }
     });
   });
 

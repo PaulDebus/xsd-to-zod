@@ -93,6 +93,7 @@ const parseLockfile = (text: string, file: string): RemoteSchemaLockfile => {
   for (const [url, value] of Object.entries(schemas)) {
     const entry = asRecord(value);
     if (
+      !isHttpUrl(url) ||
       typeof entry?.["sha256"] !== "string" ||
       typeof entry["finalUrl"] !== "string" ||
       typeof entry["fetchedAt"] !== "string" ||
@@ -174,10 +175,6 @@ export class RemoteSchemaStore {
       return new RemoteSchemaStore({ version: 1, schemas: {} }, options);
     }
     return new RemoteSchemaStore(parseLockfile(text, lockfilePath), options);
-  }
-
-  get stagedCount(): number {
-    return this.#staged.size;
   }
 
   #findEntry(url: string): RemoteSchemaLockEntry | undefined {

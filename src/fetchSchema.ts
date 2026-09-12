@@ -369,6 +369,9 @@ export const createFetchSchemaResolver = ({
     if (store) {
       const stored = await store.read(url.href);
       if (stored !== undefined) {
+        // The lockfile final URL is a second fetch surface: it must pass
+        // the same protocol and allowlist policy as a live fetch.
+        assertFetchable(new URL(stored.url), allowHttp, allowed);
         depthByUrl.set(url.href, depth);
         depthByUrl.set(stored.url, depth);
         const resolved = Promise.resolve({
