@@ -153,10 +153,28 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
 | `--fetch` | Resolve remote imports/includes from local schema inputs. Remote entry URLs always fetch; local inputs never use the network without this flag |
 | `--no-fetch` | Fetch only a remote entry schema and skip its remote imports/includes |
+| `--frozen` | Verify every cached or fetched remote schema against `xsd-to-zod.lock.json`; fail on missing entries or drift and never update the lockfile |
+| `--offline` | Resolve remote schemas from the local cache only; fail on a cache miss |
 | `--allow-http` | Permit insecure `http://` schema URLs (`https://` only by default) |
 | `--allow-host <host>` | Repeatable host allowlist for every fetched schema, including the entry URL |
 
 Remote fetches are logged to stderr, use `HTTPS_PROXY`/`HTTP_PROXY` when set, and are capped at 100 files, 10 MB per file, 50 MB total, 32 import levels, and 30 seconds per request. In mixed runs local inputs still stay offline unless `--fetch` is passed.
+
+Successful fetches write `xsd-to-zod.lock.json` in the current directory and populate the user cache; commit the lockfile for reviewable, reproducible remote schemas. Use `--frozen` in CI and `--offline` when network access is unavailable. Entries record the requested URL, final post-redirect URL, SHA-256 digest, fetch timestamp, and optional ETag:
+
+```json
+{
+  "version": 1,
+  "schemas": {
+    "https://example.com/schema.xsd": {
+      "sha256": "9f2c…",
+      "finalUrl": "https://example.com/schema.xsd",
+      "fetchedAt": "2026-09-08T12:34:56.000Z",
+      "etag": "W/\"abc\""
+    }
+  }
+}
+```
 
 Bundle all imports and includes into a single self-contained XSD:
 

@@ -18,6 +18,7 @@ import { Xsd2ZodError } from "./errors.js";
 import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
 import { irToZod } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
+import { RemoteSchemaStore } from "./remoteSchemaStore.js";
 import type { XsdIr } from "./types.js";
 
 const errorMessage = (e: unknown): string => {
@@ -220,6 +221,8 @@ type GenerateOptions = {
   silent?: boolean;
   datatypes?: string;
   fetch?: boolean;
+  frozen?: boolean;
+  offline?: boolean;
   allowHttp?: boolean;
   allowHost?: string[];
 };
@@ -256,6 +259,14 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (skipTransitiveFetch && remoteInputs.length === 0) {
     throw new Error("--no-fetch only applies to remote http(s) inputs");
   }
+  const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
+  if (!fetchRemote) {
+    const flag =
+      opts.frozen === true ? "--frozen" : opts.offline === true ? "--offline" : undefined;
+    if (flag !== undefined) {
+      throw new Error(`${flag} only applies to remote http(s) inputs`);
+    }
+  }
 
   if (files.length === 0) {
     throw new Error("no .xsd files found in the given directories");
@@ -290,15 +301,20 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     return;
   }
 
-  const fetchRemote = opts.fetch === true || remoteInputs.length > 0;
   const entryUrls = new Set(remoteInputs.map((url) => url.href));
-  const resolveSchema = fetchRemote
+  const remoteResolver = fetchRemote
     ? createFetchSchemaResolver({
         allowHttp: opts.allowHttp === true,
         allowedHosts: opts.allowHost ?? [],
         entryUrls: [...entryUrls],
         fetchTransitive: !skipTransitiveFetch,
         fetchRemoteFromLocal: opts.fetch === true,
+        offline: opts.offline === true,
+        store: await RemoteSchemaStore.open({
+          cwd: process.cwd(),
+          frozen: opts.frozen === true,
+          offline: opts.offline === true,
+        }),
         onFetch: (url, base) => {
           const via = entryUrls.has(url) ? "" : ` (imported by ${describeSchemaBase(base)})`;
           console.error(`fetching ${url}${via}`);
@@ -311,7 +327,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
 
   const ir = await parseXsd(nonLibraryFiles, {
     ...(allowMissingImports !== undefined && { allowMissingImports }),
-    ...(resolveSchema !== undefined && { resolveSchema }),
+    ...(remoteResolver !== undefined && { resolveSchema: remoteResolver.resolve }),
   });
 
   if (!allowMissingImports) {
@@ -331,6 +347,14 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (format && !runPostGenerationFormatting([zodFile])) {
     console.error(
       "warning: --format requested but no formatter (biome, prettier, eslint) could process the file; it was left unformatted",
+    );
+  }
+
+  const recorded = (await remoteResolver?.commit()) ?? 0;
+
+  if (!silent && recorded > 0) {
+    console.log(
+      `recorded ${recorded} remote schema${recorded === 1 ? "" : "s"} in xsd-to-zod.lock.json`,
     );
   }
 
@@ -441,6 +465,8 @@ const program = new Command()
   )
   .option("--fetch", "Resolve remote imports/includes for local schema inputs")
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
+  .option("--frozen", "Verify remote schemas against xsd-to-zod.lock.json without updating it")
+  .option("--offline", "Resolve remote schemas from the local cache only")
   .option("--allow-http", "Permit insecure http:// schema URLs")
   .option(
     "--allow-host <host>",
