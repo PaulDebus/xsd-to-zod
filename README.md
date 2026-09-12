@@ -199,6 +199,12 @@ reviewable diffs in the vendored files and the lockfile. Locations that
 cannot be resolved are left as-is and reported; the output then states the
 closure is partial.
 
+Location rewriting is textual, not a full XML re-serialization, so vendored
+files keep their original formatting. The trade-off: if a comment or
+documentation block quotes an import example with the exact same
+`schemaLocation` string as an import that gets relocated, that prose
+occurrence is rewritten along with it.
+
 Bundle all imports and includes into a single self-contained XSD:
 
 ```sh
