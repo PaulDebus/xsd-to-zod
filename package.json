@@ -45,7 +45,7 @@
     "validation"
   ],
   "author": "Paul Debus",
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "bugs": {
     "url": "https://github.com/PaulDebus/xsd-to-zod/issues"
