@@ -175,6 +175,17 @@ export function findRootSchema(mod: Record<string, unknown>, xml: string): z.Zod
   return found.schema;
 }
 
+// The generated module's single root schema, for fixtures with exactly one
+// root element. Robust against non-schema exports (unlike Object.values[0]).
+export function onlyRootSchema(mod: Record<string, unknown>): z.ZodType {
+  const roots = findRootSchemas(mod);
+  const first = roots[0];
+  if (roots.length !== 1 || first === undefined) {
+    expect.fail(`expected exactly one root schema, found ${roots.length}`);
+  }
+  return first.schema;
+}
+
 const TARGET_NS_RE = /\btargetNamespace\s*=\s*["']([^"']*)["']/;
 
 // libxml2 ships no built-in declarations for the XML namespace (unlike

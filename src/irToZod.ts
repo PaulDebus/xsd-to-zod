@@ -9,6 +9,7 @@ import type {
   SimpleTypeDef,
   XsdIr,
 } from "./types.js";
+import { PACKAGE_VERSION } from "./version.js";
 import type { XmlChoiceMeta, XmlLexicalFacets } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
@@ -1902,6 +1903,11 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
+  schemaLines.push(
+    "// Generator version stamp — the runtime warns when its major version differs.",
+    `export const generatedBy = "xsd-to-zod@${PACKAGE_VERSION}";`,
+    "",
+  );
 
   // Simple and complex types share the generated module's value namespace —
   // a qname collision would silently reference the wrong const. Fail loud.
@@ -2230,7 +2236,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         : (unionConstName.get(rootDef.typeName) ?? "z.unknown()");
     const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
-    const rootMeta = [`root: ${JSON.stringify(root)}`];
+    const rootMeta = [`root: ${JSON.stringify(root)}`, "generatedBy"];
     if (rootDef.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       rootMeta.push("open: true");
     }

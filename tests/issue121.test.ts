@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { z } from "zod";
 import { parseXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression test for choice-group id collisions across a derivation: an
 // extension's xs:choice is a separate group appended after the base content,
@@ -35,7 +34,7 @@ describe("choice groups across extension (#121)", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file]);
-      const schema = Object.values(mod)[0] as z.ZodType;
+      const schema = onlyRootSchema(mod);
 
       const valid = parseXml(schema, '<root xmlns="urn:ch"><b>1</b><c>2</c></root>');
       expect(valid).toEqual({ b: "1", c: "2" });

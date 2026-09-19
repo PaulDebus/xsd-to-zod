@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for the W3C sun/ms undefinedValue bucket: XML-namespace
 // attributes used without a declaration (the xml prefix is bound by
@@ -151,7 +151,7 @@ const generate = async (xsd: string): Promise<z.ZodType> => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
     const mod = await generateAndImport([file]);
-    schema = Object.values(mod)[0] as z.ZodType;
+    schema = onlyRootSchema(mod);
   });
   if (schema === undefined) {
     throw new Error("no schema generated");
