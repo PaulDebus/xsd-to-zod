@@ -687,6 +687,10 @@ type FieldCollectionContext = {
     groups: Set<string>;
     attributeGroups: Set<string>;
   };
+  /** Synthetic type minted for each inline xs:complexType node — one per node,
+   *  so re-expanding a group that contains the same inline type reuses the
+   *  name instead of deferring a fresh type each time (unbounded growth). */
+  inlineComplexTypes: Map<AnyNode, QName>;
 };
 
 // Shared shape for ref-based element fields.  The resolved-ref and
@@ -814,6 +818,10 @@ const registerInlineComplexType = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): QName => {
+  const memoized = ctx.inlineComplexTypes.get(inlineComplex);
+  if (memoized !== undefined) {
+    return memoized;
+  }
   let local: string;
   if (scope.parentTypeName) {
     local = `${sanitizeTsIdentifier(scope.parentTypeName)}_${sanitizeTsIdentifier(name)}_Type`;
@@ -836,6 +844,7 @@ const registerInlineComplexType = (
     nsMap: ctx.nsMap,
     formDefaults: ctx.formDefaults,
   });
+  ctx.inlineComplexTypes.set(inlineComplex, syntheticName);
   return syntheticName;
 };
 
@@ -1456,6 +1465,7 @@ type ParseState = {
   attributes: Record<string, GlobalAttributeDecl>;
   diagnostics: Diagnostic[];
   allowMissingImports: boolean;
+  inlineComplexTypes: Map<AnyNode, QName>;
 };
 
 const toRecord = <V>(entries: Map<string, V> | Record<string, V>): Record<string, V> =>
@@ -1501,6 +1511,7 @@ const createFieldContext = (
   diagnostics: state.diagnostics,
   allowMissingImports: state.allowMissingImports,
   expansionStack: { groups: new Set(), attributeGroups: new Set() },
+  inlineComplexTypes: state.inlineComplexTypes,
 });
 
 type ScannedFile = {
@@ -2380,6 +2391,7 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
     attributes: {},
     diagnostics: [],
     allowMissingImports: opts?.allowMissingImports ?? false,
+    inlineComplexTypes: new Map<AnyNode, QName>(),
   };
 
   const scannedFiles = await scanSchemaFiles(files, state.diagnostics, opts);
