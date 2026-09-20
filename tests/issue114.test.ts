@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd, safeParseXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for the issue-#114 facet codegen fixes: facet
 // checks must only be emitted in a form the mapped Zod schema supports.
@@ -104,7 +104,7 @@ describe("facet codegen on incompatible Zod types (#114)", () => {
 </xs:schema>`,
       );
       const mod = await generateAndImport([file]);
-      const schema = Object.values(mod)[0] as import("zod").z.ZodType;
+      const schema = onlyRootSchema(mod);
       // The lexical check lives in the runtime: both instances satisfy the
       // pattern lexically, even though String(coerced) would not.
       expect(safeParseXml(schema, "<n>12345</n>").success).toBe(true);

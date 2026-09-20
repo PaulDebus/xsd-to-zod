@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { parseXml, serializeXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for element value substitution on empty content:
 // fixed/default on a present-but-empty root element, and empty simpleContent.
@@ -15,7 +15,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
     fs.writeFileSync(file, xsd);
     mod = await generateAndImport([file]);
   });
-  return Object.values(mod)[0] as z.ZodType;
+  return onlyRootSchema(mod);
 };
 
 describe("root element fixed/default on empty content (#120)", () => {

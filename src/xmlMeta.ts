@@ -60,6 +60,8 @@ export type XmlChoiceMeta = {
 export type XmlMeta = {
   qname?: QName;
   root?: QName;
+  /** Generator version stamp ("xsd-to-zod@<version>") on generated root schemas. */
+  generatedBy?: string;
   defaultValue?: unknown;
   fixedValue?: unknown;
   open?: boolean;

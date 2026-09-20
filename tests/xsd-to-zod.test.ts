@@ -1105,10 +1105,10 @@ describe("xsd-to-zod v1 pipeline", () => {
         "const TeamTypeSchema: z.ZodType<TeamType> = z.lazy(() => z.object({",
       );
       expect(schemas).toContain(
-        'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person" });',
+        'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person", generatedBy });',
       );
       expect(schemas).toContain(
-        'export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}team" });',
+        'export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}team", generatedBy });',
       );
 
       const mod = (await importGeneratedSchemas(schemas)) as {

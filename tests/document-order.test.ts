@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { parseXml, serializeXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Interleaved repeated compositors: the grouped data shape loses cross-tag
 // document order, so the parser records it per object (documentOrderStore)
@@ -17,7 +17,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
     fs.writeFileSync(file, xsd);
     mod = await generateAndImport([file]);
   });
-  return Object.values(mod)[0] as z.ZodType;
+  return onlyRootSchema(mod);
 };
 
 const namedSchemaFor = async (xsd: string, name: string): Promise<z.ZodType> => {

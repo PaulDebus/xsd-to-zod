@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { parseXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for the issue-#134 choice emptiness fix: a choice group
 // with any minOccurs="0" branch is emptiable, even when other branches are
@@ -16,7 +16,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
     fs.writeFileSync(file, xsd);
     mod = await generateAndImport([file]);
   });
-  return Object.values(mod)[0] as z.ZodType;
+  return onlyRootSchema(mod);
 };
 
 const CONCEPT_XSD = `<?xml version="1.0"?>

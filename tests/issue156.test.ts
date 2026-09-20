@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { parseXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 const schemaFor = async (xsd: string): Promise<z.ZodType> => {
   let mod: Record<string, unknown> = {};
@@ -12,7 +12,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
     fs.writeFileSync(file, xsd);
     mod = await generateAndImport([file]);
   });
-  return Object.values(mod)[0] as z.ZodType;
+  return onlyRootSchema(mod);
 };
 
 // Regression test for #156: inherited repeated-choice fields must not get a

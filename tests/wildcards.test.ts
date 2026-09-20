@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { parseXml, serializeXml } from "../src/index.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // xs:any / xs:anyAttribute wildcards (lax tier): unmatched content is captured
 // in the open shape next to the declared fields and re-serialized.
@@ -15,7 +15,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
     fs.writeFileSync(file, xsd);
     mod = await generateAndImport([file]);
   });
-  return Object.values(mod)[0] as z.ZodType;
+  return onlyRootSchema(mod);
 };
 
 describe("xs:any / xs:anyAttribute wildcards", () => {
