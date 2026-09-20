@@ -105,17 +105,27 @@ export const runPostGenerationFormatting = (
   };
   const runPrettier = (): boolean =>
     jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
+  const attempt = (tool: string, runFormatter: () => boolean): boolean => {
+    try {
+      return runFormatter();
+    } catch (error) {
+      console.error(
+        `warning: --format: ${tool} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return true;
+    }
+  };
 
   // A tool with a project config wins over one that would run on defaults, so
   // the output matches the project's style. Biome and Prettier both format
   // fine without a config — the binary alone is enough as a fallback; gating
   // on a config file silently skipped formatting in default setups.
   for (const tool of ["biome", "prettier"] as const) {
-    if (hasConfig(cwd, tool) && (tool === "biome" ? runBiome() : runPrettier())) {
+    if (hasConfig(cwd, tool) && attempt(tool, tool === "biome" ? runBiome : runPrettier)) {
       return true;
     }
   }
-  if (runBiome() || runPrettier()) {
+  if (attempt("biome", runBiome) || attempt("prettier", runPrettier)) {
     return true;
   }
 
@@ -123,7 +133,7 @@ export const runPostGenerationFormatting = (
   // exists, so a config-less project doesn't crash the CLI after the output
   // files were already written (#74).
   if (hasConfig(cwd, "eslint")) {
-    return runTool("eslint", ["--fix", ...generatedFiles], cwd);
+    return attempt("eslint", () => runTool("eslint", ["--fix", ...generatedFiles], cwd));
   }
   return false;
 };

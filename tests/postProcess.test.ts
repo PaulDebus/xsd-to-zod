@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runPostGenerationFormatting } from "../src/index.js";
 import { withTempDir } from "./helpers.js";
 
@@ -75,7 +75,7 @@ describe("runPostGenerationFormatting (#74)", () => {
     });
   });
 
-  it("propagates formatter failures", () => {
+  it("warns instead of failing when a formatter exits non-zero", () => {
     withTempDir((cwd) => {
       const binDir = path.join(cwd, "node_modules", ".bin");
       fs.mkdirSync(binDir, { recursive: true });
@@ -83,9 +83,16 @@ describe("runPostGenerationFormatting (#74)", () => {
       fs.writeFileSync(bin, "#!/bin/sh\necho boom >&2\nexit 1\n");
       fs.chmodSync(bin, 0o755);
       fs.writeFileSync(path.join(cwd, ".prettierrc"), "{}\n");
-      expect(() => runPostGenerationFormatting(["out.zod.ts"], cwd)).toThrow(
-        /prettier.*failed.*boom/s,
-      );
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+        expect(errSpy).toHaveBeenCalledWith(
+          expect.stringContaining("warning: --format: prettier failed"),
+        );
+        expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("boom"));
+      } finally {
+        errSpy.mockRestore();
+      }
     });
   });
 });

@@ -147,7 +147,7 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 |------|-------------|
 | `-o, --out <dir>` | Output directory (default: current directory) |
 | `-n, --name <name>` | Basename for the generated file (required with multiple inputs) |
-| `-f, --format` | Run `biome` / `prettier` / `eslint --fix` on the generated file (project config is used when present; biome/prettier otherwise run with defaults). Warns when no formatter can process the file |
+| `-f, --format` | Run `biome` / `prettier` / `eslint --fix` on the generated file (project config is used when present; biome/prettier otherwise run with defaults). Best-effort: warns when no formatter can process the file or when the formatter exits non-zero |
 | `--include-libraries` | Include type-definition-only schemas (those without root elements); skipped by default |
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
