@@ -352,7 +352,6 @@ Zod-tier specifics worth knowing:
 - `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped; namespace constraints (`##other`, `##targetNamespace`, …) are enforced, but wildcard content itself is not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)
-- `xs:float`/`xs:double` specials `INF`/`-INF`/`NaN` are rejected
 
 ### Known gaps (tracked as GitHub issues)
 
