@@ -85,11 +85,36 @@ describe("runPostGenerationFormatting (#74)", () => {
       fs.writeFileSync(path.join(cwd, ".prettierrc"), "{}\n");
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+        expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(false);
         expect(errSpy).toHaveBeenCalledWith(
           expect.stringContaining("warning: --format: prettier failed"),
         );
         expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("boom"));
+      } finally {
+        errSpy.mockRestore();
+      }
+    });
+  });
+
+  it("falls through to the next formatter when the preferred one fails", () => {
+    withTempDir((cwd) => {
+      const binDir = path.join(cwd, "node_modules", ".bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const biome = path.join(binDir, "biome");
+      fs.writeFileSync(biome, "#!/bin/sh\necho boom >&2\nexit 1\n");
+      fs.chmodSync(biome, 0o755);
+      const prettier = path.join(binDir, "prettier");
+      fs.writeFileSync(prettier, `#!/bin/sh\necho "$(basename "$0") $@" >> formatter.log\n`);
+      fs.chmodSync(prettier, 0o755);
+      fs.writeFileSync(path.join(cwd, "biome.json"), "{}\n");
+      fs.writeFileSync(path.join(cwd, ".prettierrc"), "{}\n");
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);
+        expect(errSpy).toHaveBeenCalledWith(
+          expect.stringContaining("warning: --format: biome failed"),
+        );
+        expect(readLog(path.join(cwd, "formatter.log"))).toEqual(["prettier --write out.zod.ts"]);
       } finally {
         errSpy.mockRestore();
       }
