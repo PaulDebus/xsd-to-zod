@@ -105,25 +105,40 @@ export const runPostGenerationFormatting = (
   };
   const runPrettier = (): boolean =>
     jsTsFiles.length > 0 && runTool("prettier", ["--write", ...jsTsFiles], cwd);
+  const tryFormatter = (
+    tool: "biome" | "prettier" | "eslint",
+    runFormatter: () => boolean,
+  ): boolean => {
+    try {
+      return runFormatter();
+    } catch (error) {
+      console.error(
+        `warning: --format: ${tool} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
+  };
 
   // A tool with a project config wins over one that would run on defaults, so
   // the output matches the project's style. Biome and Prettier both format
   // fine without a config — the binary alone is enough as a fallback; gating
   // on a config file silently skipped formatting in default setups.
-  for (const tool of ["biome", "prettier"] as const) {
-    if (hasConfig(cwd, tool) && (tool === "biome" ? runBiome() : runPrettier())) {
+  // Each candidate is attempted at most once: a configured-but-broken tool
+  // warns and yields to the next candidate instead of claiming success.
+  const ordered = [...(["biome", "prettier"] as const)].sort(
+    (a, b) => Number(hasConfig(cwd, b)) - Number(hasConfig(cwd, a)),
+  );
+  for (const tool of ordered) {
+    if (tryFormatter(tool, tool === "biome" ? runBiome : runPrettier)) {
       return true;
     }
-  }
-  if (runBiome() || runPrettier()) {
-    return true;
   }
 
   // ESLint v9 exits non-zero without a config file — only run it when one
   // exists, so a config-less project doesn't crash the CLI after the output
   // files were already written (#74).
   if (hasConfig(cwd, "eslint")) {
-    return runTool("eslint", ["--fix", ...generatedFiles], cwd);
+    return tryFormatter("eslint", () => runTool("eslint", ["--fix", ...generatedFiles], cwd));
   }
   return false;
 };

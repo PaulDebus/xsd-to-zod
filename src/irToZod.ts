@@ -1892,7 +1892,9 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   for (const name of familyTypes) {
     const local = sanitizeIdentifier(clarkToLocal(name));
     objectConstName.set(name, alloc(`${local}ObjectSchema`));
-    variantConstName.set(name, alloc(`${local}VariantSchema`));
+    if (derivedTypeNames.has(name)) {
+      variantConstName.set(name, alloc(`${local}VariantSchema`));
+    }
   }
   for (const name of variantSets.keys()) {
     const local = sanitizeIdentifier(clarkToLocal(name));
@@ -2190,7 +2192,7 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   // xsiType their TS type requires; unionFallback covers hand-built data
   // whose discriminant names no variant.
   for (const complexType of Object.values(ir.complexTypes)) {
-    if (!familyTypes.has(complexType.name)) {
+    if (!derivedTypeNames.has(complexType.name)) {
       continue;
     }
     const discriminant = JSON.stringify(complexType.name);

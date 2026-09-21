@@ -478,6 +478,22 @@ describe("CLI e2e", () => {
       expect(r.stderr).toContain("warning:");
     });
   });
+
+  it("--format on the substitution-groups fixture writes output without aborting on lint", async () => {
+    await withTempDirAsync(async (dir) => {
+      const r = await runCli([
+        path.join("testdata", "curated", "substitution-groups", "substitution-groups.xsd"),
+        "-o",
+        dir,
+        "--format",
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Wrote");
+      const output = fs.readFileSync(path.join(dir, "substitution-groups.zod.ts"), "utf8");
+      expect(output).not.toContain("PublicationTypeVariantSchema =");
+      expect(r.stderr).not.toContain("noUnusedVariables");
+    });
+  });
 });
 
 describe("isDirectInvocation (#80)", () => {
