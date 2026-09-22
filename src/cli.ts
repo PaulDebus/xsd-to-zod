@@ -35,6 +35,12 @@ import { readXmlFile } from "./readXmlFile.js";
 import { safeParseXml } from "./runtime.js";
 import { xmlRegistry } from "./xmlMeta.js";
 
+const reportWarnings = (warnings: string[]): void => {
+  for (const warning of warnings) {
+    console.error(`warning: ${warning}`);
+  }
+};
+
 const warnDiagnostics = (ir: XsdIr, suggestFetch = false): void => {
   for (const diagnostic of ir.diagnostics) {
     const hint =
@@ -408,9 +414,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   }
 
   const { schemas, warnings } = irToZod(ir, { datatypes });
-  for (const warning of warnings) {
-    console.error(`warning: ${warning}`);
-  }
+  reportWarnings(warnings);
 
   const outDir = resolve(out);
   if (!existsSync(outDir)) {
@@ -465,9 +469,7 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
   const ir = await parseXsd([xsdFile]);
   warnDiagnostics(ir);
   const { schemas, warnings } = irToZod(ir, { js: true });
-  for (const warning of warnings) {
-    console.error(`warning: ${warning}`);
-  }
+  reportWarnings(warnings);
   const mod = await importGeneratedModule(schemas);
 
   const roots: { schema: z.ZodType; root: string }[] = [];

@@ -101,4 +101,43 @@ describe("anonymous type naming", () => {
     expect(schemas).not.toContain("export interface z {");
     await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
   });
+
+  it("leaves shared named types alone when two elements reference one type", async () => {
+    const { schemas, warnings } = await generate(`${XSD_OPEN}
+  <xs:complexType name="Shared">
+    <xs:sequence><xs:element name="x" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:element name="A" type="Shared"/>
+  <xs:element name="B" type="Shared"/>
+</xs:schema>`);
+    expect(schemas).toContain("export interface Shared {");
+    expect(schemas).not.toMatch(/(interface|const) anonymous_/);
+    expect(warnings).toEqual([]);
+    await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
+  });
+
+  it("keeps friendly names alongside a polymorphic family", async () => {
+    const { schemas, warnings } = await generate(`${XSD_OPEN}
+  <xs:complexType name="Base" abstract="true">
+    <xs:sequence><xs:element name="id" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Derived">
+    <xs:complexContent>
+      <xs:extension base="Base">
+        <xs:sequence><xs:element name="extra" type="xs:string"/></xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="Library">
+    <xs:complexType>
+      <xs:sequence><xs:element name="Title" type="xs:string"/></xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`);
+    expect(schemas).toContain("export interface Library {");
+    expect(schemas).toContain("BaseObjectSchema");
+    expect(schemas).not.toMatch(/(interface|const) anonymous_/);
+    expect(warnings).toEqual([]);
+    await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
+  });
 });

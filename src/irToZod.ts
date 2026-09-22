@@ -1912,12 +1912,24 @@ export const irToZod = (
   const ifaceName = new Map<QName, string>();
   const sortedSimpleTypes = sortSimpleTypes(ir);
 
-  // A global element owns its inline anonymous type 1:1 — the friendly name
-  // of `anonymous_Library_Type` is the bare element name `Library`.
-  const elementTypeOwner = new Map<QName, string>();
-  for (const el of Object.values(ir.elements)) {
-    if (!elementTypeOwner.has(el.typeName)) {
-      elementTypeOwner.set(el.typeName, clarkToLocal(el.name));
+  // A global element lends its inline anonymous type the bare element
+  // name: `anonymous_Library_Type` emits `Library`. The parser mints one
+  // synthetic QName per inline occurrence, so ownership is 1:1 in practice;
+  // a type referenced by several elements keeps no owner and only drops the
+  // prefix instead of borrowing one element's name.
+  const ownerElementLocalByType = new Map<QName, string>();
+  {
+    const ownerCount = new Map<QName, number>();
+    for (const el of Object.values(ir.elements)) {
+      ownerCount.set(el.typeName, (ownerCount.get(el.typeName) ?? 0) + 1);
+      if (!ownerElementLocalByType.has(el.typeName)) {
+        ownerElementLocalByType.set(el.typeName, clarkToLocal(el.name));
+      }
+    }
+    for (const [typeName, count] of ownerCount) {
+      if (count > 1) {
+        ownerElementLocalByType.delete(typeName);
+      }
     }
   }
 
@@ -1927,17 +1939,17 @@ export const irToZod = (
   // synthetic name — the named declaration always wins — and the fallback is
   // reported as a warning plus a comment at the emitted type.
   const namingFallbacks = new Map<QName, { wanted: string; kept: string }>();
-  const friendlyBase = (qname: QName): string | undefined => {
+  const wantedFriendlyBase = (qname: QName): string | undefined => {
     const local = clarkToLocal(qname);
     if (!local.startsWith("anonymous_")) {
       return undefined;
     }
-    const owner = elementTypeOwner.get(qname);
+    const owner = ownerElementLocalByType.get(qname);
     return sanitizeIdentifier(owner ?? local.slice("anonymous_".length));
   };
-  const decidedBase = new Map<QName, string>();
-  const baseLocal = (qname: QName): string =>
-    decidedBase.get(qname) ?? sanitizeIdentifier(clarkToLocal(qname));
+  const claimedFriendlyBase = new Map<QName, string>();
+  const effectiveBaseLocal = (qname: QName): string =>
+    claimedFriendlyBase.get(qname) ?? sanitizeIdentifier(clarkToLocal(qname));
   const allocNamedType = (qname: QName, withIface: boolean): void => {
     const local = sanitizeIdentifier(clarkToLocal(qname));
     constName.set(qname, alloc(`${local}Schema`));
@@ -1948,7 +1960,9 @@ export const irToZod = (
   const allocAnonymousType = (qname: QName, base: string, withIface: boolean): void => {
     // Element-owned consts take a Type infix: the bare `${base}Schema` shape
     // is the element's own root export.
-    const constCandidate = elementTypeOwner.has(qname) ? `${base}TypeSchema` : `${base}Schema`;
+    const constCandidate = ownerElementLocalByType.has(qname)
+      ? `${base}TypeSchema`
+      : `${base}Schema`;
     const ifaceCandidate = TS_TYPE_RESERVED.has(base) ? `${base}Type` : base;
     if (usedNames.has(constCandidate) || (withIface && usedNames.has(ifaceCandidate))) {
       const kept = sanitizeIdentifier(clarkToLocal(qname));
@@ -1956,35 +1970,28 @@ export const irToZod = (
       allocNamedType(qname, withIface);
       return;
     }
-    decidedBase.set(qname, base);
+    claimedFriendlyBase.set(qname, base);
     constName.set(qname, alloc(constCandidate));
     if (withIface) {
       ifaceName.set(qname, alloc(ifaceCandidate));
     }
   };
 
-  // Named and nested synthetic types allocate first so they win every
-  // collision with a friendly anonymous name.
-  for (const t of sortedSimpleTypes) {
-    if (friendlyBase(t.name) === undefined) {
-      allocNamedType(t.name, false);
+  // Named types allocate first so they win every collision with a friendly
+  // anonymous name; anonymous types follow in a second pass.
+  const namedTypes: { name: QName; withIface: boolean }[] = [
+    ...sortedSimpleTypes.map((t) => ({ name: t.name, withIface: false as const })),
+    ...Object.values(ir.complexTypes).map((t) => ({ name: t.name, withIface: true as const })),
+  ];
+  for (const t of namedTypes) {
+    if (wantedFriendlyBase(t.name) === undefined) {
+      allocNamedType(t.name, t.withIface);
     }
   }
-  for (const t of Object.values(ir.complexTypes)) {
-    if (friendlyBase(t.name) === undefined) {
-      allocNamedType(t.name, true);
-    }
-  }
-  for (const t of sortedSimpleTypes) {
-    const base = friendlyBase(t.name);
+  for (const t of namedTypes) {
+    const base = wantedFriendlyBase(t.name);
     if (base !== undefined) {
-      allocAnonymousType(t.name, base, false);
-    }
-  }
-  for (const t of Object.values(ir.complexTypes)) {
-    const base = friendlyBase(t.name);
-    if (base !== undefined) {
-      allocAnonymousType(t.name, base, true);
+      allocAnonymousType(t.name, base, t.withIface);
     }
   }
   // Auxiliary consts for polymorphic families: the eager object (variant
@@ -1994,17 +2001,41 @@ export const irToZod = (
   const variantConstName = new Map<QName, string>();
   const declaredVariantConstName = new Map<QName, string>();
   const unionConstName = new Map<QName, string>();
-  for (const name of familyTypes) {
-    const local = baseLocal(name);
+  const allocFamilyAux = (name: QName): void => {
+    const local = effectiveBaseLocal(name);
     objectConstName.set(name, alloc(`${local}ObjectSchema`));
     if (derivedTypeNames.has(name)) {
       variantConstName.set(name, alloc(`${local}VariantSchema`));
     }
-  }
-  for (const name of variantSets.keys()) {
-    const local = baseLocal(name);
+  };
+  const allocFamilyUnions = (name: QName): void => {
+    const local = effectiveBaseLocal(name);
     declaredVariantConstName.set(name, alloc(`${local}DeclaredVariantSchema`));
     unionConstName.set(name, alloc(`${local}VariantsSchema`));
+  };
+  // Named families reserve their auxiliary names before anonymous types
+  // allocate, so an anonymous friendly name also loses to a named family's
+  // auxiliary const. Anonymous auxiliaries follow once their bases are set.
+  // `alloc` suffixes on any residual clash, so every emitted name stays unique.
+  for (const name of familyTypes) {
+    if (wantedFriendlyBase(name) === undefined) {
+      allocFamilyAux(name);
+    }
+  }
+  for (const name of variantSets.keys()) {
+    if (wantedFriendlyBase(name) === undefined) {
+      allocFamilyUnions(name);
+    }
+  }
+  for (const name of familyTypes) {
+    if (wantedFriendlyBase(name) !== undefined) {
+      allocFamilyAux(name);
+    }
+  }
+  for (const name of variantSets.keys()) {
+    if (wantedFriendlyBase(name) !== undefined) {
+      allocFamilyUnions(name);
+    }
   }
 
   // Comment at the affected type when a friendly name was lost to a
@@ -2015,6 +2046,8 @@ export const irToZod = (
       ? ""
       : `// Friendly name "${fallback.wanted}" collides with another generated identifier; the synthetic "anonymous_" name is kept.\n`;
   };
+  const withNamingComment = (qname: QName, line: string): string =>
+    `${namingComment(qname)}${line}`;
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   const importLineIndex = schemaLines.length;
@@ -2172,7 +2205,10 @@ export const irToZod = (
           : "";
       const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
       schemaLines.push(
-        `${namingComment(complexType.name)}${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+        withNamingComment(
+          complexType.name,
+          `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+        ),
       );
     }
   }
@@ -2223,17 +2259,23 @@ export const irToZod = (
         // on a fresh clone so a derived type never clobbers its base's.
         expr = `z.clone(${expr})`;
         schemaLines.push(
-          `${namingComment(simpleType.name)}const ${constName.get(simpleType.name)} = ${registered(
-            expr,
-            simpleType.description,
-            `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
-          )};`,
+          withNamingComment(
+            simpleType.name,
+            `const ${constName.get(simpleType.name)} = ${registered(
+              expr,
+              simpleType.description,
+              `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
+            )};`,
+          ),
         );
         continue;
       }
     }
     schemaLines.push(
-      `${namingComment(simpleType.name)}const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
+      withNamingComment(
+        simpleType.name,
+        `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
+      ),
     );
   }
 
@@ -2257,11 +2299,14 @@ export const irToZod = (
       // Family member: the object shape lives in its own const (shared with
       // the xsiType variant below); the named const stays a lazy wrapper.
       schemaLines.push(
-        `${namingComment(complexType.name)}const ${constName.get(complexType.name)}${annotation} = ${registered(
-          `z.lazy(() => ${objectConstName.get(complexType.name)})`,
-          complexType.description,
-          fieldsMetaFor(complexType, ir, structured, membersByHead),
-        )};`,
+        withNamingComment(
+          complexType.name,
+          `const ${constName.get(complexType.name)}${annotation} = ${registered(
+            `z.lazy(() => ${objectConstName.get(complexType.name)})`,
+            complexType.description,
+            fieldsMetaFor(complexType, ir, structured, membersByHead),
+          )};`,
+        ),
       );
       continue;
     }
@@ -2284,11 +2329,14 @@ export const irToZod = (
       .join(", ");
 
     schemaLines.push(
-      `${namingComment(complexType.name)}const ${constName.get(complexType.name)}${annotation} = ${registered(
-        `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
-        complexType.description,
-        fieldsMetaFor(complexType, ir, structured, membersByHead),
-      )};`,
+      withNamingComment(
+        complexType.name,
+        `const ${constName.get(complexType.name)}${annotation} = ${registered(
+          `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
+          complexType.description,
+          fieldsMetaFor(complexType, ir, structured, membersByHead),
+        )};`,
+      ),
     );
   }
 
