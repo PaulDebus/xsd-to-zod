@@ -305,6 +305,8 @@ const extended = inner.extend({ extra: z.string() });
 
 The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSchema)?.root` returns the root element QName. Registered metadata is informational; parsing/serialization never requires touching it.
 
+**Type naming.** A global element with an inline anonymous type lends the type its bare name: `<xs:element name="Library">` with an inline complex type generates `export interface Library`, so `parseXml(LibrarySchema, xml)` is typed `Library`. Nested anonymous types follow the `Parent_Child_Type` scheme. If the friendly name collides with another declaration, the type keeps its synthetic `anonymous_…` name instead — the CLI prints a `naming-collision` warning and the generated file carries a comment at the affected type.
+
 ## Why trust this?
 
 We ship a **multi-tier test suite** that exercises the full pipeline on real-world and curated fixtures. Every round-trip test validates: XSD → Zod schemas → parse XML (golden-file compare) → serialize back → re-parse → deep-compare → serialized XML validated against the original XSD using libxml2. A smoke test additionally runs `tsc --noEmit` over the generated output of every curated fixture, so invalid-TypeScript codegen bugs cannot slip through.

@@ -21,7 +21,7 @@ const NUMBER_PRIMITIVES = new Set([...XSD_SAFE_INTEGER_TYPE_NAMES, "decimal", "f
 
 // Date/time builtins that datatypes: "structured" parses into plain objects
 // (xsdDateTime.ts): builtin local name → generated-code helper and TS type.
-const XSD_STRUCTURED_TYPES: ReadonlyMap<
+export const XSD_STRUCTURED_TYPES: ReadonlyMap<
   string,
   { parseFn: string; writeFn: string; tsType: string }
 > = new Map([
@@ -61,7 +61,7 @@ const structuredLiteral = (name: XsdDatatypeName, raw: string): string =>
 // validators): builtin local name → exported validator function. QName,
 // NOTATION, anyURI, normalizedString and token are absent on purpose — see
 // xsdLexicals.ts for why their lexical check is impossible or vacuous.
-const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
+export const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["date", "xsdDate"],
   ["dateTime", "xsdDateTime"],
   ["time", "xsdTime"],
@@ -1792,9 +1792,18 @@ const tsFieldLine = (
 const registered = (expr: string, description: string | undefined, metaBody: string): string =>
   `${withDescription(expr, description)}.register(xmlRegistry, { ${metaBody} })`;
 
-// Names TS forbids as interface identifiers (primitive/literal type keywords).
-// An XSD type named "boolean" or "any" gets a Type suffix instead.
-const TS_TYPE_RESERVED = new Set([
+// Names TS forbids as interface identifiers (primitive/literal type keywords),
+// plus the generated module's own imports — an interface named like an import
+// would shadow it in type position.
+// An XSD type named "boolean" or "any" gets a Type suffix instead. The suffix
+// is applied silently (no warning, no comment in the generated file): unlike a
+// name lost to a collision, the outcome is deterministic regardless of what
+// else the schema declares, so there is nothing to explain.
+// The importable helper names are derived from the tables that feed the
+// import line (XSD_LEXICAL_VALIDATORS, XSD_STRUCTURED_TYPES), so a new helper
+// is reserved automatically; the facet helpers and fixed imports have no such
+// table and stay literal.
+export const TS_TYPE_RESERVED = new Set([
   "any",
   "unknown",
   "never",
@@ -1813,6 +1822,13 @@ const TS_TYPE_RESERVED = new Set([
   "infer",
   "function",
   "intrinsic",
+  "z",
+  "xmlRegistry",
+  "xsdTotalDigits",
+  "xsdFractionDigits",
+  "xsdPattern",
+  ...XSD_LEXICAL_VALIDATORS.values(),
+  ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
 
 export type IrToZodOptions = {
@@ -1825,7 +1841,10 @@ export type IrToZodOptions = {
   datatypes?: "string" | "structured";
 };
 
-export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } => {
+export const irToZod = (
+  ir: XsdIr,
+  opts?: IrToZodOptions,
+): { schemas: string; warnings: string[] } => {
   const structured = opts?.datatypes === "structured";
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([
@@ -1874,13 +1893,88 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const constName = new Map<QName, string>();
   const ifaceName = new Map<QName, string>();
   const sortedSimpleTypes = sortSimpleTypes(ir);
-  for (const t of sortedSimpleTypes) {
-    constName.set(t.name, alloc(`${sanitizeIdentifier(clarkToLocal(t.name))}Schema`));
+
+  // A global element lends its inline anonymous type the bare element
+  // name: `anonymous_Library_Type` emits `Library`. The parser mints one
+  // synthetic QName per inline occurrence, so ownership is 1:1 in practice;
+  // a type referenced by several elements keeps no owner and only drops the
+  // prefix instead of borrowing one element's name.
+  const ownerElementLocalByType = new Map<QName, string>();
+  {
+    const ownerCount = new Map<QName, number>();
+    for (const el of Object.values(ir.elements)) {
+      ownerCount.set(el.typeName, (ownerCount.get(el.typeName) ?? 0) + 1);
+      if (!ownerElementLocalByType.has(el.typeName)) {
+        ownerElementLocalByType.set(el.typeName, clarkToLocal(el.name));
+      }
+    }
+    for (const [typeName, count] of ownerCount) {
+      if (count > 1) {
+        ownerElementLocalByType.delete(typeName);
+      }
+    }
   }
-  for (const t of Object.values(ir.complexTypes)) {
-    const local = sanitizeIdentifier(clarkToLocal(t.name));
-    constName.set(t.name, alloc(`${local}Schema`));
-    ifaceName.set(t.name, alloc(TS_TYPE_RESERVED.has(local) ? `${local}Type` : local));
+
+  // Anonymous synthetic types (`anonymous_…`) emit friendly names: the owning
+  // element's bare name, otherwise the synthetic name minus the prefix. On a
+  // collision with an already-claimed identifier the anonymous type keeps its
+  // synthetic name — the named declaration always wins — and the fallback is
+  // reported as a warning plus a comment at the emitted type.
+  const namingFallbacks = new Map<QName, { wanted: string; kept: string }>();
+  const wantedFriendlyBase = (qname: QName): string | undefined => {
+    const local = clarkToLocal(qname);
+    if (!local.startsWith("anonymous_")) {
+      return undefined;
+    }
+    const owner = ownerElementLocalByType.get(qname);
+    return sanitizeIdentifier(owner ?? local.slice("anonymous_".length));
+  };
+  const claimedFriendlyBase = new Map<QName, string>();
+  const effectiveBaseLocal = (qname: QName): string =>
+    claimedFriendlyBase.get(qname) ?? sanitizeIdentifier(clarkToLocal(qname));
+  const allocNamedType = (qname: QName, withIface: boolean): void => {
+    const local = sanitizeIdentifier(clarkToLocal(qname));
+    constName.set(qname, alloc(`${local}Schema`));
+    if (withIface) {
+      ifaceName.set(qname, alloc(TS_TYPE_RESERVED.has(local) ? `${local}Type` : local));
+    }
+  };
+  const allocAnonymousType = (qname: QName, base: string, withIface: boolean): void => {
+    // Element-owned consts take a Type infix: the bare `${base}Schema` shape
+    // is the element's own root export.
+    const constCandidate = ownerElementLocalByType.has(qname)
+      ? `${base}TypeSchema`
+      : `${base}Schema`;
+    const ifaceCandidate = TS_TYPE_RESERVED.has(base) ? `${base}Type` : base;
+    if (usedNames.has(constCandidate) || (withIface && usedNames.has(ifaceCandidate))) {
+      const kept = sanitizeIdentifier(clarkToLocal(qname));
+      namingFallbacks.set(qname, { wanted: base, kept });
+      allocNamedType(qname, withIface);
+      return;
+    }
+    claimedFriendlyBase.set(qname, base);
+    constName.set(qname, alloc(constCandidate));
+    if (withIface) {
+      ifaceName.set(qname, alloc(ifaceCandidate));
+    }
+  };
+
+  // Named types allocate first so they win every collision with a friendly
+  // anonymous name; anonymous types follow in a second pass.
+  const namedTypes: { name: QName; withIface: boolean }[] = [
+    ...sortedSimpleTypes.map((t) => ({ name: t.name, withIface: false as const })),
+    ...Object.values(ir.complexTypes).map((t) => ({ name: t.name, withIface: true as const })),
+  ];
+  for (const t of namedTypes) {
+    if (wantedFriendlyBase(t.name) === undefined) {
+      allocNamedType(t.name, t.withIface);
+    }
+  }
+  for (const t of namedTypes) {
+    const base = wantedFriendlyBase(t.name);
+    if (base !== undefined) {
+      allocAnonymousType(t.name, base, t.withIface);
+    }
   }
   // Auxiliary consts for polymorphic families: the eager object (variant
   // option source), the xsiType-carrying variant, and the union per
@@ -1889,18 +1983,53 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
   const variantConstName = new Map<QName, string>();
   const declaredVariantConstName = new Map<QName, string>();
   const unionConstName = new Map<QName, string>();
-  for (const name of familyTypes) {
-    const local = sanitizeIdentifier(clarkToLocal(name));
+  const allocFamilyAux = (name: QName): void => {
+    const local = effectiveBaseLocal(name);
     objectConstName.set(name, alloc(`${local}ObjectSchema`));
     if (derivedTypeNames.has(name)) {
       variantConstName.set(name, alloc(`${local}VariantSchema`));
     }
-  }
-  for (const name of variantSets.keys()) {
-    const local = sanitizeIdentifier(clarkToLocal(name));
+  };
+  const allocFamilyUnions = (name: QName): void => {
+    const local = effectiveBaseLocal(name);
     declaredVariantConstName.set(name, alloc(`${local}DeclaredVariantSchema`));
     unionConstName.set(name, alloc(`${local}VariantsSchema`));
+  };
+  // Named families reserve their auxiliary names before anonymous types
+  // allocate, so an anonymous friendly name also loses to a named family's
+  // auxiliary const. Anonymous auxiliaries follow once their bases are set.
+  // `alloc` suffixes on any residual clash, so every emitted name stays unique.
+  for (const name of familyTypes) {
+    if (wantedFriendlyBase(name) === undefined) {
+      allocFamilyAux(name);
+    }
   }
+  for (const name of variantSets.keys()) {
+    if (wantedFriendlyBase(name) === undefined) {
+      allocFamilyUnions(name);
+    }
+  }
+  for (const name of familyTypes) {
+    if (wantedFriendlyBase(name) !== undefined) {
+      allocFamilyAux(name);
+    }
+  }
+  for (const name of variantSets.keys()) {
+    if (wantedFriendlyBase(name) !== undefined) {
+      allocFamilyUnions(name);
+    }
+  }
+
+  // Comment at the affected type when a friendly name was lost to a
+  // collision: the warning scrolls away, the comment lives with the artifact.
+  const namingComment = (qname: QName): string => {
+    const fallback = namingFallbacks.get(qname);
+    return fallback === undefined
+      ? ""
+      : `// Friendly name "${fallback.wanted}" collides with another generated identifier; the synthetic "anonymous_" name is kept.\n`;
+  };
+  const withNamingComment = (qname: QName, line: string): string =>
+    `${namingComment(qname)}${line}`;
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   const importLineIndex = schemaLines.length;
@@ -2058,7 +2187,10 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
           : "";
       const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
       schemaLines.push(
-        `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+        withNamingComment(
+          complexType.name,
+          `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+        ),
       );
     }
   }
@@ -2109,17 +2241,23 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
         // on a fresh clone so a derived type never clobbers its base's.
         expr = `z.clone(${expr})`;
         schemaLines.push(
-          `const ${constName.get(simpleType.name)} = ${registered(
-            expr,
-            simpleType.description,
-            `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
-          )};`,
+          withNamingComment(
+            simpleType.name,
+            `const ${constName.get(simpleType.name)} = ${registered(
+              expr,
+              simpleType.description,
+              `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
+            )};`,
+          ),
         );
         continue;
       }
     }
     schemaLines.push(
-      `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
+      withNamingComment(
+        simpleType.name,
+        `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
+      ),
     );
   }
 
@@ -2143,11 +2281,14 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       // Family member: the object shape lives in its own const (shared with
       // the xsiType variant below); the named const stays a lazy wrapper.
       schemaLines.push(
-        `const ${constName.get(complexType.name)}${annotation} = ${registered(
-          `z.lazy(() => ${objectConstName.get(complexType.name)})`,
-          complexType.description,
-          fieldsMetaFor(complexType, ir, structured, membersByHead),
-        )};`,
+        withNamingComment(
+          complexType.name,
+          `const ${constName.get(complexType.name)}${annotation} = ${registered(
+            `z.lazy(() => ${objectConstName.get(complexType.name)})`,
+            complexType.description,
+            fieldsMetaFor(complexType, ir, structured, membersByHead),
+          )};`,
+        ),
       );
       continue;
     }
@@ -2170,11 +2311,14 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
       .join(", ");
 
     schemaLines.push(
-      `const ${constName.get(complexType.name)}${annotation} = ${registered(
-        `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
-        complexType.description,
-        fieldsMetaFor(complexType, ir, structured, membersByHead),
-      )};`,
+      withNamingComment(
+        complexType.name,
+        `const ${constName.get(complexType.name)}${annotation} = ${registered(
+          `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
+          complexType.description,
+          fieldsMetaFor(complexType, ir, structured, membersByHead),
+        )};`,
+      ),
     );
   }
 
@@ -2284,7 +2428,11 @@ export const irToZod = (ir: XsdIr, opts?: IrToZodOptions): { schemas: string } =
     `import { z } from 'zod';\n` +
     `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
 
-  return { schemas: `${schemaLines.join("\n")}\n` };
+  const warnings = [...namingFallbacks].map(
+    ([qname, f]) =>
+      `[naming-collision] ${qname}: friendly name "${f.wanted}" is already taken in the generated module; kept the synthetic name "${f.kept}"`,
+  );
+  return { schemas: `${schemaLines.join("\n")}\n`, warnings };
 };
 
 export const fieldKeyFromIr = toFieldKey;
