@@ -407,7 +407,10 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     warnDiagnostics(ir, !fetchRemote);
   }
 
-  const { schemas } = irToZod(ir, { datatypes });
+  const { schemas, warnings } = irToZod(ir, { datatypes });
+  for (const warning of warnings) {
+    console.error(`warning: ${warning}`);
+  }
 
   const outDir = resolve(out);
   if (!existsSync(outDir)) {
@@ -461,7 +464,10 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
 
   const ir = await parseXsd([xsdFile]);
   warnDiagnostics(ir);
-  const { schemas } = irToZod(ir, { js: true });
+  const { schemas, warnings } = irToZod(ir, { js: true });
+  for (const warning of warnings) {
+    console.error(`warning: ${warning}`);
+  }
   const mod = await importGeneratedModule(schemas);
 
   const roots: { schema: z.ZodType; root: string }[] = [];

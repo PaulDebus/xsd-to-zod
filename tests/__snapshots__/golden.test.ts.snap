@@ -124,11 +124,11 @@ import { xmlRegistry } from 'xsd-to-zod';
 // Generator version stamp — the runtime warns when its major version differs.
 export const generatedBy = "xsd-to-zod@<version>";
 
-export interface anonymous_OptionalBag_Type {
+export interface OptionalBag {
   "A"?: string[] | undefined;
   "B"?: string[] | undefined;
 }
-export interface anonymous_Bag_Type {
+export interface Bag {
   "A"?: string[] | undefined;
   "B"?: string[] | undefined;
 }
@@ -159,8 +159,8 @@ export interface PersonType {
   "lastName": string;
   "age": bigint;
 }
-const anonymous_OptionalBag_TypeSchema: z.ZodType<anonymous_OptionalBag_Type> = z.lazy(() => z.object({"A": z.array(z.string()).optional(), "B": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_OptionalBag_Type", fields: { "A": { kind: "element", qname: "{urn:curated}A" }, "B": { kind: "element", qname: "{urn:curated}B" } }, choices: {"1":{"required":false,"repeated":true,"branches":[{"id":"1.0","keys":[{"key":"A","required":false}]},{"id":"1.1","keys":[{"key":"B","required":false}]}],"message":"choice requires at least one of: A, B"}} });
-const anonymous_Bag_TypeSchema: z.ZodType<anonymous_Bag_Type> = z.lazy(() => z.object({"A": z.array(z.string()).optional(), "B": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_Bag_Type", fields: { "A": { kind: "element", qname: "{urn:curated}A" }, "B": { kind: "element", qname: "{urn:curated}B" } }, choices: {"2":{"required":true,"repeated":true,"branches":[{"id":"2.0","keys":[{"key":"A","required":true}]},{"id":"2.1","keys":[{"key":"B","required":true}]}],"message":"choice requires at least one of: A, B","enforce":true}} });
+const OptionalBagTypeSchema: z.ZodType<OptionalBag> = z.lazy(() => z.object({"A": z.array(z.string()).optional(), "B": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_OptionalBag_Type", fields: { "A": { kind: "element", qname: "{urn:curated}A" }, "B": { kind: "element", qname: "{urn:curated}B" } }, choices: {"1":{"required":false,"repeated":true,"branches":[{"id":"1.0","keys":[{"key":"A","required":false}]},{"id":"1.1","keys":[{"key":"B","required":false}]}],"message":"choice requires at least one of: A, B"}} });
+const BagTypeSchema: z.ZodType<Bag> = z.lazy(() => z.object({"A": z.array(z.string()).optional(), "B": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_Bag_Type", fields: { "A": { kind: "element", qname: "{urn:curated}A" }, "B": { kind: "element", qname: "{urn:curated}B" } }, choices: {"2":{"required":true,"repeated":true,"branches":[{"id":"2.0","keys":[{"key":"A","required":true}]},{"id":"2.1","keys":[{"key":"B","required":true}]}],"message":"choice requires at least one of: A, B","enforce":true}} });
 const AllTypeSchema: z.ZodType<AllType> = z.lazy(() => z.object({"a": z.string(), "b": z.string(), "c": z.string()})).register(xmlRegistry, { qname: "{urn:curated}AllType", fields: { "a": { kind: "element", qname: "{urn:curated}a" }, "b": { kind: "element", qname: "{urn:curated}b" }, "c": { kind: "element", qname: "{urn:curated}c" } } });
 const ContactTypeSchema: z.ZodType<ContactType> = z.lazy(() => z.object({"email": z.string().optional(), "phone": z.string().optional()})).register(xmlRegistry, { qname: "{urn:curated}ContactType", fields: { "email": { kind: "element", qname: "{urn:curated}email" }, "phone": { kind: "element", qname: "{urn:curated}phone" } }, choices: {"0":{"required":true,"repeated":false,"branches":[{"id":"0.0","keys":[{"key":"email","required":true}]},{"id":"0.1","keys":[{"key":"phone","required":true}]}],"message":"choice requires exactly one of: email, phone","enforce":true}} });
 const ParagraphTypeSchema: z.ZodType<ParagraphType> = z.lazy(() => z.object({"_text": z.string().optional(), "bold": z.array(z.string()).optional(), "italic": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}ParagraphType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" }, "bold": { kind: "element", qname: "{urn:curated}bold" }, "italic": { kind: "element", qname: "{urn:curated}italic" } } });
@@ -168,8 +168,8 @@ const LineItemTypeSchema: z.ZodType<LineItemType> = z.lazy(() => z.object({"prod
 const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({"orderId": z.string(), "lineItem": z.array(LineItemTypeSchema).min(1)})).register(xmlRegistry, { qname: "{urn:curated}OrderType", fields: { "orderId": { kind: "element", qname: "{urn:curated}orderId" }, "lineItem": { kind: "element", qname: "{urn:curated}lineItem" } } });
 const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({"firstName": z.string(), "lastName": z.string(), "age": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}PersonType", fields: { "firstName": { kind: "element", qname: "{urn:curated}firstName" }, "lastName": { kind: "element", qname: "{urn:curated}lastName" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
 export const allExampleSchema = z.lazy(() => AllTypeSchema).register(xmlRegistry, { root: "{urn:curated}allExample", generatedBy });
-export const OptionalBagSchema = z.lazy(() => anonymous_OptionalBag_TypeSchema).register(xmlRegistry, { root: "{urn:curated}OptionalBag", generatedBy });
-export const BagSchema = z.lazy(() => anonymous_Bag_TypeSchema).register(xmlRegistry, { root: "{urn:curated}Bag", generatedBy });
+export const OptionalBagSchema = z.lazy(() => OptionalBagTypeSchema).register(xmlRegistry, { root: "{urn:curated}OptionalBag", generatedBy });
+export const BagSchema = z.lazy(() => BagTypeSchema).register(xmlRegistry, { root: "{urn:curated}Bag", generatedBy });
 export const contactSchema = z.lazy(() => ContactTypeSchema).register(xmlRegistry, { root: "{urn:curated}contact", generatedBy });
 export const paragraphSchema = z.lazy(() => ParagraphTypeSchema).register(xmlRegistry, { root: "{urn:curated}paragraph", generatedBy });
 export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, { root: "{urn:curated}order", generatedBy });
@@ -306,7 +306,7 @@ import { xmlRegistry } from 'xsd-to-zod';
 // Generator version stamp — the runtime warns when its major version differs.
 export const generatedBy = "xsd-to-zod@<version>";
 
-export interface anonymous_Library_Type {
+export interface Library {
   "Publication": (BookType | MagazineType | PublicationType)[];
   "comment"?: string | undefined;
 }
@@ -324,7 +324,7 @@ export interface MagazineType {
 const PublicationTypeObjectSchema = z.object({"Title": z.string()});
 const BookTypeObjectSchema = z.object({"Title": z.string(), "Author": z.string()});
 const MagazineTypeObjectSchema = z.object({"Title": z.string(), "Issue": z.string()});
-const anonymous_Library_TypeSchema: z.ZodType<anonymous_Library_Type> = z.lazy(() => z.object({"Publication": z.array(z.union([z.lazy(() => BookTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Book" }), z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Magazine" }), z.lazy(() => PublicationTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Publication" })])).min(1), "comment": z.union([z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}editorNote" }), z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}comment" })]).optional()})).register(xmlRegistry, { qname: "{urn:substitution-groups}anonymous_Library_Type", fields: { "Publication": { kind: "element", qname: "{urn:substitution-groups}Publication", substitutes: ["{urn:substitution-groups}Book","{urn:substitution-groups}Magazine"] }, "comment": { kind: "element", qname: "{urn:substitution-groups}comment", substitutes: ["{urn:substitution-groups}editorNote"] } } });
+const LibraryTypeSchema: z.ZodType<Library> = z.lazy(() => z.object({"Publication": z.array(z.union([z.lazy(() => BookTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Book" }), z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Magazine" }), z.lazy(() => PublicationTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Publication" })])).min(1), "comment": z.union([z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}editorNote" }), z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}comment" })]).optional()})).register(xmlRegistry, { qname: "{urn:substitution-groups}anonymous_Library_Type", fields: { "Publication": { kind: "element", qname: "{urn:substitution-groups}Publication", substitutes: ["{urn:substitution-groups}Book","{urn:substitution-groups}Magazine"] }, "comment": { kind: "element", qname: "{urn:substitution-groups}comment", substitutes: ["{urn:substitution-groups}editorNote"] } } });
 const PublicationTypeSchema: z.ZodType<PublicationType> = z.lazy(() => PublicationTypeObjectSchema).register(xmlRegistry, { qname: "{urn:substitution-groups}PublicationType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" } } });
 const BookTypeSchema: z.ZodType<BookType> = z.lazy(() => BookTypeObjectSchema).register(xmlRegistry, { qname: "{urn:substitution-groups}BookType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" }, "Author": { kind: "element", qname: "{urn:substitution-groups}Author" } } });
 const MagazineTypeSchema: z.ZodType<MagazineType> = z.lazy(() => MagazineTypeObjectSchema).register(xmlRegistry, { qname: "{urn:substitution-groups}MagazineType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" }, "Issue": { kind: "element", qname: "{urn:substitution-groups}Issue" } } });
@@ -337,7 +337,7 @@ export const BookSchema = z.lazy(() => BookTypeSchema).register(xmlRegistry, { r
 export const MagazineSchema = z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Magazine", generatedBy });
 export const commentSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:substitution-groups}comment", generatedBy });
 export const editorNoteSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:substitution-groups}editorNote", generatedBy });
-export const LibrarySchema = z.lazy(() => anonymous_Library_TypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Library", generatedBy });
+export const LibrarySchema = z.lazy(() => LibraryTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Library", generatedBy });
 "
 `;
 
