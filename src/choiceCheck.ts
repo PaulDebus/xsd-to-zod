@@ -1,7 +1,7 @@
 import type { XmlChoiceMeta } from "./xmlMeta.js";
 
-// Presence, not just definedness: the walker materializes an absent repeated
-// field as [], and [] is zero occurrences — absent.
+// Presence, not just definedness: an absent repeated field is omitted, and a
+// hand-built [] is zero occurrences — both are absent.
 const has = (value: unknown): boolean =>
   value !== undefined && !(Array.isArray(value) && value.length === 0);
 

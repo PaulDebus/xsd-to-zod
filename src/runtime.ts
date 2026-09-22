@@ -1670,6 +1670,12 @@ const readField = (
   const openXsiTypes = occurrences.map((o) => o.openXsiType);
   const anyOpenXsiType = openXsiTypes.some((t) => t !== undefined) ? openXsiTypes : undefined;
   if (field.isArray) {
+    // Absent optional-unbounded element: omit the key (like the scalar path
+    // below) instead of emitting an empty array. Required arrays still fail
+    // validation via the omitted key (invalid_type).
+    if (occurrences.length === 0) {
+      return { present: false, value: undefined };
+    }
     const lexicals = occurrences.map((o) => o.lexical);
     const qnameNs = occurrences.map((o) => o.qnameNs);
     return {

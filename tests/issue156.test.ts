@@ -52,7 +52,6 @@ describe("inherited repeated-choice refinements (#156)", () => {
     ).toEqual({
       Name: ["A"],
       Def: ["B"],
-      Extra: [],
     });
   });
 
@@ -65,7 +64,6 @@ describe("inherited repeated-choice refinements (#156)", () => {
       ),
     ).toEqual({
       Name: ["A"],
-      Def: [],
       Extra: ["B"],
     });
   });
@@ -94,11 +92,7 @@ describe("inherited repeated-choice refinements (#156)", () => {
 
   <xs:element name="Root" type="DerivedType"/>
 </xs:schema>`);
-    expect(parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"/>')).toEqual({
-      Name: [],
-      Def: [],
-      Extra: [],
-    });
+    expect(parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"/>')).toEqual({});
   });
 
   it("still requires one branch when every inherited branch is required", async () => {
@@ -125,7 +119,6 @@ describe("inherited repeated-choice refinements (#156)", () => {
       parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"><ns:A>a</ns:A></ns:Root>'),
     ).toEqual({
       A: ["a"],
-      B: [],
     });
     expect(() => parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"/>')).toThrow(
       /choice/,
