@@ -21,7 +21,7 @@ const NUMBER_PRIMITIVES = new Set([...XSD_SAFE_INTEGER_TYPE_NAMES, "decimal", "f
 
 // Date/time builtins that datatypes: "structured" parses into plain objects
 // (xsdDateTime.ts): builtin local name → generated-code helper and TS type.
-const XSD_STRUCTURED_TYPES: ReadonlyMap<
+export const XSD_STRUCTURED_TYPES: ReadonlyMap<
   string,
   { parseFn: string; writeFn: string; tsType: string }
 > = new Map([
@@ -61,7 +61,7 @@ const structuredLiteral = (name: XsdDatatypeName, raw: string): string =>
 // validators): builtin local name → exported validator function. QName,
 // NOTATION, anyURI, normalizedString and token are absent on purpose — see
 // xsdLexicals.ts for why their lexical check is impossible or vacuous.
-const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
+export const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
   ["date", "xsdDate"],
   ["dateTime", "xsdDateTime"],
   ["time", "xsdTime"],
@@ -1795,8 +1795,15 @@ const registered = (expr: string, description: string | undefined, metaBody: str
 // Names TS forbids as interface identifiers (primitive/literal type keywords),
 // plus the generated module's own imports — an interface named like an import
 // would shadow it in type position.
-// An XSD type named "boolean" or "any" gets a Type suffix instead.
-const TS_TYPE_RESERVED = new Set([
+// An XSD type named "boolean" or "any" gets a Type suffix instead. The suffix
+// is applied silently (no warning, no comment in the generated file): unlike a
+// name lost to a collision, the outcome is deterministic regardless of what
+// else the schema declares, so there is nothing to explain.
+// The importable helper names are derived from the tables that feed the
+// import line (XSD_LEXICAL_VALIDATORS, XSD_STRUCTURED_TYPES), so a new helper
+// is reserved automatically; the facet helpers and fixed imports have no such
+// table and stay literal.
+export const TS_TYPE_RESERVED = new Set([
   "any",
   "unknown",
   "never",
@@ -1820,33 +1827,8 @@ const TS_TYPE_RESERVED = new Set([
   "xsdTotalDigits",
   "xsdFractionDigits",
   "xsdPattern",
-  "parseXsdDate",
-  "writeXsdDate",
-  "parseXsdDateTime",
-  "writeXsdDateTime",
-  "parseXsdTime",
-  "writeXsdTime",
-  "parseXsdGYear",
-  "writeXsdGYear",
-  "parseXsdGYearMonth",
-  "writeXsdGYearMonth",
-  "parseXsdGMonth",
-  "writeXsdGMonth",
-  "parseXsdGMonthDay",
-  "writeXsdGMonthDay",
-  "parseXsdGDay",
-  "writeXsdGDay",
-  "parseXsdDuration",
-  "writeXsdDuration",
-  "XsdDate",
-  "XsdDateTime",
-  "XsdTime",
-  "XsdGYear",
-  "XsdGYearMonth",
-  "XsdGMonth",
-  "XsdGMonthDay",
-  "XsdGDay",
-  "XsdDuration",
+  ...XSD_LEXICAL_VALIDATORS.values(),
+  ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
 
 export type IrToZodOptions = {

@@ -2,20 +2,32 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
+import { TS_TYPE_RESERVED, XSD_LEXICAL_VALIDATORS, XSD_STRUCTURED_TYPES } from "../src/irToZod.js";
 import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
-const generate = async (xsd: string): Promise<{ schemas: string; warnings: string[] }> => {
+const generate = async (xsd: string): Promise<{ schemas: string; warnings: string[] }> =>
+  generateFiles({ "schema.xsd": xsd });
+
+const generateFiles = async (
+  files: Record<string, string>,
+): Promise<{ schemas: string; warnings: string[] }> => {
   let result: { schemas: string; warnings: string[] } = { schemas: "", warnings: [] };
   await withTempDirAsync(async (dir) => {
-    const file = path.join(dir, "schema.xsd");
-    fs.writeFileSync(file, xsd);
-    result = irToZod(await parseXsd([file]));
+    const paths = Object.entries(files).map(([name, xsd]) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, xsd);
+      return file;
+    });
+    result = irToZod(await parseXsd(paths));
   });
   return result;
 };
 
 const XSD_OPEN = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:anon" elementFormDefault="qualified">`;
+
+const XSD_OPEN_NS = (ns: string) => `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="${ns}" elementFormDefault="qualified">`;
 
 describe("anonymous type naming", () => {
   it("names a top-level anonymous complex type after its element", async () => {
@@ -89,6 +101,30 @@ describe("anonymous type naming", () => {
     await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
   });
 
+  it("keeps one synthetic name, warns, and comments when two namespaces mint the same friendly name", async () => {
+    const itemSchema = (ns: string) => `${XSD_OPEN_NS(ns)}
+  <xs:element name="Item">
+    <xs:complexType>
+      <xs:sequence><xs:element name="x" type="xs:string"/></xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+    const { schemas, warnings } = await generateFiles({
+      "a.xsd": itemSchema("urn:a"),
+      "b.xsd": itemSchema("urn:b"),
+    });
+    expect(schemas.match(/export interface Item \{/g)).toHaveLength(1);
+    expect(schemas.match(/export interface anonymous_Item_Type \{/g)).toHaveLength(1);
+    expect(schemas).toMatch(
+      /\/\/ Friendly name "Item" collides.*\nexport interface anonymous_Item_Type/,
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(
+      /^\[naming-collision\] \{urn:[ab]\}anonymous_Item_Type: friendly name "Item" is already taken in the generated module; kept the synthetic name "anonymous_Item_Type"$/,
+    );
+    await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
+  });
+
   it("suffixes an interface named like a generated-module import", async () => {
     const { schemas } = await generate(`${XSD_OPEN}
   <xs:element name="z">
@@ -139,5 +175,24 @@ describe("anonymous type naming", () => {
     expect(schemas).not.toMatch(/(interface|const) anonymous_/);
     expect(warnings).toEqual([]);
     await expect(importGeneratedSchemas(schemas)).resolves.toBeTypeOf("object");
+  });
+});
+
+describe("TS_TYPE_RESERVED", () => {
+  it("covers every identifier the generated module can import", () => {
+    const importable = [
+      // Fixed imports of every generated module and the facet helpers
+      // assembled into the import line (usage flags / withFacets).
+      "z",
+      "xmlRegistry",
+      "xsdTotalDigits",
+      "xsdFractionDigits",
+      "xsdPattern",
+      ...XSD_LEXICAL_VALIDATORS.values(),
+      ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
+    ];
+    for (const name of importable) {
+      expect(TS_TYPE_RESERVED.has(name), name).toBe(true);
+    }
   });
 });
