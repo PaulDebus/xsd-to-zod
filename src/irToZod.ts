@@ -1837,17 +1837,34 @@ export const TS_TYPE_RESERVED = new Set([
   ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
 
-// One-line summary of the schema constructs the zod tier does not enforce
-// (e.g. "xs:key (13), xs:keyref (5)"), undefined when everything is covered.
-// Shared by the CLI warning and the generated file's header comment.
-export const unenforcedConstructsSummary = (ir: XsdIr): string | undefined => {
-  const entries = Object.entries(ir.unenforcedConstructs)
-    .filter(([, count]) => count > 0)
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (entries.length === 0) {
+export type UnenforcedConstructsSummary = {
+  /** Constructs dropped entirely, e.g. "xs:key (13), xs:keyref (5)". */
+  dropped?: string;
+  /** Constructs supported only partially, e.g. "mixed content (2)". */
+  weakened?: string;
+};
+
+// One-line summaries of the schema constructs the zod tier does not fully
+// honor, undefined when everything is covered. Shared by the CLI warning
+// and the generated file's header comment.
+export const unenforcedConstructsSummary = (ir: XsdIr): UnenforcedConstructsSummary | undefined => {
+  const format = (counts: Record<string, number>): string | undefined => {
+    const entries = Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return entries.length === 0
+      ? undefined
+      : entries.map(([construct, count]) => `${construct} (${count})`).join(", ");
+  };
+  const dropped = format(ir.unenforcedConstructs.dropped);
+  const weakened = format(ir.unenforcedConstructs.weakened);
+  if (dropped === undefined && weakened === undefined) {
     return undefined;
   }
-  return entries.map(([construct, count]) => `${construct} (${count})`).join(", ");
+  return {
+    ...(dropped !== undefined && { dropped }),
+    ...(weakened !== undefined && { weakened }),
+  };
 };
 
 export type IrToZodOptions = {
@@ -2197,9 +2214,14 @@ export const irToZod = (
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   // The warning scrolls away; the comment lives with the artifact.
   const unenforced = unenforcedConstructsSummary(ir);
-  if (unenforced !== undefined) {
+  if (unenforced?.dropped !== undefined) {
     schemaLines.push(
-      `// Not enforced by these schemas: ${unenforced} — validate with xsd-to-zod/validate for full XSD conformance.`,
+      `// Not enforced by these schemas: ${unenforced.dropped} — validate with xsd-to-zod/validate for full XSD conformance.`,
+    );
+  }
+  if (unenforced?.weakened !== undefined) {
+    schemaLines.push(
+      `// Only partially preserved: ${unenforced.weakened} — mixed-content text is concatenated into "_text"; its interleaving with child elements is lost on round-trip.`,
     );
   }
   const importLineIndex = schemaLines.length;

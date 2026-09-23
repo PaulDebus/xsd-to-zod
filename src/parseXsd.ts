@@ -1201,17 +1201,17 @@ const isMixedComplexType = (node: AnyNode): boolean => {
 // enforced — the libxml2 tier (xsd-to-zod/validate) covers them.
 const IDENTITY_CONSTRAINT_TAGS = new Set(["key", "keyref", "unique"]);
 
-const countUnenforcedConstructs = (node: AnyNode, counts: Record<string, number>): void => {
-  const bump = (construct: string): void => {
-    counts[construct] = (counts[construct] ?? 0) + 1;
+const countUnenforcedConstructs = (node: AnyNode, counts: XsdIr["unenforcedConstructs"]): void => {
+  const bump = (bucket: Record<string, number>, construct: string): void => {
+    bucket[construct] = (bucket[construct] ?? 0) + 1;
   };
   for (const [tag, child] of nodeChildren(node)) {
     const local = getNodeTagLocalName(tag);
     if (IDENTITY_CONSTRAINT_TAGS.has(local)) {
-      bump(`xs:${local}`);
+      bump(counts.dropped, `xs:${local}`);
     }
     if (local === "complexType" && isMixedComplexType(child)) {
-      bump("mixed content");
+      bump(counts.weakened, "mixed content");
     }
     countUnenforcedConstructs(child, counts);
   }
@@ -2418,7 +2418,7 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
   };
 
   const scannedFiles = await scanSchemaFiles(files, state.diagnostics, opts);
-  const unenforcedConstructs: Record<string, number> = {};
+  const unenforcedConstructs: XsdIr["unenforcedConstructs"] = { dropped: {}, weakened: {} };
   for (const { schemaNode } of scannedFiles) {
     countUnenforcedConstructs(schemaNode, unenforcedConstructs);
   }

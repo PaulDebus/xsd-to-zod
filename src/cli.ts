@@ -41,14 +41,20 @@ const reportWarnings = (warnings: string[]): void => {
   }
 };
 
-// Constructs the schema uses that the zod tier does not enforce (identity
-// constraints, mixed-content interleaving, …): name them at generation time,
-// when the user can still act — the libxml2 tier enforces them.
+// Constructs the schema uses that the zod tier drops (identity constraints)
+// or only partially preserves (mixed-content interleaving): name them when
+// the user can still act — the libxml2 tier enforces them. Correctness-relevant,
+// so shown even with --silent like the other warnings.
 const warnUnenforcedConstructs = (ir: XsdIr): void => {
   const summary = unenforcedConstructsSummary(ir);
-  if (summary !== undefined) {
+  if (summary?.dropped !== undefined) {
     console.error(
-      `warning: the generated schemas do not enforce: ${summary}; use xsd-to-zod/validate for full XSD conformance`,
+      `warning: the zod tier does not enforce: ${summary.dropped}; use xsd-to-zod/validate for full XSD conformance`,
+    );
+  }
+  if (summary?.weakened !== undefined) {
+    console.error(
+      `warning: the zod tier only partially preserves: ${summary.weakened}; text is concatenated into "_text", its interleaving with child elements is lost on round-trip`,
     );
   }
 };
@@ -424,9 +430,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (!allowMissingImports) {
     warnDiagnostics(ir, !fetchRemote);
   }
-  if (!silent) {
-    warnUnenforcedConstructs(ir);
-  }
+  warnUnenforcedConstructs(ir);
 
   const { schemas, warnings } = irToZod(ir, { datatypes });
   reportWarnings(warnings);
@@ -483,6 +487,7 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
 
   const ir = await parseXsd([xsdFile]);
   warnDiagnostics(ir);
+  warnUnenforcedConstructs(ir);
   const { schemas, warnings } = irToZod(ir, { js: true });
   reportWarnings(warnings);
   const mod = await importGeneratedModule(schemas);

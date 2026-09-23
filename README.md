@@ -346,7 +346,7 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 
 Not supported by the generator (the conformance tier validates them anyway):
 
-- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) — the generator names them in a generation-time warning and in the generated file's header comment
+- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) — generation and the zod validation engine name them in a warning (shown even with `--silent`) and in the generated file's header comment
 
 Zod-tier specifics worth knowing:
 

@@ -396,10 +396,8 @@ describe("xsd-to-zod v1 pipeline", () => {
       fs.writeFileSync(file, XSD_WITH_DROPPED_CONSTRUCTS);
       const ir = await parseXsd([file]);
       expect(ir.unenforcedConstructs).toEqual({
-        "xs:key": 1,
-        "xs:keyref": 1,
-        "xs:unique": 1,
-        "mixed content": 1,
+        dropped: { "xs:key": 1, "xs:keyref": 1, "xs:unique": 1 },
+        weakened: { "mixed content": 1 },
       });
     });
   });
