@@ -493,11 +493,11 @@ describe("CLI e2e", () => {
       </xs:sequence>
     </xs:complexType>
     <xs:key name="itemKey">
-      <xs:selector xpath="item"/>
+      <xs:selector xpath="item[1]"/>
       <xs:field xpath="@id"/>
     </xs:key>
     <xs:key name="otherKey">
-      <xs:selector xpath="item"/>
+      <xs:selector xpath="item/../item"/>
       <xs:field xpath="@other"/>
     </xs:key>
   </xs:element>
@@ -507,6 +507,8 @@ describe("CLI e2e", () => {
   </xs:complexType>
 </xs:schema>`,
       );
+      // Constraints inside the restricted xpath subset are enforced by the
+      // generated schemas themselves; only unenforceable ones warn.
       const r = await runCli([xsdFile, "-o", dir]);
       expect(r.code).toBe(0);
       expect(r.stderr).toContain("warning: the zod tier does not enforce:");
@@ -633,7 +635,7 @@ describe("CLI validate e2e", () => {
     });
   });
 
-  it("warns that the zod engine does not enforce identity constraints", async () => {
+  it("warns that the zod engine does not enforce a dropped identity constraint", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "keyed.xsd");
       const xmlFile = path.join(dir, "keyed.xml");
@@ -643,7 +645,7 @@ describe("CLI validate e2e", () => {
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
   <xs:element name="root" type="xs:string">
     <xs:unique name="u">
-      <xs:selector xpath="."/>
+      <xs:selector xpath=".[1]"/>
       <xs:field xpath="@id"/>
     </xs:unique>
   </xs:element>
@@ -651,6 +653,8 @@ describe("CLI validate e2e", () => {
       );
       fs.writeFileSync(xmlFile, '<?xml version="1.0"?><root xmlns="urn:test">hello</root>');
 
+      // Constraints inside the restricted xpath subset are enforced by the zod
+      // engine itself; only dropped ones (here: a predicate) warn.
       const r = await runCli(["validate", xmlFile, "-x", xsdFile]);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("Validation passed");

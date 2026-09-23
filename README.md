@@ -346,10 +346,11 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 
 Not supported by the generator (the conformance tier validates them anyway):
 
-- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) — generation and the zod validation engine name them in a warning (shown even with `--silent`) and in the generated file's header comment
+- (none currently — identity constraints moved into the zod tier at 1.0)
 
 Zod-tier specifics worth knowing:
 
+- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced over the parsed tree at the end of `parseXml`/`safeParseXml`, scoped per occurrence of the declaring element. The selector/field xpaths must stay within XSD's restricted subset (no predicates, axes, or `..`) — anything else is dropped with a generation-time warning and a header comment in the generated file; unprefixed xpath steps are in *no* namespace (the XPath 1.0 rule), and constraints on substitution-group *members* (as opposed to the head) are not enforced
 - Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip (also flagged by the generation-time warning)
 - `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped; namespace constraints (`##other`, `##targetNamespace`, …) are enforced, but wildcard content itself is not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)

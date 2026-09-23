@@ -46,10 +46,6 @@ const TEST_SETS: W3cTestSetRef[] = [
 // need their own fixes. Keyed by `<testSetName>/<testGroup>/<instanceTest>`.
 const KNOWN_ANOMALIES = new Map<string, string>([
   [
-    "suntest/identitytestsuitetest001/test.2.n",
-    "identity constraints unsupported — both tiers accept",
-  ],
-  [
     "Element/elemZ016/elemZ016.i",
     "both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)",
   ],
