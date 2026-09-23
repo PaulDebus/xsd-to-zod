@@ -123,8 +123,8 @@ describe("xsd-to-zod v1 pipeline", () => {
   });
 
   it("choice refine counts an absent repeated branch as absent (#73)", async () => {
-    // The runtime materializes an absent repeated field as []; presence in the
-    // choice refine must mean >=1 occurrences, not `!== undefined`.
+    // Absent repeated fields are omitted from the parsed object; presence in
+    // the choice refine means >=1 occurrences (see has() in choiceCheck).
     const xsd = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
   <xs:complexType name="PickType">
@@ -138,14 +138,14 @@ describe("xsd-to-zod v1 pipeline", () => {
     const mod = await importFromXsd(xsd);
     const pickSchema = mod["pickSchema"] as z.ZodType;
 
-    // Only the single branch present: valid (the [] of the absent repeated
-    // branch must not count as a second selected branch).
+    // Only the single branch present: valid (the absent repeated branch must
+    // not count as a second selected branch).
     const codeOnly = parseXml(
       pickSchema,
       '<pick xmlns="urn:test"><code>C1</code></pick>',
     ) as Record<string, unknown>;
     expect(codeOnly["code"]).toBe("C1");
-    expect(codeOnly["tag"]).toEqual([]);
+    expect(codeOnly).not.toHaveProperty("tag");
 
     // The repeated branch selected with values: valid.
     expect(parseXml(pickSchema, '<pick xmlns="urn:test"><tag>a</tag><tag>b</tag></pick>')).toEqual({
@@ -160,6 +160,34 @@ describe("xsd-to-zod v1 pipeline", () => {
     // Neither branch: the required choice must reject — [] is not a selection.
     expect(() => parseXml(pickSchema, '<pick xmlns="urn:test"/>')).toThrow(
       "choice requires exactly one of: tag, code",
+    );
+  });
+
+  it("omits absent optional-unbounded elements instead of parsing them as []", async () => {
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="BagType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="tag" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="entry" type="xs:string" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="bag" type="t:BagType"/>
+</xs:schema>`;
+    const mod = await importFromXsd(xsd);
+    const bagSchema = mod["bagSchema"] as z.ZodType;
+
+    const parsed = parseXml(
+      bagSchema,
+      '<bag xmlns="urn:test"><name>n</name><entry>e</entry></bag>',
+    ) as Record<string, unknown>;
+    expect(parsed).toEqual({ name: "n", entry: ["e"] });
+    expect(parsed).not.toHaveProperty("tag");
+
+    // A required (minOccurs >= 1) array that is absent still fails validation.
+    expect(() => parseXml(bagSchema, '<bag xmlns="urn:test"><name>n</name></bag>')).toThrow(
+      /invalid_type/,
     );
   });
 
