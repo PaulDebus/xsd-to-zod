@@ -183,10 +183,12 @@ describe("xsd-to-zod v1 pipeline", () => {
       '<bag xmlns="urn:test"><name>n</name><entry>e</entry></bag>',
     ) as Record<string, unknown>;
     expect(parsed).toEqual({ name: "n", entry: ["e"] });
-    expect(parsed["tag"]).toBeUndefined();
+    expect(parsed).not.toHaveProperty("tag");
 
     // A required (minOccurs >= 1) array that is absent still fails validation.
-    expect(() => parseXml(bagSchema, '<bag xmlns="urn:test"><name>n</name></bag>')).toThrow();
+    expect(() => parseXml(bagSchema, '<bag xmlns="urn:test"><name>n</name></bag>')).toThrow(
+      /invalid_type/,
+    );
   });
 
   it("does not treat non-xsi nil as xsi:nil and matches root namespace", async () => {
