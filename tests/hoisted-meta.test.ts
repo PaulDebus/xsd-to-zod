@@ -5,7 +5,7 @@ import type { z } from "zod";
 import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
-// Shared-registry-metadata hoisting (IRE-20): extension-heavy schemas used to
+// Shared-registry-metadata hoisting: extension-heavy schemas used to
 // repeat the base type's whole fields block per derived type and per xsiType
 // variant; the blocks are now named consts referenced from each site.
 
@@ -58,7 +58,7 @@ const generate = async (): Promise<string> => {
 
 const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
-describe("hoisted registry metadata (IRE-20)", () => {
+describe("hoisted registry metadata", () => {
   it("emits the base type's fields block once and references it from derived types", async () => {
     const schemas = await generate();
     expect(occurrences(schemas, '"name": { kind: "element", qname: "{urn:hoist}name" }')).toBe(1);
@@ -78,8 +78,7 @@ describe("hoisted registry metadata (IRE-20)", () => {
 
   it("shares an inherited choices block between base and derived types", async () => {
     const schemas = await generate();
-    const choicesBodies = schemas.match(/choices: \{[^}]*\}/g) ?? [];
-    expect(choicesBodies.length).toBeLessThanOrEqual(1);
+    expect(occurrences(schemas, "const ConceptTypeChoices")).toBe(1);
     expect(occurrences(schemas, "choices: ConceptTypeChoices")).toBeGreaterThanOrEqual(3);
   });
 

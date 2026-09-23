@@ -2044,6 +2044,30 @@ export const irToZod = (
     usedTypes.add(typeName);
     return typeName === "XmlMeta" ? ": XmlMeta" : `: Record<string, ${typeName}>`;
   };
+  // Hoisting invariants: every complex type owns a meta body and a hoisted
+  // lines slot; every family member owns a meta const. Fail loudly — a
+  // silent fallback here would emit broken modules or drop registry meta.
+  const hoistedLinesFor = (typeName: QName): string[] => {
+    const lines = hoistedMetaLines.get(typeName);
+    if (lines === undefined) {
+      throw new Error(`Missing hoisted metadata slot for type ${typeName}`);
+    }
+    return lines;
+  };
+  const metaBodyFor = (typeName: QName): string => {
+    const body = metaBodyByType.get(typeName);
+    if (body === undefined) {
+      throw new Error(`Missing hoisted meta body for type ${typeName}`);
+    }
+    return body;
+  };
+  const metaConstFor = (typeName: QName): string => {
+    const metaConst = metaConstByType.get(typeName);
+    if (metaConst === undefined) {
+      throw new Error(`Missing hoisted meta const for family type ${typeName}`);
+    }
+    return metaConst;
+  };
   {
     const fieldsEntriesByType = new Map<QName, string[]>();
     const choicesBodyByType = new Map<QName, string>();
@@ -2082,11 +2106,13 @@ export const irToZod = (
         if (fieldsConst === undefined) {
           fieldsConst = alloc(`${effectiveBaseLocal(best)}Fields`);
           fieldsConstByType.set(best, fieldsConst);
-          hoistedMetaLines
-            .get(best)
-            ?.push(
-              `const ${fieldsConst}${metaConstAnnotation("XmlFieldMeta")} = ${fieldsExprByType.get(best) ?? ""};`,
-            );
+          const baseExpr = fieldsExprByType.get(best);
+          if (baseExpr === undefined) {
+            throw new Error(`Missing fields expression for base type ${best}`);
+          }
+          hoistedLinesFor(best).push(
+            `const ${fieldsConst}${metaConstAnnotation("XmlFieldMeta")} = ${baseExpr};`,
+          );
         }
         const rest = entries.slice(bestLength);
         fieldsExprByType.set(
@@ -2117,9 +2143,9 @@ export const irToZod = (
       if (choicesConst === undefined) {
         choicesConst = alloc(`${effectiveBaseLocal(t.name)}Choices`);
         choicesConstByBody.set(body, choicesConst);
-        hoistedMetaLines
-          .get(t.name)
-          ?.push(`const ${choicesConst}${metaConstAnnotation("XmlChoiceMeta")} = ${body};`);
+        hoistedLinesFor(t.name).push(
+          `const ${choicesConst}${metaConstAnnotation("XmlChoiceMeta")} = ${body};`,
+        );
       }
       choicesExprByType.set(t.name, choicesConst);
     }
@@ -2127,15 +2153,19 @@ export const irToZod = (
       const choicesExpr = choicesExprByType.get(t.name);
       // A type whose fields were hoisted as a prefix source references its
       // own const rather than repeating the block inline.
-      const fieldsExpr = fieldsConstByType.get(t.name) ?? fieldsExprByType.get(t.name) ?? "{  }";
+      const ownExpr = fieldsExprByType.get(t.name);
+      if (ownExpr === undefined) {
+        throw new Error(`Missing fields expression for type ${t.name}`);
+      }
+      const fieldsExpr = fieldsConstByType.get(t.name) ?? ownExpr;
       const metaBody = `qname: ${JSON.stringify(t.name)}, fields: ${fieldsExpr}${choicesExpr === undefined ? "" : `, choices: ${choicesExpr}`}`;
       metaBodyByType.set(t.name, metaBody);
       if (familyTypes.has(t.name)) {
         const metaConst = alloc(`${effectiveBaseLocal(t.name)}Meta`);
         metaConstByType.set(t.name, metaConst);
-        hoistedMetaLines
-          .get(t.name)
-          ?.push(`const ${metaConst}${metaConstAnnotation("XmlMeta")} = { ${metaBody} };`);
+        hoistedLinesFor(t.name).push(
+          `const ${metaConst}${metaConstAnnotation("XmlMeta")} = { ${metaBody} };`,
+        );
       }
     }
   }
@@ -2402,7 +2432,7 @@ export const irToZod = (
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
-    schemaLines.push(...(hoistedMetaLines.get(complexType.name) ?? []));
+    schemaLines.push(...hoistedLinesFor(complexType.name));
     const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     if (familyTypes.has(complexType.name)) {
       // Family member: the object shape lives in its own const (shared with
@@ -2413,7 +2443,7 @@ export const irToZod = (
           `const ${constName.get(complexType.name)}${annotation} = ${registered(
             `z.lazy(() => ${objectConstName.get(complexType.name)})`,
             complexType.description,
-            metaConstByType.get(complexType.name) ?? "{}",
+            metaConstFor(complexType.name),
           )};`,
         ),
       );
@@ -2443,7 +2473,7 @@ export const irToZod = (
         `const ${constName.get(complexType.name)}${annotation} = ${registered(
           `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
           complexType.description,
-          `{ ${metaBodyByType.get(complexType.name) ?? ""} }`,
+          `{ ${metaBodyFor(complexType.name)} }`,
         )};`,
       ),
     );
@@ -2468,7 +2498,7 @@ export const irToZod = (
     }
     const discriminant = JSON.stringify(complexType.name);
     schemaLines.push(
-      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, ${metaConstByType.get(complexType.name) ?? "{}"});`,
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, ${metaConstFor(complexType.name)});`,
     );
   }
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -2482,7 +2512,7 @@ export const irToZod = (
       ? `z.literal(${discriminant}).default(${discriminant})`
       : `z.literal(${discriminant}).optional()`;
     schemaLines.push(
-      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, ${metaConstByType.get(typeName) ?? "{}"});`,
+      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, ${metaConstFor(typeName)});`,
     );
     const derived = variants
       .slice(1)
