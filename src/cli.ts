@@ -17,7 +17,7 @@ import { z } from "zod";
 import { downloadSchemaClosure } from "./download.js";
 import { Xsd2ZodError } from "./errors.js";
 import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
-import { irToZod } from "./irToZod.js";
+import { irToZod, unenforcedConstructsSummary } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import { RemoteSchemaStore } from "./remoteSchemaStore.js";
 import type { XsdIr } from "./types.js";
@@ -38,6 +38,18 @@ import { xmlRegistry } from "./xmlMeta.js";
 const reportWarnings = (warnings: string[]): void => {
   for (const warning of warnings) {
     console.error(`warning: ${warning}`);
+  }
+};
+
+// Constructs the schema uses that the zod tier does not enforce (identity
+// constraints, mixed-content interleaving, …): name them at generation time,
+// when the user can still act — the libxml2 tier enforces them.
+const warnUnenforcedConstructs = (ir: XsdIr): void => {
+  const summary = unenforcedConstructsSummary(ir);
+  if (summary !== undefined) {
+    console.error(
+      `warning: the generated schemas do not enforce: ${summary}; use xsd-to-zod/validate for full XSD conformance`,
+    );
   }
 };
 
@@ -411,6 +423,9 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
 
   if (!allowMissingImports) {
     warnDiagnostics(ir, !fetchRemote);
+  }
+  if (!silent) {
+    warnUnenforcedConstructs(ir);
   }
 
   const { schemas, warnings } = irToZod(ir, { datatypes });

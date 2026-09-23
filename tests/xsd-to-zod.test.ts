@@ -364,6 +364,46 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
+  it("counts schema constructs the zod tier does not enforce", async () => {
+    const XSD_WITH_DROPPED_CONSTRUCTS = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" type="t:Item" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="itemKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+    <xs:unique name="itemUnique">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+    <xs:keyref name="itemRef" refer="t:itemKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:keyref>
+  </xs:element>
+  <xs:complexType name="Item" mixed="true">
+    <xs:attribute name="id" type="xs:string"/>
+  </xs:complexType>
+</xs:schema>`;
+
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD_WITH_DROPPED_CONSTRUCTS);
+      const ir = await parseXsd([file]);
+      expect(ir.unenforcedConstructs).toEqual({
+        "xs:key": 1,
+        "xs:keyref": 1,
+        "xs:unique": 1,
+        "mixed content": 1,
+      });
+    });
+  });
+
   it("reports unresolved references and unknown prefixes instead of silently dropping them (#77)", async () => {
     const BROKEN_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:broken" xmlns:b="urn:broken" elementFormDefault="qualified">

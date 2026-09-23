@@ -119,6 +119,7 @@ export const rootBSchema = z.lazy(() => TSchema3).register(xmlRegistry, { root: 
 
 exports[`golden generated output (#84) > matches the golden output for content-models/all 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
+// Not enforced by these schemas: mixed content (1) — validate with xsd-to-zod/validate for full XSD conformance.
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
 import type { XmlFieldMeta } from 'xsd-to-zod';

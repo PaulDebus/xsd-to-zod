@@ -479,6 +479,90 @@ describe("CLI e2e", () => {
     });
   });
 
+  it("warns at generation time about identity constraints the zod tier drops", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "keyed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" type="t:Item" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="itemKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+    <xs:key name="otherKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@other"/>
+    </xs:key>
+  </xs:element>
+  <xs:complexType name="Item">
+    <xs:attribute name="id" type="xs:string"/>
+    <xs:attribute name="other" type="xs:string"/>
+  </xs:complexType>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("warning: the generated schemas do not enforce:");
+      expect(r.stderr).toContain("xs:key (2)");
+      expect(r.stderr).toContain("xsd-to-zod/validate");
+      const output = fs.readFileSync(path.join(dir, "keyed.zod.ts"), "utf8");
+      expect(output).toContain("// Not enforced by these schemas: xs:key (2)");
+    });
+  });
+
+  it("--silent suppresses the dropped-constructs warning", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "keyed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root" type="xs:string">
+    <xs:keyref name="ref" refer="t:someKey">
+      <xs:selector xpath="."/>
+      <xs:field xpath="@id"/>
+    </xs:keyref>
+  </xs:element>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir, "--silent"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).not.toContain("do not enforce");
+      const output = fs.readFileSync(path.join(dir, "keyed.zod.ts"), "utf8");
+      expect(output).toContain("// Not enforced by these schemas: xs:keyref (1)");
+    });
+  });
+
+  it("warns about mixed content interleaving not being preserved", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "mixed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="doc" type="t:Doc"/>
+  <xs:complexType name="Doc" mixed="true">
+    <xs:sequence>
+      <xs:element name="b" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("mixed content (1)");
+      expect(r.stderr).toContain("xsd-to-zod/validate");
+    });
+  });
+
   it("--format on the substitution-groups fixture writes output without aborting on lint", async () => {
     await withTempDirAsync(async (dir) => {
       const r = await runCli([

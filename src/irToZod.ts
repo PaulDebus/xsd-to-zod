@@ -1837,6 +1837,19 @@ export const TS_TYPE_RESERVED = new Set([
   ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
 
+// One-line summary of the schema constructs the zod tier does not enforce
+// (e.g. "xs:key (13), xs:keyref (5)"), undefined when everything is covered.
+// Shared by the CLI warning and the generated file's header comment.
+export const unenforcedConstructsSummary = (ir: XsdIr): string | undefined => {
+  const entries = Object.entries(ir.unenforcedConstructs)
+    .filter(([, count]) => count > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return entries.map(([construct, count]) => `${construct} (${count})`).join(", ");
+};
+
 export type IrToZodOptions = {
   // Emit plain JavaScript (no TS type annotations) so the output can be
   // imported directly as .mjs — used by the CLI validate subcommand.
@@ -2182,6 +2195,13 @@ export const irToZod = (
     `${namingComment(qname)}${line}`;
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
+  // The warning scrolls away; the comment lives with the artifact.
+  const unenforced = unenforcedConstructsSummary(ir);
+  if (unenforced !== undefined) {
+    schemaLines.push(
+      `// Not enforced by these schemas: ${unenforced} — validate with xsd-to-zod/validate for full XSD conformance.`,
+    );
+  }
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
   schemaLines.push(

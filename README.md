@@ -346,11 +346,11 @@ Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_
 
 Not supported by the generator (the conformance tier validates them anyway):
 
-- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`)
+- Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) — the generator names them in a generation-time warning and in the generated file's header comment
 
 Zod-tier specifics worth knowing:
 
-- Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip
+- Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip (also flagged by the generation-time warning)
 - `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped; namespace constraints (`##other`, `##targetNamespace`, …) are enforced, but wildcard content itself is not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)
