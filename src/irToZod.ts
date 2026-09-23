@@ -1052,7 +1052,7 @@ const choiceFlags = (
   return { required, repeated, flat, branches: entries };
 };
 
-const choicesMetaFor = (type: ComplexTypeDef): string => {
+const choicesMetaFor = (type: ComplexTypeDef): string | undefined => {
   // Collect all group ids: choiceGroups keys + every key and guard.group from
   // choiceGroupGuards (mirror what multiBranchGroups collects).
   const groupIds: Set<string> = new Set();
@@ -1068,7 +1068,7 @@ const choicesMetaFor = (type: ComplexTypeDef): string => {
 
   // If no choice groups, emit nothing.
   if (groupIds.size === 0) {
-    return "";
+    return undefined;
   }
 
   // Build the choices object entry per group.
@@ -1131,7 +1131,7 @@ const choicesMetaFor = (type: ComplexTypeDef): string => {
     };
   }
 
-  return `, choices: ${JSON.stringify(choices)}`;
+  return JSON.stringify(choices);
 };
 
 // The structured datatype a type's values arrive in, looking through xs:list
@@ -1436,13 +1436,15 @@ const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, 
 
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
-// meta on shared schemas would conflict.
+// meta on shared schemas would conflict. Returns the fields entries and the
+// choices body separately so the emitter can hoist shared blocks into named
+// consts (extension-derived types repeat their base's entries verbatim).
 const fieldsMetaFor = (
   type: ComplexTypeDef,
   ir: XsdIr,
   structured: boolean,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
-): string => {
+): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = dedupeEmissionFields(type).map((field) => {
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
     const substMembers = membersByHead.get(field.qname);
@@ -1502,7 +1504,7 @@ const fieldsMetaFor = (
   if ((type.wildcards ?? []).some((w) => w.kind === "anyAttribute")) {
     entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
   }
-  return `qname: ${JSON.stringify(type.name)}, fields: { ${entries.join(", ")} }${choicesMetaFor(type)}`;
+  return { fieldsEntries: entries, choicesBody: choicesMetaFor(type) };
 };
 
 // Head element qname → substitution-group member declarations, transitively
@@ -1667,7 +1669,8 @@ const tsTypeOfTypeName = (
   }
   if (simple.kind === "union") {
     const members = simple.memberTypes.map((mt) => tsTypeOfTypeName(mt, ir, ifaceName, seen, dt));
-    return members.length > 0 ? members.join(" | ") : "unknown";
+    const unique = [...new Set(members)];
+    return unique.length > 0 ? unique.join(" | ") : "unknown";
   }
   // Restriction: a pure enumeration on a direct builtin base becomes a
   // literal union (mirrors withFacets); anything else has the base's type.
@@ -1785,12 +1788,12 @@ const tsFieldLine = (
 };
 
 /**
- * Build a `.register(xmlRegistry, { … })` suffix with optional `.describe()`.
- * `metaBody` is the pre-formatted interior of the meta object literal (e.g.
- * `qname: "...", fields: { ... }`).
+ * Build a `.register(xmlRegistry, …)` suffix with optional `.describe()`.
+ * `metaExpr` is the full meta argument expression — an object literal or a
+ * reference to a hoisted meta const.
  */
-const registered = (expr: string, description: string | undefined, metaBody: string): string =>
-  `${withDescription(expr, description)}.register(xmlRegistry, { ${metaBody} })`;
+const registered = (expr: string, description: string | undefined, metaExpr: string): string =>
+  `${withDescription(expr, description)}.register(xmlRegistry, ${metaExpr})`;
 
 // Names TS forbids as interface identifiers (primitive/literal type keywords),
 // plus the generated module's own imports — an interface named like an import
@@ -1827,6 +1830,9 @@ export const TS_TYPE_RESERVED = new Set([
   "xsdTotalDigits",
   "xsdFractionDigits",
   "xsdPattern",
+  "XmlMeta",
+  "XmlFieldMeta",
+  "XmlChoiceMeta",
   ...XSD_LEXICAL_VALIDATORS.values(),
   ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
@@ -2017,6 +2023,120 @@ export const irToZod = (
   for (const name of variantSets.keys()) {
     if (wantedFriendlyBase(name) !== undefined) {
       allocFamilyUnions(name);
+    }
+  }
+
+  // Hoisted registry metadata: extension-derived types repeat their base
+  // type's fields entries verbatim (extension prepends the merged base
+  // fields), and a polymorphic family type registers the same meta on up to
+  // three consts (named, xsiType variant, declared variant). Shared blocks
+  // become named consts referenced from each site; the runtime only reads
+  // registry meta, so sharing the objects changes nothing.
+  const hoistedMetaLines = new Map<QName, string[]>();
+  const metaBodyByType = new Map<QName, string>();
+  const metaConstByType = new Map<QName, string>();
+  // Hoisted consts are annotated in TS mode: a standalone object literal
+  // widens (kind: string) without the contextual type .register() provides.
+  const metaConstAnnotation = (typeName: "XmlMeta" | "XmlFieldMeta" | "XmlChoiceMeta"): string => {
+    if (opts?.js) {
+      return "";
+    }
+    usedTypes.add(typeName);
+    return typeName === "XmlMeta" ? ": XmlMeta" : `: Record<string, ${typeName}>`;
+  };
+  {
+    const fieldsEntriesByType = new Map<QName, string[]>();
+    const choicesBodyByType = new Map<QName, string>();
+    for (const t of Object.values(ir.complexTypes)) {
+      const { fieldsEntries, choicesBody } = fieldsMetaFor(t, ir, structured, membersByHead);
+      fieldsEntriesByType.set(t.name, fieldsEntries);
+      if (choicesBody !== undefined) {
+        choicesBodyByType.set(t.name, choicesBody);
+      }
+      hoistedMetaLines.set(t.name, []);
+    }
+    // Fields sharing: a type whose entries begin with an earlier type's whole
+    // entries list references that type's hoisted fields const — directly
+    // when equal, via spread when extended.
+    const fieldsConstByType = new Map<QName, string>();
+    const fieldsExprByType = new Map<QName, string>();
+    const processed: QName[] = [];
+    for (const t of Object.values(ir.complexTypes)) {
+      const entries = fieldsEntriesByType.get(t.name) ?? [];
+      let best: QName | undefined;
+      let bestLength = 1; // sharing a single entry doesn't pay for its const
+      for (const prev of processed) {
+        const prevEntries = fieldsEntriesByType.get(prev) ?? [];
+        if (prevEntries.length <= bestLength || prevEntries.length > entries.length) {
+          continue;
+        }
+        if (prevEntries.every((entry, i) => entry === entries[i])) {
+          best = prev;
+          bestLength = prevEntries.length;
+        }
+      }
+      if (best === undefined) {
+        fieldsExprByType.set(t.name, `{ ${entries.join(", ")} }`);
+      } else {
+        let fieldsConst = fieldsConstByType.get(best);
+        if (fieldsConst === undefined) {
+          fieldsConst = alloc(`${effectiveBaseLocal(best)}Fields`);
+          fieldsConstByType.set(best, fieldsConst);
+          hoistedMetaLines
+            .get(best)
+            ?.push(
+              `const ${fieldsConst}${metaConstAnnotation("XmlFieldMeta")} = ${fieldsExprByType.get(best) ?? ""};`,
+            );
+        }
+        const rest = entries.slice(bestLength);
+        fieldsExprByType.set(
+          t.name,
+          rest.length === 0 ? fieldsConst : `{ ...${fieldsConst}, ${rest.join(", ")} }`,
+        );
+      }
+      processed.push(t.name);
+    }
+    // Choices sharing: identical choices bodies (inherited down an extension
+    // chain) become one const referenced by each type.
+    const choicesConstByBody = new Map<string, string>();
+    const choicesUseCount = new Map<string, number>();
+    for (const body of choicesBodyByType.values()) {
+      choicesUseCount.set(body, (choicesUseCount.get(body) ?? 0) + 1);
+    }
+    const choicesExprByType = new Map<QName, string>();
+    for (const t of Object.values(ir.complexTypes)) {
+      const body = choicesBodyByType.get(t.name);
+      if (body === undefined) {
+        continue;
+      }
+      if ((choicesUseCount.get(body) ?? 0) < 2) {
+        choicesExprByType.set(t.name, body);
+        continue;
+      }
+      let choicesConst = choicesConstByBody.get(body);
+      if (choicesConst === undefined) {
+        choicesConst = alloc(`${effectiveBaseLocal(t.name)}Choices`);
+        choicesConstByBody.set(body, choicesConst);
+        hoistedMetaLines
+          .get(t.name)
+          ?.push(`const ${choicesConst}${metaConstAnnotation("XmlChoiceMeta")} = ${body};`);
+      }
+      choicesExprByType.set(t.name, choicesConst);
+    }
+    for (const t of Object.values(ir.complexTypes)) {
+      const choicesExpr = choicesExprByType.get(t.name);
+      // A type whose fields were hoisted as a prefix source references its
+      // own const rather than repeating the block inline.
+      const fieldsExpr = fieldsConstByType.get(t.name) ?? fieldsExprByType.get(t.name) ?? "{  }";
+      const metaBody = `qname: ${JSON.stringify(t.name)}, fields: ${fieldsExpr}${choicesExpr === undefined ? "" : `, choices: ${choicesExpr}`}`;
+      metaBodyByType.set(t.name, metaBody);
+      if (familyTypes.has(t.name)) {
+        const metaConst = alloc(`${effectiveBaseLocal(t.name)}Meta`);
+        metaConstByType.set(t.name, metaConst);
+        hoistedMetaLines
+          .get(t.name)
+          ?.push(`const ${metaConst}${metaConstAnnotation("XmlMeta")} = { ${metaBody} };`);
+      }
     }
   }
 
@@ -2211,7 +2331,13 @@ export const irToZod = (
       const memberExprs = simpleType.memberTypes.map((mt) =>
         primitiveToZod(mt, definedTypes, constName, usedHelpers, structured),
       );
-      expr = `z.union([${memberExprs.join(", ")}])`;
+      // Distinct member types can emit identical expressions (two
+      // string-derived types both become z.string()) — z.union([A, A]) is A.
+      const uniqueExprs = [...new Set(memberExprs)];
+      expr =
+        uniqueExprs.length === 1
+          ? (uniqueExprs[0] ?? "z.unknown()")
+          : `z.union([${uniqueExprs.join(", ")}])`;
     } else {
       const baseExpr = primitiveToZod(
         simpleType.baseType,
@@ -2246,7 +2372,7 @@ export const irToZod = (
             `const ${constName.get(simpleType.name)} = ${registered(
               expr,
               simpleType.description,
-              `qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)}`,
+              `{ qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)} }`,
             )};`,
           ),
         );
@@ -2256,7 +2382,7 @@ export const irToZod = (
     schemaLines.push(
       withNamingComment(
         simpleType.name,
-        `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `qname: ${JSON.stringify(simpleType.name)}`)};`,
+        `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)} }`)};`,
       ),
     );
   }
@@ -2276,6 +2402,7 @@ export const irToZod = (
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
+    schemaLines.push(...(hoistedMetaLines.get(complexType.name) ?? []));
     const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     if (familyTypes.has(complexType.name)) {
       // Family member: the object shape lives in its own const (shared with
@@ -2286,7 +2413,7 @@ export const irToZod = (
           `const ${constName.get(complexType.name)}${annotation} = ${registered(
             `z.lazy(() => ${objectConstName.get(complexType.name)})`,
             complexType.description,
-            fieldsMetaFor(complexType, ir, structured, membersByHead),
+            metaConstByType.get(complexType.name) ?? "{}",
           )};`,
         ),
       );
@@ -2316,7 +2443,7 @@ export const irToZod = (
         `const ${constName.get(complexType.name)}${annotation} = ${registered(
           `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
           complexType.description,
-          fieldsMetaFor(complexType, ir, structured, membersByHead),
+          `{ ${metaBodyByType.get(complexType.name) ?? ""} }`,
         )};`,
       ),
     );
@@ -2341,7 +2468,7 @@ export const irToZod = (
     }
     const discriminant = JSON.stringify(complexType.name);
     schemaLines.push(
-      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, ${metaConstByType.get(complexType.name) ?? "{}"});`,
     );
   }
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -2355,7 +2482,7 @@ export const irToZod = (
       ? `z.literal(${discriminant}).default(${discriminant})`
       : `z.literal(${discriminant}).optional()`;
     schemaLines.push(
-      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, { ${fieldsMetaFor(complexType, ir, structured, membersByHead)} });`,
+      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, ${metaConstByType.get(typeName) ?? "{}"});`,
     );
     const derived = variants
       .slice(1)
@@ -2411,7 +2538,7 @@ export const irToZod = (
       ir.simpleTypes[rootDef.typeName]?.description;
     const jsDoc = description ? `${formatJsDoc(description, 0)}\n` : "";
     schemaLines.push(
-      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, rootMeta.join(", "))};`,
+      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `{ ${rootMeta.join(", ")} }`)};`,
     );
   }
 
