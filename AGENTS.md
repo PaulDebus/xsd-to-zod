@@ -15,4 +15,4 @@ Published on npm as `xsd-to-zod`.
 
 ## Coding standards
 - **Strict TypeScript**: `strict: true` in tsconfig. No `any`, no `// @ts-{ignore,expect-error}` — fix the types properly.
-- dont mention issue ids in code comments. comments must stand for themselves
+- **No tracker ids in code**: never mention tracker ids (e.g. `IRE-20`, `GH#161`, `#123`) in code comments, test names (`describe`/`it` strings), or generated output — comments and names must stand for themselves. Tracker ids belong in commit messages, PR titles/bodies, and Linear only.
