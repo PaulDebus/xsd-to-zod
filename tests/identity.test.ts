@@ -474,4 +474,110 @@ describe("identity constraints", () => {
       ).success,
     ).toBe(true);
   });
+
+  it("compares open-content keys per their xsi:type datatype, not their lexical", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="uid" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="uuid">
+      <xs:selector xpath=".//uid"/>
+      <xs:field xpath="."/>
+    </xs:unique>
+  </xs:element>
+  <xs:element name="uid" type="xs:anyType"/>
+</xs:schema>`,
+      `<root><uid>1</uid></root>`,
+    );
+    const decl = `xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // Equal lexicals, different primitive types: not equal in the value space.
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${decl}><uid xsi:type="xs:boolean">1</uid><uid xsi:type="xs:decimal">1</uid></root>`,
+      ).success,
+    ).toBe(true);
+    // Same datatype, equal values: a genuine duplicate.
+    const dup = safeParseXml(
+      schema,
+      `<root ${decl}><uid xsi:type="xs:string">1</uid><uid xsi:type="xs:string">1</uid></root>`,
+    );
+    expect(expectFailure(dup)).toContain('xs:unique "uuid"');
+  });
+
+  it("compares xs:anySimpleType keys per their xsi:type datatype", async () => {
+    const schema = await schemaFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence maxOccurs="unbounded">
+        <xs:element name="number" type="xs:anySimpleType"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="uniq">
+      <xs:selector xpath="./number"/>
+      <xs:field xpath="."/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>`);
+    const decl = `xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${decl}><number xsi:type="xs:string">3.0</number><number xsi:type="xs:decimal">3.0</number></root>`,
+      ).success,
+    ).toBe(true);
+    const dup = safeParseXml(
+      schema,
+      `<root ${decl}><number xsi:type="xs:decimal">3.0</number><number xsi:type="xs:decimal">3.0</number></root>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+  });
+
+  it("evaluates attribute key fields of nil elements", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element ref="row" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:key name="rowKey">
+      <xs:selector xpath=".//row"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="row" nillable="true">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="id" type="xs:string"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<root><row id="1"/></root>`,
+    );
+    const xsi = `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // xsi:nil empties the content, not the attributes: the key fields exist.
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${xsi}><row id="1" xsi:nil="true"/><row id="2" xsi:nil="true"/></root>`,
+      ).success,
+    ).toBe(true);
+    const dup = safeParseXml(
+      schema,
+      `<root ${xsi}><row id="1" xsi:nil="true"/><row id="1" xsi:nil="true"/></root>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+  });
 });

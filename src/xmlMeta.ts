@@ -23,6 +23,9 @@ export type XmlFieldMeta = {
   fixedValue?: unknown;
   datatype?: XsdDatatypeName;
   open?: boolean;
+  /** Declared type is xs:anySimpleType: the instance xsi:type carries the actual
+      datatype — identity-constraint comparison needs it (XSD §3.11.1). */
+  anySimpleType?: boolean;
   fixedLexical?: string;
   /** Declared default lexical, retained on substitution like fixedLexical. */
   defaultLexical?: string;
