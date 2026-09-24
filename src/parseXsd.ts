@@ -1194,6 +1194,29 @@ const isMixedComplexType = (node: AnyNode): boolean => {
   return mixed === true || mixed === "true";
 };
 
+// Constructs the zod tier drops (identity constraints) or weakens (mixed
+// content: text segments are concatenated, their interleaving with child
+// elements is not preserved). Counted per schema document so the CLI can
+// warn at generation time and the generated file can name what is not
+// enforced — the libxml2 tier (xsd-to-zod/validate) covers them.
+const IDENTITY_CONSTRAINT_TAGS = new Set(["key", "keyref", "unique"]);
+
+const countUnenforcedConstructs = (node: AnyNode, counts: XsdIr["unenforcedConstructs"]): void => {
+  const bump = (bucket: Record<string, number>, construct: string): void => {
+    bucket[construct] = (bucket[construct] ?? 0) + 1;
+  };
+  for (const [tag, child] of nodeChildren(node)) {
+    const local = getNodeTagLocalName(tag);
+    if (IDENTITY_CONSTRAINT_TAGS.has(local)) {
+      bump(counts.dropped, `xs:${local}`);
+    }
+    if (local === "complexType" && isMixedComplexType(child)) {
+      bump(counts.weakened, "mixed content");
+    }
+    countUnenforcedConstructs(child, counts);
+  }
+};
+
 // Mixed content: optional `_text` field (parser concatenates text segments).
 const prependMixedTextField = (fields: IrField[], ownerNs: string): void => {
   if (fields.some((f) => f.kind === "text")) {
@@ -2395,6 +2418,10 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
   };
 
   const scannedFiles = await scanSchemaFiles(files, state.diagnostics, opts);
+  const unenforcedConstructs: XsdIr["unenforcedConstructs"] = { dropped: {}, weakened: {} };
+  for (const { schemaNode } of scannedFiles) {
+    countUnenforcedConstructs(schemaNode, unenforcedConstructs);
+  }
   const { pendingFiles, redefineOverrides } = collectDeclarations(state, scannedFiles);
   applyGroupRedefines(state, redefineOverrides);
   collectTopLevelElements(state, pendingFiles);
@@ -2409,6 +2436,7 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
   return {
     targetNamespaces: [...state.targetNamespaces],
     diagnostics: state.diagnostics,
+    unenforcedConstructs,
     simpleTypes: state.simpleTypes,
     complexTypes: mergedComplexTypes,
     elements: state.elements,

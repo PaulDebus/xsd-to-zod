@@ -1837,6 +1837,58 @@ export const TS_TYPE_RESERVED = new Set([
   ...[...XSD_STRUCTURED_TYPES.values()].flatMap((t) => [t.parseFn, t.writeFn, t.tsType]),
 ]);
 
+export type UnenforcedConstructsSummary = {
+  /** Constructs dropped entirely, e.g. [{ construct: "xs:key", count: 13 }]. */
+  dropped: { construct: string; count: number }[];
+  /** Constructs supported only partially, e.g. [{ construct: "mixed content", count: 2 }]. */
+  weakened: { construct: string; count: number }[];
+};
+
+// Structured summary of the schema constructs the zod tier does not fully
+// honor, empty when everything is covered. Shared by the CLI warning
+// and the generated file's header comment so both stay in sync.
+export const unenforcedConstructsSummary = (ir: XsdIr): UnenforcedConstructsSummary => {
+  const entries = (counts: Record<string, number>): { construct: string; count: number }[] =>
+    Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([construct, count]) => ({ construct, count }));
+  return {
+    dropped: entries(ir.unenforcedConstructs.dropped),
+    weakened: entries(ir.unenforcedConstructs.weakened),
+  };
+};
+
+const formatEntries = (entries: { construct: string; count: number }[]): string =>
+  entries.map(({ construct, count }) => `${construct} (${count})`).join(", ");
+
+// CLI stderr lines (without the "warning: " prefix) and generated-file
+// header comments for the unenforced constructs, derived from one summary.
+export const unenforcedConstructsMessages = (ir: XsdIr): { cli: string[]; header: string[] } => {
+  const summary = unenforcedConstructsSummary(ir);
+  const cli: string[] = [];
+  const header: string[] = [];
+  if (summary.dropped.length > 0) {
+    const list = formatEntries(summary.dropped);
+    cli.push(
+      `the zod tier does not enforce: ${list}; use xsd-to-zod/validate for full XSD conformance`,
+    );
+    header.push(
+      `// Not enforced by these schemas: ${list} — validate with xsd-to-zod/validate for full XSD conformance.`,
+    );
+  }
+  if (summary.weakened.length > 0) {
+    const list = formatEntries(summary.weakened);
+    cli.push(
+      `the zod tier only partially preserves: ${list}; text is concatenated into "_text", its interleaving with child elements is lost on round-trip; use xsd-to-zod/validate for full XSD conformance`,
+    );
+    header.push(
+      `// Only partially preserved: ${list} — mixed-content text is concatenated into "_text"; its interleaving with child elements is lost on round-trip.`,
+    );
+  }
+  return { cli, header };
+};
+
 export type IrToZodOptions = {
   // Emit plain JavaScript (no TS type annotations) so the output can be
   // imported directly as .mjs — used by the CLI validate subcommand.
@@ -2182,6 +2234,8 @@ export const irToZod = (
     `${namingComment(qname)}${line}`;
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
+  // The warning scrolls away; the comment lives with the artifact.
+  schemaLines.push(...unenforcedConstructsMessages(ir).header);
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
   schemaLines.push(

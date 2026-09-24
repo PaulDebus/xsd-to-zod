@@ -149,6 +149,18 @@ export type XsdIr = {
   targetNamespaces: string[];
   /** References and locations that could not be resolved (fields are kept or skipped as before; this list makes the omissions visible). */
   diagnostics: Diagnostic[];
+  /**
+   * XSD constructs the schema uses that the zod tier does not fully honor,
+   * each mapped to its occurrence count. Surfaced as a generation-time
+   * warning and a header comment in the generated file; the libxml2 tier
+   * (xsd-to-zod/validate) covers them.
+   */
+  unenforcedConstructs: {
+    /** Dropped entirely, e.g. "xs:key" → 13 (identity constraints). */
+    dropped: Record<string, number>;
+    /** Supported only partially, e.g. "mixed content" → 2 (interleaving with child elements is lost on round-trip). */
+    weakened: Record<string, number>;
+  };
   simpleTypes: Record<string, SimpleTypeDef>;
   complexTypes: Record<string, ComplexTypeDef>;
   elements: Record<string, ElementDef>;

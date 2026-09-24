@@ -479,6 +479,93 @@ describe("CLI e2e", () => {
     });
   });
 
+  it("warns at generation time about identity constraints the zod tier drops", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "keyed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" type="t:Item" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="itemKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+    <xs:key name="otherKey">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@other"/>
+    </xs:key>
+  </xs:element>
+  <xs:complexType name="Item">
+    <xs:attribute name="id" type="xs:string"/>
+    <xs:attribute name="other" type="xs:string"/>
+  </xs:complexType>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("warning: the zod tier does not enforce:");
+      expect(r.stderr).toContain("xs:key (2)");
+      expect(r.stderr).toContain("xsd-to-zod/validate");
+      const output = fs.readFileSync(path.join(dir, "keyed.zod.ts"), "utf8");
+      expect(output).toContain("// Not enforced by these schemas: xs:key (2)");
+    });
+  });
+
+  it("still shows the dropped-constructs warning with --silent", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "keyed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root" type="xs:string">
+    <xs:keyref name="ref" refer="t:someKey">
+      <xs:selector xpath="."/>
+      <xs:field xpath="@id"/>
+    </xs:keyref>
+  </xs:element>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir, "--silent"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("the zod tier does not enforce: xs:keyref (1)");
+      const output = fs.readFileSync(path.join(dir, "keyed.zod.ts"), "utf8");
+      expect(output).toContain("// Not enforced by these schemas: xs:keyref (1)");
+    });
+  });
+
+  it("warns about mixed content interleaving not being preserved", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "mixed.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="doc" type="t:Doc"/>
+  <xs:complexType name="Doc" mixed="true">
+    <xs:sequence>
+      <xs:element name="b" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain("the zod tier only partially preserves: mixed content (1)");
+      expect(r.stderr).toContain("xsd-to-zod/validate");
+      expect(r.stderr).not.toContain("does not enforce");
+      const output = fs.readFileSync(path.join(dir, "mixed.zod.ts"), "utf8");
+      expect(output).toContain("// Only partially preserved: mixed content (1)");
+    });
+  });
+
   it("--format on the substitution-groups fixture writes output without aborting on lint", async () => {
     await withTempDirAsync(async (dir) => {
       const r = await runCli([
@@ -543,6 +630,31 @@ describe("CLI validate e2e", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("Validation passed");
       expect(r.stdout).toContain("hello");
+    });
+  });
+
+  it("warns that the zod engine does not enforce identity constraints", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "keyed.xsd");
+      const xmlFile = path.join(dir, "keyed.xml");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="root" type="xs:string">
+    <xs:unique name="u">
+      <xs:selector xpath="."/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>`,
+      );
+      fs.writeFileSync(xmlFile, '<?xml version="1.0"?><root xmlns="urn:test">hello</root>');
+
+      const r = await runCli(["validate", xmlFile, "-x", xsdFile]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Validation passed");
+      expect(r.stderr).toContain("the zod tier does not enforce: xs:unique (1)");
     });
   });
 

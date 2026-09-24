@@ -17,7 +17,7 @@ import { z } from "zod";
 import { downloadSchemaClosure } from "./download.js";
 import { Xsd2ZodError } from "./errors.js";
 import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
-import { irToZod } from "./irToZod.js";
+import { irToZod, unenforcedConstructsMessages } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import { RemoteSchemaStore } from "./remoteSchemaStore.js";
 import type { XsdIr } from "./types.js";
@@ -38,6 +38,16 @@ import { xmlRegistry } from "./xmlMeta.js";
 const reportWarnings = (warnings: string[]): void => {
   for (const warning of warnings) {
     console.error(`warning: ${warning}`);
+  }
+};
+
+// Constructs the schema uses that the zod tier drops (identity constraints)
+// or only partially preserves (mixed-content interleaving): name them when
+// the user can still act — the libxml2 tier enforces them. Correctness-relevant,
+// so shown even with --silent like the other warnings.
+const warnUnenforcedConstructs = (ir: XsdIr): void => {
+  for (const message of unenforcedConstructsMessages(ir).cli) {
+    console.error(`warning: ${message}`);
   }
 };
 
@@ -412,6 +422,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (!allowMissingImports) {
     warnDiagnostics(ir, !fetchRemote);
   }
+  warnUnenforcedConstructs(ir);
 
   const { schemas, warnings } = irToZod(ir, { datatypes });
   reportWarnings(warnings);
@@ -468,6 +479,7 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
 
   const ir = await parseXsd([xsdFile]);
   warnDiagnostics(ir);
+  warnUnenforcedConstructs(ir);
   const { schemas, warnings } = irToZod(ir, { js: true });
   reportWarnings(warnings);
   const mod = await importGeneratedModule(schemas);
