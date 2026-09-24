@@ -559,6 +559,7 @@ describe("CLI e2e", () => {
       const r = await runCli([xsdFile, "-o", dir]);
       expect(r.code).toBe(0);
       expect(r.stderr).toContain("the zod tier only partially preserves: mixed content (1)");
+      expect(r.stderr).toContain("xsd-to-zod/validate");
       expect(r.stderr).not.toContain("does not enforce");
       const output = fs.readFileSync(path.join(dir, "mixed.zod.ts"), "utf8");
       expect(output).toContain("// Only partially preserved: mixed content (1)");

@@ -17,7 +17,7 @@ import { z } from "zod";
 import { downloadSchemaClosure } from "./download.js";
 import { Xsd2ZodError } from "./errors.js";
 import { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
-import { irToZod, unenforcedConstructsSummary } from "./irToZod.js";
+import { irToZod, unenforcedConstructsMessages } from "./irToZod.js";
 import { parseXsd } from "./parseXsd.js";
 import { RemoteSchemaStore } from "./remoteSchemaStore.js";
 import type { XsdIr } from "./types.js";
@@ -46,16 +46,8 @@ const reportWarnings = (warnings: string[]): void => {
 // the user can still act — the libxml2 tier enforces them. Correctness-relevant,
 // so shown even with --silent like the other warnings.
 const warnUnenforcedConstructs = (ir: XsdIr): void => {
-  const summary = unenforcedConstructsSummary(ir);
-  if (summary?.dropped !== undefined) {
-    console.error(
-      `warning: the zod tier does not enforce: ${summary.dropped}; use xsd-to-zod/validate for full XSD conformance`,
-    );
-  }
-  if (summary?.weakened !== undefined) {
-    console.error(
-      `warning: the zod tier only partially preserves: ${summary.weakened}; text is concatenated into "_text", its interleaving with child elements is lost on round-trip`,
-    );
+  for (const message of unenforcedConstructsMessages(ir).cli) {
+    console.error(`warning: ${message}`);
   }
 };
 
