@@ -14,6 +14,9 @@ import type {
   DiagnosticKind,
   ElementDef,
   Facet,
+  IdentityConstraint,
+  IdentityPath,
+  IdentityStep,
   IrField,
   QName,
   SimpleTypeDef,
@@ -682,6 +685,7 @@ type FieldCollectionContext = {
   attributes: Record<string, GlobalAttributeDecl>;
   diagnostics: Diagnostic[];
   allowMissingImports: boolean;
+  unenforcedConstructs: XsdIr["unenforcedConstructs"];
   /** Tracks group / attributeGroup refs currently being expanded to prevent infinite recursion. */
   expansionStack: {
     groups: Set<string>;
@@ -945,6 +949,9 @@ const collectElementRef = (
     // global declaration's default/fixed applies.
     ...optProp("defaultValue", referenced.defaultValue),
     ...optProp("fixedValue", referenced.fixedValue),
+    // Identity constraints ride along too: they scope per occurrence of the
+    // referenced element declaration.
+    ...optProp("identityConstraints", referenced.identityConstraints),
     ...valueConstraints(child),
     ...optProp("description", description),
   });
@@ -984,6 +991,16 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
     ...optProp("choiceGroup", scope.choiceGroup),
     ...optProp("choiceBranch", scope.choiceBranch),
     ...valueConstraints(child),
+    ...optProp(
+      "identityConstraints",
+      parseIdentityConstraints(
+        child,
+        localCtx.nsMap,
+        scope.ownerNs,
+        ctx.diagnostics,
+        ctx.unenforcedConstructs,
+      ),
+    ),
     ...optProp("description", extractDocumentation(child)),
   });
 };
@@ -1194,27 +1211,176 @@ const isMixedComplexType = (node: AnyNode): boolean => {
   return mixed === true || mixed === "true";
 };
 
-// Constructs the zod tier drops (identity constraints) or weakens (mixed
-// content: text segments are concatenated, their interleaving with child
-// elements is not preserved). Counted per schema document so the CLI can
-// warn at generation time and the generated file can name what is not
-// enforced — the libxml2 tier (xsd-to-zod/validate) covers them.
-const IDENTITY_CONSTRAINT_TAGS = new Set(["key", "keyref", "unique"]);
-
+// Constructs the zod tier weakens (mixed content: text segments are
+// concatenated, their interleaving with child elements is not preserved).
+// Counted per schema document so the CLI can warn at generation time and the
+// generated file can name what is not fully honored. Identity constraints
+// are no longer counted here: they are parsed structurally and enforced at
+// runtime; only ones that fail to parse bump `dropped` at their parse site.
 const countUnenforcedConstructs = (node: AnyNode, counts: XsdIr["unenforcedConstructs"]): void => {
-  const bump = (bucket: Record<string, number>, construct: string): void => {
-    bucket[construct] = (bucket[construct] ?? 0) + 1;
-  };
   for (const [tag, child] of nodeChildren(node)) {
     const local = getNodeTagLocalName(tag);
-    if (IDENTITY_CONSTRAINT_TAGS.has(local)) {
-      bump(counts.dropped, `xs:${local}`);
-    }
     if (local === "complexType" && isMixedComplexType(child)) {
-      bump(counts.weakened, "mixed content");
+      counts.weakened["mixed content"] = (counts.weakened["mixed content"] ?? 0) + 1;
     }
     countUnenforcedConstructs(child, counts);
   }
+};
+
+// ---------------------------------------------------------------------------
+// Identity constraints (xs:key / xs:keyref / xs:unique)
+// ---------------------------------------------------------------------------
+
+const IDENTITY_STEP_QNAME = /^[^\s/@*|[\]().:]+(?::[^\s/@*|[\]().:]+)?$/;
+
+// xs:selector / xs:field xpaths are a restricted XPath subset: an optional
+// leading .//, then '/'-separated steps (a trailing @attribute step only in
+// xs:field), branches unioned with '|'. Unprefixed steps are in NO
+// namespace (the XPath 1.0 rule: the default namespace does not apply).
+// Anything outside the subset (predicates, '..', axes, wildcards) is
+// rejected so the caller can drop the constraint loudly instead of
+// enforcing a wrong reading of it.
+const parseIdentityXPath = (
+  raw: string,
+  nsMap: Record<string, string>,
+  diagnostics: Diagnostic[],
+  allowAttribute: boolean,
+): IdentityPath[] | undefined => {
+  const paths: IdentityPath[] = [];
+  for (const rawBranch of raw.split("|")) {
+    let branch = rawBranch.trim();
+    let descendant = false;
+    if (branch.startsWith(".//")) {
+      descendant = true;
+      branch = branch.slice(3);
+    }
+    if (branch === ".") {
+      paths.push({ descendant, steps: [{ axis: "self" }] });
+      continue;
+    }
+    const rawSteps = branch.split("/");
+    const steps: IdentityStep[] = [];
+    let failed = false;
+    for (const [i, rawStep] of rawSteps.entries()) {
+      const step = rawStep.trim();
+      if (step === ".") {
+        steps.push({ axis: "self" });
+        continue;
+      }
+      const attribute = step.startsWith("@");
+      if (attribute && (!allowAttribute || i !== rawSteps.length - 1)) {
+        failed = true;
+        break;
+      }
+      const name = attribute ? step.slice(1) : step;
+      if (!IDENTITY_STEP_QNAME.test(name)) {
+        failed = true;
+        break;
+      }
+      const { prefix, local } = splitQName(name);
+      if (prefix !== "" && nsMap[prefix] === undefined) {
+        report(
+          diagnostics,
+          "unknown-namespace-prefix",
+          `unknown namespace prefix "${prefix}" in identity constraint xpath "${raw}"`,
+          raw,
+        );
+        failed = true;
+        break;
+      }
+      steps.push({
+        axis: attribute ? "attribute" : "child",
+        qname: toClark(prefix === "" ? "" : (nsMap[prefix] ?? ""), local),
+      });
+    }
+    if (failed || steps.length === 0) {
+      return undefined;
+    }
+    paths.push({ descendant, steps });
+  }
+  return paths.length > 0 ? paths : undefined;
+};
+
+// Extract the identity constraints declared on an element node. Constraints
+// that cannot be enforced (xpath outside the restricted subset, missing
+// name/selector/field, keyref without refer) are dropped with a diagnostic
+// and counted into unenforcedConstructs.dropped, keeping the generation-time
+// warning accurate.
+const parseIdentityConstraints = (
+  elementNode: AnyNode,
+  nsMap: Record<string, string>,
+  ownerNs: string,
+  diagnostics: Diagnostic[],
+  unenforced: XsdIr["unenforcedConstructs"],
+): IdentityConstraint[] | undefined => {
+  const constraints: IdentityConstraint[] = [];
+  for (const [tag, node] of nodeChildren(elementNode)) {
+    const local = getNodeTagLocalName(tag);
+    if (local !== "key" && local !== "keyref" && local !== "unique") {
+      continue;
+    }
+    const tagName = `xs:${local}`;
+    const drop = (kind: DiagnosticKind, message: string): void => {
+      report(diagnostics, kind, message);
+      unenforced.dropped[tagName] = (unenforced.dropped[tagName] ?? 0) + 1;
+    };
+    const name = String(node["@_name"] ?? "");
+    const constraintNsMap = { ...nsMap, ...localNsDeclarations(node) };
+    const kids = nodeChildren(node);
+    const selectorRaw = kids.find(([t]) => getNodeTagLocalName(t) === "selector")?.[1]["@_xpath"];
+    const fieldRaws = kids
+      .filter(([t]) => getNodeTagLocalName(t) === "field")
+      .map(([, fieldNode]) => fieldNode["@_xpath"]);
+    if (!name || selectorRaw === undefined || fieldRaws.length === 0) {
+      drop(
+        "unsupported-identity-xpath",
+        `${tagName} constraint${name ? ` "${name}"` : ""} is missing a name, selector, or field; the constraint is dropped`,
+      );
+      continue;
+    }
+    if (fieldRaws.some((fieldRaw) => fieldRaw === undefined)) {
+      drop(
+        "unsupported-identity-xpath",
+        `${tagName} "${name}" has a field without an xpath; the constraint is dropped`,
+      );
+      continue;
+    }
+    const selector = parseIdentityXPath(String(selectorRaw), constraintNsMap, diagnostics, false);
+    const fields: IdentityPath[][] = [];
+    let fieldsOk = true;
+    for (const fieldRaw of fieldRaws) {
+      const parsed = parseIdentityXPath(String(fieldRaw), constraintNsMap, diagnostics, true);
+      if (parsed === undefined) {
+        fieldsOk = false;
+        break;
+      }
+      fields.push(parsed);
+    }
+    if (selector === undefined || !fieldsOk) {
+      drop(
+        "unsupported-identity-xpath",
+        `${tagName} "${name}": selector/field xpath is outside the restricted subset; the constraint is dropped`,
+      );
+      continue;
+    }
+    if (local === "keyref" && node["@_refer"] === undefined) {
+      drop(
+        "unresolved-identity-ref",
+        `xs:keyref "${name}" has no refer attribute; the constraint is dropped`,
+      );
+      continue;
+    }
+    constraints.push({
+      kind: local,
+      name: toClark(ownerNs, name),
+      ...(local === "keyref"
+        ? { refer: resolveTypeQName(String(node["@_refer"]), constraintNsMap, diagnostics) }
+        : {}),
+      selector,
+      fields,
+    });
+  }
+  return constraints.length > 0 ? constraints : undefined;
 };
 
 // Mixed content: optional `_text` field (parser concatenates text segments).
@@ -1489,6 +1655,7 @@ type ParseState = {
   diagnostics: Diagnostic[];
   allowMissingImports: boolean;
   inlineComplexTypes: Map<AnyNode, QName>;
+  unenforcedConstructs: XsdIr["unenforcedConstructs"];
 };
 
 const toRecord = <V>(entries: Map<string, V> | Record<string, V>): Record<string, V> =>
@@ -1533,6 +1700,7 @@ const createFieldContext = (
   attributes: state.attributes,
   diagnostics: state.diagnostics,
   allowMissingImports: state.allowMissingImports,
+  unenforcedConstructs: state.unenforcedConstructs,
   expansionStack: { groups: new Set(), attributeGroups: new Set() },
   inlineComplexTypes: state.inlineComplexTypes,
 });
@@ -2004,6 +2172,16 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
         ...optProp("substitutionGroup", substitutionGroup),
         ...optProp("description", description),
         ...valueConstraints(child),
+        ...optProp(
+          "identityConstraints",
+          parseIdentityConstraints(
+            child,
+            resolveNsMap,
+            effectiveNs,
+            state.diagnostics,
+            state.unenforcedConstructs,
+          ),
+        ),
       };
       if (!state.rootElements.includes(qname)) {
         state.rootElements.push(qname);
@@ -2394,6 +2572,66 @@ const resolveForwardSimpleContentBases = (state: ParseState): void => {
   }
 };
 
+// keyref refer= must name a key/unique declared in the schema set (a static
+// check; instance-level scope containment is enforced by the runtime).
+// Unresolvable keyrefs are dropped with a diagnostic so the generated code
+// never references a table that does not exist.
+const resolveIdentityRefs = (
+  state: ParseState,
+  mergedComplexTypes: Record<string, ComplexTypeDef>,
+): void => {
+  const constraintLists: (IdentityConstraint[] | undefined)[] = [
+    ...Object.values(state.elements).map((e) => e.identityConstraints),
+    ...Object.values(mergedComplexTypes).flatMap((t) => t.fields.map((f) => f.identityConstraints)),
+  ];
+  const declaredKeys = new Set<QName>();
+  for (const constraints of constraintLists) {
+    for (const c of constraints ?? []) {
+      if (c.kind !== "keyref") {
+        declaredKeys.add(c.name);
+      }
+    }
+  }
+  for (const constraints of constraintLists) {
+    if (constraints === undefined) {
+      continue;
+    }
+    for (let i = constraints.length - 1; i >= 0; i--) {
+      const c = constraints[i];
+      if (
+        c !== undefined &&
+        c.kind === "keyref" &&
+        (c.refer === undefined || !declaredKeys.has(c.refer))
+      ) {
+        report(
+          state.diagnostics,
+          "unresolved-identity-ref",
+          `xs:keyref "${c.name}" refers to "${c.refer ?? ""}", which is not declared as a key/unique constraint; the keyref is dropped`,
+          c.refer,
+        );
+        state.unenforcedConstructs.dropped["xs:keyref"] =
+          (state.unenforcedConstructs.dropped["xs:keyref"] ?? 0) + 1;
+        constraints.splice(i, 1);
+      }
+    }
+  }
+  // Constraint lists are shared (ref fields alias their global element's
+  // list), so the splice above already covers every reference; empty lists
+  // are cleaned up per owner.
+  for (const element of Object.values(state.elements)) {
+    if (element.identityConstraints?.length === 0) {
+      delete element.identityConstraints;
+    }
+  }
+  for (const type of Object.values(mergedComplexTypes)) {
+    for (const field of type.fields) {
+      if (field.identityConstraints?.length === 0) {
+        delete field.identityConstraints;
+      }
+    }
+  }
+};
+
 export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise<XsdIr> => {
   const state: ParseState = {
     simpleTypes: {},
@@ -2415,12 +2653,12 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
     diagnostics: [],
     allowMissingImports: opts?.allowMissingImports ?? false,
     inlineComplexTypes: new Map<AnyNode, QName>(),
+    unenforcedConstructs: { dropped: {}, weakened: {} },
   };
 
   const scannedFiles = await scanSchemaFiles(files, state.diagnostics, opts);
-  const unenforcedConstructs: XsdIr["unenforcedConstructs"] = { dropped: {}, weakened: {} };
   for (const { schemaNode } of scannedFiles) {
-    countUnenforcedConstructs(schemaNode, unenforcedConstructs);
+    countUnenforcedConstructs(schemaNode, state.unenforcedConstructs);
   }
   const { pendingFiles, redefineOverrides } = collectDeclarations(state, scannedFiles);
   applyGroupRedefines(state, redefineOverrides);
@@ -2432,11 +2670,12 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
   const mergedComplexTypes = mergeExtendedTypes(state);
 
   dropCircularSimpleTypeRefs(state.simpleTypes, state.diagnostics);
+  resolveIdentityRefs(state, mergedComplexTypes);
 
   return {
     targetNamespaces: [...state.targetNamespaces],
     diagnostics: state.diagnostics,
-    unenforcedConstructs,
+    unenforcedConstructs: state.unenforcedConstructs,
     simpleTypes: state.simpleTypes,
     complexTypes: mergedComplexTypes,
     elements: state.elements,

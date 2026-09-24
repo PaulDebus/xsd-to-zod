@@ -15,7 +15,7 @@ import {
   OrderTrackingCompactBuilder,
 } from "./documentOrder.js";
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
-import type { QName } from "./types.js";
+import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
@@ -2438,13 +2438,561 @@ const writeObjectFields = (
 };
 
 // ---------------------------------------------------------------------------
+// Identity constraints (xs:key / xs:keyref / xs:unique)
+//
+// Post-parse pass over the validated tree, driven by the identity metadata
+// codegen registers on root schemas and element field metas. Semantics per
+// XSD 1.0 §3.11.4/§3.11.5: each element occurrence owns an identity-constraint
+// table — its own key/unique evaluations merged with the tables propagated up
+// from its children (propagation conflicts poison the entry instead of
+// erroring) — and a keyref is checked against the table its own element
+// carries for the referenced key. Uniqueness is enforced per occurrence of
+// the declaring element; a keyref whose referenced key has no table on the
+// keyref's element is unsatisfiable. The pass runs after transferLexicals so
+// the QName/substitution side channels are keyed by the validated objects it
+// navigates. Violations surface as custom ZodError issues with data paths,
+// like the choice-group checks.
+// ---------------------------------------------------------------------------
+
+// Field-value extraction yields this for absent/nil/non-simple targets;
+// xs:key reports it, xs:unique and xs:keyref skip the node (XSD §3.11.4).
+const IDENTITY_ABSENT: unique symbol = Symbol("identity-absent");
+
+type IdentityNode = {
+  value: unknown;
+  schema: AnySchema | undefined;
+  /** Element qname this node was reached through (undefined for scope roots). */
+  qname?: QName | undefined;
+  path: readonly (string | number)[];
+  /** Prefix→URI bindings for QName-typed values (see XmlFieldMeta.qnameValue). */
+  qnameNs?: Record<string, string> | undefined;
+};
+
+// One element occurrence's identity-constraint table: per constraint name,
+// tuple key → first-seen node path; plus the tuple keys poisoned by
+// propagation conflicts (§3.11.5: conflicting propagated entries vanish).
+type IdentityTable = {
+  entries: Map<QName, Map<string, string>>;
+  poisoned: Map<QName, Set<string>>;
+};
+
+type IdentityState = {
+  issues: z.core.$ZodIssue[];
+};
+
+// Value-space tuple keys (XSD compares typed values: 1 equals 01 for xs:int).
+// Length-prefixing strings keeps tuple concatenation collision-free; NaN and
+// -0 key like their XSD value-space equals.
+const identityValueKey = (value: unknown): string => {
+  if (value === null) {
+    return "null:";
+  }
+  if (value === undefined) {
+    return "undef:";
+  }
+  switch (typeof value) {
+    case "string":
+      return `str:${value.length}:${value}`;
+    case "number":
+      return `num:${value}`;
+    case "bigint":
+      return `big:${value.toString()}`;
+    case "boolean":
+      return `bool:${value}`;
+    case "object":
+      if (Array.isArray(value)) {
+        return `arr:[${value.map(identityValueKey).join(",")}]`;
+      }
+      // Structured datatypes (xsdDateTime): plain objects with fixed keys.
+      return `obj:{${Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map(
+          (k) => `${JSON.stringify(k)}=${identityValueKey((value as Record<string, unknown>)[k])}`,
+        )
+        .join(",")}}`;
+    default:
+      return `other:${String(value)}`;
+  }
+};
+
+const identityTupleKey = (values: unknown[]): string => values.map(identityValueKey).join("|");
+
+const identityTupleDisplay = (values: unknown[]): string =>
+  values
+    .map((v) => (typeof v === "bigint" ? v.toString() : (JSON.stringify(v) ?? String(v))))
+    .join(", ");
+
+// xsi:type union dispatch on an occurrence's discriminant: the matching
+// derived variant, else the declared (first) option.
+const identityXsiMember = (
+  unionOptions: readonly AnySchema[],
+  occValue: unknown,
+  fallback: AnySchema,
+): AnySchema => {
+  const xsiType =
+    occValue !== null && typeof occValue === "object"
+      ? (occValue as Record<string, unknown>)[XSI_TYPE_FIELD]
+      : undefined;
+  const match =
+    typeof xsiType === "string"
+      ? unionOptions.find((option) => xsiTypeOptionQName(option) === xsiType)
+      : undefined;
+  return match ?? unionOptions[0] ?? fallback;
+};
+
+// The schema one occurrence was parsed with: member dispatch via the recorded
+// substitution tag, then xsi:type union dispatch via the xsiType discriminant.
+const identityOccurrenceSchema = (
+  fieldSchema: AnySchema,
+  container: object,
+  key: string,
+  occValue: unknown,
+  index: number,
+): AnySchema => {
+  let item = analyzeField(fieldSchema).itemSchema;
+  const substRecord = substQNameStore.get(container)?.get(key);
+  const substQName = Array.isArray(substRecord) ? substRecord[index] : substRecord;
+  if (typeof substQName === "string") {
+    item = substitutionSchemaFor(substQName, item);
+  }
+  const union = xsiTypeUnionDef(item);
+  if (union !== undefined) {
+    item = identityXsiMember(union.options as readonly AnySchema[], occValue, item);
+  }
+  return item;
+};
+
+// Element children of a data node, filtered by step qname (all children when
+// undefined): declared fields via the fields meta, plus open-shape extras,
+// which are keyed by their Clark qname already.
+const identityChildren = (node: IdentityNode, qname: QName | undefined): IdentityNode[] => {
+  const { value } = node;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const obj = value as Record<string, unknown>;
+  const out: IdentityNode[] = [];
+  const declaredKeys = new Set<string>();
+  const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+  const shape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
+  if (fields !== undefined) {
+    const qnameNsRecord = qnameNsStore.get(obj);
+    for (const [key, fieldMeta] of Object.entries(fields)) {
+      declaredKeys.add(key);
+      if (fieldMeta.kind !== "element" || (qname !== undefined && fieldMeta.qname !== qname)) {
+        continue;
+      }
+      const fieldValue = obj[key];
+      const fieldSchema = shape[key];
+      if (fieldValue === undefined || fieldSchema === undefined) {
+        continue;
+      }
+      const isArray = Array.isArray(fieldValue);
+      const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
+      const bindings = qnameNsRecord?.get(key);
+      occurrences.forEach((occ, i) => {
+        out.push({
+          value: occ,
+          schema: identityOccurrenceSchema(fieldSchema, obj, key, occ, i),
+          qname: fieldMeta.qname,
+          path: [...node.path, key, ...(isArray ? [i] : [])],
+          qnameNs: Array.isArray(bindings) ? bindings[i] : bindings,
+        });
+      });
+    }
+  }
+  for (const [key, entryValue] of Object.entries(obj)) {
+    if (declaredKeys.has(key) || !key.startsWith("{")) {
+      continue;
+    }
+    if (qname !== undefined && key !== qname) {
+      continue;
+    }
+    const isArray = Array.isArray(entryValue);
+    const occurrences = isArray ? (entryValue as unknown[]) : [entryValue];
+    occurrences.forEach((occ, i) => {
+      out.push({
+        value: occ,
+        schema: undefined,
+        qname: key as QName,
+        path: [...node.path, key, ...(isArray ? [i] : [])],
+      });
+    });
+  }
+  return out;
+};
+
+const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode | undefined => {
+  const { value } = node;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+  if (fields !== undefined) {
+    const shape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
+    for (const [key, fieldMeta] of Object.entries(fields)) {
+      if (fieldMeta.kind === "attribute" && fieldMeta.qname === qname) {
+        const attrValue = obj[key];
+        if (attrValue === undefined) {
+          return undefined;
+        }
+        const bindings = qnameNsStore.get(obj)?.get(key);
+        return {
+          value: attrValue,
+          schema: shape[key],
+          qname,
+          path: node.path,
+          qnameNs: Array.isArray(bindings) ? undefined : bindings,
+        };
+      }
+    }
+  }
+  // Open shape: attributes are keyed '@' + clark (no-namespace: '@local').
+  const clark = splitClark(qname);
+  const openValue = obj[`@${clark.namespace ? `{${clark.namespace}}` : ""}${clark.local}`];
+  return openValue === undefined
+    ? undefined
+    : { value: openValue, schema: undefined, qname, path: node.path };
+};
+
+// Evaluate one restricted-xpath branch against a context node.
+const identitySelect = (path: IdentityPath, contextNode: IdentityNode): IdentityNode[] => {
+  let current: IdentityNode[] = [contextNode];
+  for (const [i, step] of path.steps.entries()) {
+    if (step.axis === "self") {
+      continue;
+    }
+    const next: IdentityNode[] = [];
+    for (const node of current) {
+      if (step.axis === "attribute") {
+        // Attribute steps are only legal as the last xs:field step (enforced
+        // at parse time); the value rides as a leaf node.
+        const attr = identityAttributeNode(node, step.qname);
+        if (attr !== undefined) {
+          next.push(attr);
+        }
+        continue;
+      }
+      if (i === 0 && path.descendant) {
+        // Leading .//: the step matches at any depth below the context node.
+        const stack = identityChildren(node, undefined);
+        while (stack.length > 0) {
+          const desc = stack.pop();
+          if (desc === undefined) {
+            break;
+          }
+          if (desc.qname === step.qname) {
+            next.push(desc);
+          }
+          stack.push(...identityChildren(desc, undefined));
+        }
+        continue;
+      }
+      next.push(...identityChildren(node, step.qname));
+    }
+    current = next;
+  }
+  return current;
+};
+
+// The schema-normalized simple value of a field target: scalars as-is,
+// objects through their text field (simple content). whiteSpace-collapsed
+// types compare their collapsed form; QName-typed values resolve to their
+// Clark form so equal QNames written with different prefixes match. Anything
+// else is ABSENT.
+const identitySimpleValue = (node: IdentityNode): unknown => {
+  const { value } = node;
+  if (value === null || value === undefined) {
+    return IDENTITY_ABSENT;
+  }
+  if (typeof value === "string") {
+    if (node.qnameNs !== undefined) {
+      const { prefix, local } = splitQName(value.trim());
+      const ns = prefix === "" ? node.qnameNs[""] : node.qnameNs[prefix];
+      return ns === undefined ? value.trim() : `{${ns}}${local}`;
+    }
+    const whiteSpace =
+      node.schema === undefined ? undefined : findFacetsMeta(node.schema)?.whiteSpace;
+    return whiteSpace === undefined ? value : applyWhiteSpace(value, whiteSpace);
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return IDENTITY_ABSENT;
+  }
+  const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+  if (fields !== undefined) {
+    for (const [key, fieldMeta] of Object.entries(fields)) {
+      if (fieldMeta.kind === "text") {
+        const text = (value as Record<string, unknown>)[key];
+        return text === undefined ? IDENTITY_ABSENT : text;
+      }
+    }
+  }
+  return IDENTITY_ABSENT;
+};
+
+const identityFieldValue = (branches: IdentityPath[], node: IdentityNode): unknown => {
+  for (const branch of branches) {
+    const targets = identitySelect(branch, node);
+    // A valid restricted xpath yields at most one node per field; a schema
+    // yielding several is in error per XSD, but take the first rather than
+    // failing the document over a schema-level slip.
+    const first = targets[0];
+    if (first === undefined) {
+      continue;
+    }
+    const value = identitySimpleValue(first);
+    if (value !== IDENTITY_ABSENT) {
+      return value;
+    }
+  }
+  return IDENTITY_ABSENT;
+};
+
+const identityPathString = (path: readonly (string | number)[]): string => JSON.stringify(path);
+
+// Propagated entries merge upward (§3.11.5): a tuple key arriving with two
+// distinct nodes is poisoned — no entry survives for it.
+const mergeIdentityTable = (target: IdentityTable, src: IdentityTable): void => {
+  for (const [name, srcPoisoned] of src.poisoned) {
+    let poisoned = target.poisoned.get(name);
+    if (poisoned === undefined) {
+      poisoned = new Set();
+      target.poisoned.set(name, poisoned);
+    }
+    const targetEntries = target.entries.get(name);
+    for (const key of srcPoisoned) {
+      targetEntries?.delete(key);
+      poisoned.add(key);
+    }
+  }
+  for (const [name, srcEntries] of src.entries) {
+    let targetEntries = target.entries.get(name);
+    if (targetEntries === undefined) {
+      targetEntries = new Map();
+      target.entries.set(name, targetEntries);
+    }
+    let poisoned = target.poisoned.get(name);
+    if (poisoned === undefined) {
+      poisoned = new Set();
+      target.poisoned.set(name, poisoned);
+    }
+    for (const [key, pathString] of srcEntries) {
+      if (poisoned.has(key)) {
+        continue;
+      }
+      const existing = targetEntries.get(key);
+      if (existing === undefined) {
+        targetEntries.set(key, pathString);
+      } else if (existing !== pathString) {
+        targetEntries.delete(key);
+        poisoned.add(key);
+      }
+    }
+  }
+};
+
+// The selected node set of a constraint, deduped (union branches can overlap).
+const identitySelectedNodes = (
+  constraint: IdentityConstraint,
+  scopeNode: IdentityNode,
+): IdentityNode[] => {
+  const seen = new Set<string>();
+  const out: IdentityNode[] = [];
+  for (const branch of constraint.selector) {
+    for (const node of identitySelect(branch, scopeNode)) {
+      const key = identityPathString(node.path);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(node);
+      }
+    }
+  }
+  return out;
+};
+
+// Uniqueness and presence are enforced on the constraint's own qualified node
+// set; the table returned for upward propagation additionally carries the
+// children's entries (merged by the caller).
+const evaluateUniqueOrKey = (
+  constraint: IdentityConstraint,
+  scopeNode: IdentityNode,
+  state: IdentityState,
+): Map<string, string> => {
+  const local = splitClark(constraint.name).local;
+  const localEntries = new Map<string, string>();
+  for (const node of identitySelectedNodes(constraint, scopeNode)) {
+    const tuple = constraint.fields.map((f) => identityFieldValue(f, node));
+    if (tuple.some((v) => v === IDENTITY_ABSENT)) {
+      if (constraint.kind === "key") {
+        state.issues.push({
+          code: "custom",
+          message: `xs:key "${local}": a selected element is missing a key field (or it is nil)`,
+          path: [...node.path],
+          input: node.value,
+        });
+      }
+      continue;
+    }
+    const key = identityTupleKey(tuple);
+    if (localEntries.has(key)) {
+      state.issues.push({
+        code: "custom",
+        message: `xs:${constraint.kind} "${local}": duplicate key value (${identityTupleDisplay(tuple)})`,
+        path: [...node.path],
+        input: node.value,
+      });
+    } else {
+      localEntries.set(key, identityPathString(node.path));
+    }
+  }
+  return localEntries;
+};
+
+const evaluateKeyref = (
+  constraint: IdentityConstraint,
+  table: Map<string, string> | undefined,
+  scopeNode: IdentityNode,
+  state: IdentityState,
+): void => {
+  const refer = constraint.refer;
+  if (refer === undefined) {
+    return;
+  }
+  const local = splitClark(constraint.name).local;
+  const referLocal = splitClark(refer).local;
+  for (const node of identitySelectedNodes(constraint, scopeNode)) {
+    const tuple = constraint.fields.map((f) => identityFieldValue(f, node));
+    if (tuple.some((v) => v === IDENTITY_ABSENT)) {
+      continue;
+    }
+    if (table === undefined) {
+      // No node table for the referenced key on this element (§3.11.4 cl. 4.3):
+      // the constraint is unsatisfiable here.
+      state.issues.push({
+        code: "custom",
+        message: `xs:keyref "${local}": referenced key "${referLocal}" is not in scope here`,
+        path: [...node.path],
+        input: node.value,
+      });
+      continue;
+    }
+    if (!table.has(identityTupleKey(tuple))) {
+      state.issues.push({
+        code: "custom",
+        message: `xs:keyref "${local}": no entry in key "${referLocal}" matches (${identityTupleDisplay(tuple)})`,
+        path: [...node.path],
+        input: node.value,
+      });
+    }
+  }
+};
+
+// Bottom-up: children first so their tables can merge into this occurrence's,
+// then this occurrence's own constraints (key/unique before keyref, so a
+// keyref sees tables declared on the same element). Returns the table the
+// parent merges.
+const walkIdentity = (
+  schema: AnySchema | undefined,
+  value: unknown,
+  path: readonly (string | number)[],
+  constraints: readonly IdentityConstraint[],
+  state: IdentityState,
+): IdentityTable => {
+  const own: IdentityTable = { entries: new Map(), poisoned: new Map() };
+  const scopeNode: IdentityNode = { value, schema, path };
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    schema !== undefined
+  ) {
+    const fields = findFieldsMeta(schema);
+    if (fields !== undefined) {
+      const shape = objectDefOf(schema)?.shape ?? {};
+      const obj = value as Record<string, unknown>;
+      for (const [key, fieldMeta] of Object.entries(fields)) {
+        if (fieldMeta.kind !== "element") {
+          continue;
+        }
+        const fieldValue = obj[key];
+        const fieldSchema = shape[key];
+        if (fieldValue === undefined || fieldSchema === undefined) {
+          continue;
+        }
+        const isArray = Array.isArray(fieldValue);
+        const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
+        occurrences.forEach((occ, i) => {
+          const childTable = walkIdentity(
+            identityOccurrenceSchema(fieldSchema, obj, key, occ, i),
+            occ,
+            [...path, key, ...(isArray ? [i] : [])],
+            fieldMeta.identity ?? [],
+            state,
+          );
+          mergeIdentityTable(own, childTable);
+        });
+      }
+    }
+  }
+  for (const constraint of constraints) {
+    if (constraint.kind === "keyref") {
+      continue;
+    }
+    const localEntries = evaluateUniqueOrKey(constraint, scopeNode, state);
+    let table = own.entries.get(constraint.name);
+    if (table === undefined) {
+      table = new Map();
+      own.entries.set(constraint.name, table);
+    }
+    // Local entries win over propagated ones on conflict (§3.11.5).
+    own.poisoned.get(constraint.name)?.forEach((key) => {
+      if (localEntries.has(key)) {
+        own.poisoned.get(constraint.name)?.delete(key);
+      }
+    });
+    for (const [key, pathString] of localEntries) {
+      table.set(key, pathString);
+    }
+  }
+  for (const constraint of constraints) {
+    if (constraint.kind === "keyref") {
+      evaluateKeyref(constraint, own.entries.get(constraint.refer ?? "{}"), scopeNode, state);
+    }
+  }
+  return own;
+};
+
+const identityIssues = (rootSchema: AnySchema, data: unknown): z.core.$ZodIssue[] => {
+  const state: IdentityState = { issues: [] };
+  const meta = findRootMeta(rootSchema);
+  // Resolve the root occurrence's content schema like the parse walk does
+  // (lazy wrapper, then xsi:type union dispatch on the discriminant).
+  let schema = peelOnce(rootSchema);
+  const union = xsiTypeUnionDef(schema);
+  if (union !== undefined && data !== null && typeof data === "object" && !Array.isArray(data)) {
+    schema = identityXsiMember(union.options as readonly AnySchema[], data, schema);
+  }
+  walkIdentity(schema, data, [], meta?.identity ?? [], state);
+  return state.issues;
+};
+
+// ---------------------------------------------------------------------------
 // Public API — mirrors zod: parseXml throws, safeParseXml returns a result.
 // ---------------------------------------------------------------------------
 
 export type ParseXmlOptions = {
-  // Skip the final schema validation. Fast path for input already checked by
-  // the libxml2 conformance tier (xsd-to-zod/validate).
+  // Skip the final schema validation (including identity constraints). Fast
+  // path for input already checked by the libxml2 conformance tier
+  // (xsd-to-zod/validate).
   validate?: false;
+  // Skip only the identity-constraint pass (xs:key/xs:keyref/xs:unique) —
+  // schema validation still runs. For documents whose referential integrity
+  // is knowingly broken (partial exports, data being repaired).
+  identityConstraints?: false;
 };
 
 /**
@@ -2489,6 +3037,14 @@ export const safeParseXml = <S extends z.ZodType>(
   const rootEntry = rootLexicals.get(schema);
   if (rootEntry !== undefined) {
     rootEntry.data = result.data;
+  }
+  // Identity constraints run on the validated tree (substitution side
+  // channels re-keyed onto it above); gated on the module declaring any.
+  if (opts?.identityConstraints !== false && findRootMeta(schema)?.hasIdentity === true) {
+    const issues = identityIssues(schema, result.data);
+    if (issues.length > 0) {
+      return { success: false, error: new z.ZodError(issues) };
+    }
   }
   return { success: true, data: result.data as z.output<S> };
 };

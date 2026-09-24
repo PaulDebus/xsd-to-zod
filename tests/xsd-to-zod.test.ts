@@ -374,14 +374,14 @@ describe("xsd-to-zod v1 pipeline", () => {
       </xs:sequence>
     </xs:complexType>
     <xs:key name="itemKey">
-      <xs:selector xpath="item"/>
+      <xs:selector xpath="item[1]"/>
       <xs:field xpath="@id"/>
     </xs:key>
     <xs:unique name="itemUnique">
-      <xs:selector xpath="item"/>
+      <xs:selector xpath="item/../item"/>
       <xs:field xpath="@id"/>
     </xs:unique>
-    <xs:keyref name="itemRef" refer="t:itemKey">
+    <xs:keyref name="itemRef" refer="t:noSuchKey">
       <xs:selector xpath="item"/>
       <xs:field xpath="@id"/>
     </xs:keyref>
@@ -395,8 +395,10 @@ describe("xsd-to-zod v1 pipeline", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD_WITH_DROPPED_CONSTRUCTS);
       const ir = await parseXsd([file]);
+      // Identity constraints with enforceable xpaths are parsed and enforced;
+      // only the unenforceable ones (predicates, '..', unresolved refer) count.
       expect(ir.unenforcedConstructs).toEqual({
-        dropped: { "xs:key": 1, "xs:keyref": 1, "xs:unique": 1 },
+        dropped: { "xs:key": 1, "xs:unique": 1, "xs:keyref": 1 },
         weakened: { "mixed content": 1 },
       });
     });

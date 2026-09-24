@@ -1,3 +1,35 @@
+/** One step of a restricted identity-constraint xpath (xs:selector/xs:field). */
+export type IdentityStep =
+  | { axis: "child"; qname: QName }
+  | { axis: "attribute"; qname: QName }
+  | { axis: "self" };
+
+/** One union branch of an identity-constraint xpath. */
+export type IdentityPath = {
+  /** Leading `.//`: the first step matches at any depth below the context node. */
+  descendant: boolean;
+  steps: IdentityStep[];
+};
+
+/**
+ * xs:key / xs:keyref / xs:unique, parsed into the restricted XPath subset.
+ * Scoped to each instance of the element declaration carrying the constraint;
+ * enforced by the runtime over the parsed tree. Constraints outside the
+ * xpath subset (or with an unresolvable keyref target) are dropped at parse
+ * time instead — they surface in XsdIr.unenforcedConstructs.dropped.
+ */
+export type IdentityConstraint = {
+  kind: "key" | "keyref" | "unique";
+  /** Constraint name (Clark). Unique across the schema set. */
+  name: QName;
+  /** keyref only: the referenced key/unique constraint name (Clark). */
+  refer?: QName;
+  /** Selector union branches, evaluated against the scope element. */
+  selector: IdentityPath[];
+  /** One entry per xs:field, each itself union branches. */
+  fields: IdentityPath[][];
+};
+
 export type QName = `{${string}}${string}`;
 
 export type Cardinality = {
@@ -34,6 +66,8 @@ export type IrField = Cardinality & {
   fieldKey?: string;
   /** Text of xs:annotation/xs:documentation, emitted as .describe() (#25). */
   description?: string;
+  /** Identity constraints declared on this element particle. */
+  identityConstraints?: IdentityConstraint[];
 };
 
 export type Facet =
@@ -112,6 +146,8 @@ export type ElementDef = {
   /** Raw lexicals; coerced to the JS type at emission (#68). */
   defaultValue?: string;
   fixedValue?: string;
+  /** Identity constraints declared on this element. */
+  identityConstraints?: IdentityConstraint[];
 };
 
 export type DiagnosticKind =
@@ -135,7 +171,11 @@ export type DiagnosticKind =
   /** Group ref dropped because it closed an expansion cycle. */
   | "circular-group-ref"
   /** attributeGroup ref dropped because it closed an expansion cycle. */
-  | "circular-attribute-group-ref";
+  | "circular-attribute-group-ref"
+  /** Identity constraint dropped: selector/field xpath outside the restricted subset. */
+  | "unsupported-identity-xpath"
+  /** keyref dropped: refer= names no key/unique constraint in the schema set. */
+  | "unresolved-identity-ref";
 
 export type Diagnostic = {
   kind: DiagnosticKind;

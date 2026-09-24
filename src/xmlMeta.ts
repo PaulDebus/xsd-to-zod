@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { QName } from "./types.js";
+import type { IdentityConstraint, QName } from "./types.js";
 import type { XsdDatatypeName } from "./xsdDateTime.js";
 
 /** Lexical-space facets enforced by the runtime. */
@@ -32,6 +32,8 @@ export type XmlFieldMeta = {
   position?: number;
   namespaceConstraint?: string;
   qnameValue?: boolean;
+  /** Identity constraints declared on this element particle (scoped per occurrence). */
+  identity?: IdentityConstraint[];
 };
 
 /** One branch of an xs:choice: the result keys its fields occupy. */
@@ -74,6 +76,11 @@ export type XmlMeta = {
   qnameValue?: boolean;
   fields?: Record<string, XmlFieldMeta>;
   choices?: Record<string, XmlChoiceMeta>;
+  /** Identity constraints declared on this root element. */
+  identity?: IdentityConstraint[];
+  /** Set on generated roots when the module declares any identity constraint —
+      gates the runtime's post-parse identity pass. */
+  hasIdentity?: true;
 };
 
 /** Typed registry — globalThis singleton so generated modules and runtime share the instance. */

@@ -1484,6 +1484,9 @@ const fieldsMetaFor = (
       );
       parts.push(`fixedLexicals: [${lits.join(", ")}]`);
     }
+    if (field.identityConstraints !== undefined) {
+      parts.push(`identity: ${JSON.stringify(field.identityConstraints)}`);
+    }
     return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
   // Wildcard sentinels: '*' sweeps unmatched child elements, '@*' unmatched
@@ -1921,6 +1924,15 @@ export const irToZod = (
   // generated modules — those names keep their historic shape).
   const exportNames = rootSchemaExportNames(ir.rootElements);
   const membersByHead = substitutionMembersByHead(ir);
+
+  // Gates the runtime's post-parse identity pass: roots carry this flag when
+  // the module declares any identity constraint, so constraint-free modules
+  // pay nothing per parse.
+  const moduleHasIdentity =
+    Object.values(ir.elements).some((e) => (e.identityConstraints?.length ?? 0) > 0) ||
+    Object.values(ir.complexTypes).some((t) =>
+      t.fields.some((f) => (f.identityConstraints?.length ?? 0) > 0),
+    );
 
   // xsi:type polymorphism. variantSets maps a polymorphic declared type
   // (abstract, or with known derived types) to [declared, ...derivedClosure].
@@ -2596,6 +2608,12 @@ export const irToZod = (
     const rootMeta = [`root: ${JSON.stringify(root)}`, "generatedBy"];
     if (rootDef.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       rootMeta.push("open: true");
+    }
+    if (rootDef.identityConstraints !== undefined) {
+      rootMeta.push(`identity: ${JSON.stringify(rootDef.identityConstraints)}`);
+    }
+    if (moduleHasIdentity) {
+      rootMeta.push("hasIdentity: true");
     }
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
     if (rootSt) {
