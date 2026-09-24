@@ -2981,9 +2981,14 @@ const identityIssues = (rootSchema: AnySchema, data: unknown): z.core.$ZodIssue[
 // ---------------------------------------------------------------------------
 
 export type ParseXmlOptions = {
-  // Skip the final schema validation. Fast path for input already checked by
-  // the libxml2 conformance tier (xsd-to-zod/validate).
+  // Skip the final schema validation (including identity constraints). Fast
+  // path for input already checked by the libxml2 conformance tier
+  // (xsd-to-zod/validate).
   validate?: false;
+  // Skip only the identity-constraint pass (xs:key/xs:keyref/xs:unique) —
+  // schema validation still runs. For documents whose referential integrity
+  // is knowingly broken (partial exports, data being repaired).
+  identityConstraints?: false;
 };
 
 /**
@@ -3031,7 +3036,7 @@ export const safeParseXml = <S extends z.ZodType>(
   }
   // Identity constraints run on the validated tree (substitution side
   // channels re-keyed onto it above); gated on the module declaring any.
-  if (findRootMeta(schema)?.hasIdentity === true) {
+  if (opts?.identityConstraints !== false && findRootMeta(schema)?.hasIdentity === true) {
     const issues = identityIssues(schema, result.data);
     if (issues.length > 0) {
       return { success: false, error: new z.ZodError(issues) };

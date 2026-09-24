@@ -247,6 +247,14 @@ describe("identity constraints", () => {
     expect(safeParseXml(schema, dup, { validate: false }).success).toBe(true);
   });
 
+  it("opts out of identity checks alone via identityConstraints:false", async () => {
+    const schema = await schemaFor(UNIQUE_XSD);
+    const dup = `<catalog><item id="1"/><item id="1"/></catalog>`;
+    expect(safeParseXml(schema, dup, { identityConstraints: false }).success).toBe(true);
+    // Structural validation still runs under the opt-out.
+    expect(safeParseXml(schema, `<other/>`, { identityConstraints: false }).success).toBe(false);
+  });
+
   it("surfaces violations from parseXml as a thrown ZodError", async () => {
     const schema = await schemaFor(UNIQUE_XSD);
     expect(() => parseXml(schema, `<catalog><item id="1"/><item id="1"/></catalog>`)).toThrow(

@@ -275,6 +275,8 @@ const xml = serializeXml(orderSchema, order);
 
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
+Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced by default: violations fail parsing with a `ZodError` naming the constraint, value, and data path. To parse documents whose referential integrity is knowingly broken (partial exports, data being repaired) while keeping all other validation, use `parseXml(schema, xml, { identityConstraints: false })`.
+
 ### Conformance tier (`xsd-to-zod/validate`)
 
 ```ts
