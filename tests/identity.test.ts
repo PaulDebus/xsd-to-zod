@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { parseXsd } from "../src/parseXsd.js";
-import { parseXml, safeParseXml } from "../src/runtime.js";
+import { parseXml, safeParseXml, serializeXml } from "../src/runtime.js";
 import { findRootSchema, generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Identity constraints (xs:key / xs:keyref / xs:unique): enforced by the zod
@@ -238,6 +238,123 @@ describe("identity constraints", () => {
       `<t:catalog xmlns:t="urn:test"><t:item id="a"/><t:item id="a"/></t:catalog>`,
     );
     expect(expectFailure(dup)).toContain("duplicate key value");
+  });
+
+  it("resolves key fields through xsi:type derived variants", async () => {
+    const schema = await schemaFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="http://example.com/zoo" xmlns:tns="http://example.com/zoo" elementFormDefault="qualified">
+  <xs:element name="kennel">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="pet" type="tns:Animal" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="tagKey">
+      <xs:selector xpath="tns:pet"/>
+      <xs:field xpath="@tag"/>
+    </xs:key>
+  </xs:element>
+  <xs:complexType name="Animal">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Dog">
+    <xs:complexContent>
+      <xs:extension base="tns:Animal">
+        <xs:attribute name="tag" type="xs:string"/>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>`);
+    const open = `<kennel xmlns="http://example.com/zoo" xmlns:tns="http://example.com/zoo" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">`;
+    // The tag field exists only on the derived variant: finding it proves the
+    // identity pass dispatched through the xsi:type discriminant.
+    expect(
+      safeParseXml(
+        schema,
+        `${open}<pet xsi:type="tns:Dog" tag="a"><name>Rex</name></pet><pet xsi:type="tns:Dog" tag="b"><name>Fido</name></pet></kennel>`,
+      ).success,
+    ).toBe(true);
+    const dup = safeParseXml(
+      schema,
+      `${open}<pet xsi:type="tns:Dog" tag="a"><name>Rex</name></pet><pet xsi:type="tns:Dog" tag="a"><name>Fido</name></pet></kennel>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+  });
+
+  it("treats nil field values as absent (key reports, unique skips)", async () => {
+    const xsd = (constraint: string): string => `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="code" type="xs:string" nillable="true"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    ${constraint}
+  </xs:element>
+</xs:schema>`;
+    const nilDoc = `<catalog><item><code>x</code></item><item><code xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/></item></catalog>`;
+    const keySchema = await schemaFor(
+      xsd(`<xs:key name="codeKey"><xs:selector xpath="item"/><xs:field xpath="code"/></xs:key>`),
+    );
+    expect(expectFailure(safeParseXml(keySchema, nilDoc))).toContain('xs:key "codeKey"');
+    const uniqueSchema = await schemaFor(
+      xsd(
+        `<xs:unique name="codeUnique"><xs:selector xpath="item"/><xs:field xpath="code"/></xs:unique>`,
+      ),
+    );
+    // A nil node contributes no tuple, so uniqueness has nothing to compare.
+    expect(safeParseXml(uniqueSchema, nilDoc).success).toBe(true);
+  });
+
+  it("compares QName-typed keys by resolved namespace, not prefix", async () => {
+    const schema = await schemaFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="ref" type="xs:QName"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="refUnique">
+      <xs:selector xpath="t:item"/>
+      <xs:field xpath="@ref"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>`);
+    const open = `<t:catalog xmlns:t="urn:test" xmlns:p="urn:codes" xmlns:q="urn:codes">`;
+    // p:widget and q:widget name the same QName under different prefixes.
+    const dup = safeParseXml(
+      schema,
+      `${open}<t:item ref="p:widget"/><t:item ref="q:widget"/></t:catalog>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+    expect(
+      safeParseXml(schema, `${open}<t:item ref="p:widget"/><t:item ref="p:gadget"/></t:catalog>`)
+        .success,
+    ).toBe(true);
+  });
+
+  it("round-trips constrained documents through serializeXml", async () => {
+    const schema = await schemaFor(UNIQUE_XSD);
+    const xml = `<catalog><item id="1"/><item id="2"/></catalog>`;
+    const parsed = parseXml(schema, xml);
+    // Serialization needs no identity index: it is parse-time only.
+    const reserialized = serializeXml(schema, parsed);
+    expect(safeParseXml(schema, reserialized).success).toBe(true);
+    expect(parseXml(schema, reserialized)).toEqual(parsed);
   });
 
   it("skips the identity pass on the validate:false fast path", async () => {

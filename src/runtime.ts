@@ -2522,6 +2522,24 @@ const identityTupleDisplay = (values: unknown[]): string =>
     .map((v) => (typeof v === "bigint" ? v.toString() : (JSON.stringify(v) ?? String(v))))
     .join(", ");
 
+// xsi:type union dispatch on an occurrence's discriminant: the matching
+// derived variant, else the declared (first) option.
+const identityXsiMember = (
+  unionOptions: readonly AnySchema[],
+  occValue: unknown,
+  fallback: AnySchema,
+): AnySchema => {
+  const xsiType =
+    occValue !== null && typeof occValue === "object"
+      ? (occValue as Record<string, unknown>)[XSI_TYPE_FIELD]
+      : undefined;
+  const match =
+    typeof xsiType === "string"
+      ? unionOptions.find((option) => xsiTypeOptionQName(option) === xsiType)
+      : undefined;
+  return match ?? unionOptions[0] ?? fallback;
+};
+
 // The schema one occurrence was parsed with: member dispatch via the recorded
 // substitution tag, then xsi:type union dispatch via the xsiType discriminant.
 const identityOccurrenceSchema = (
@@ -2539,16 +2557,7 @@ const identityOccurrenceSchema = (
   }
   const union = xsiTypeUnionDef(item);
   if (union !== undefined) {
-    const options = union.options as readonly AnySchema[];
-    const xsiType =
-      occValue !== null && typeof occValue === "object"
-        ? (occValue as Record<string, unknown>)[XSI_TYPE_FIELD]
-        : undefined;
-    const match =
-      typeof xsiType === "string"
-        ? options.find((option) => xsiTypeOptionQName(option) === xsiType)
-        : undefined;
-    item = match ?? options[0] ?? item;
+    item = identityXsiMember(union.options as readonly AnySchema[], occValue, item);
   }
   return item;
 };
@@ -2728,8 +2737,9 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
 const identityFieldValue = (branches: IdentityPath[], node: IdentityNode): unknown => {
   for (const branch of branches) {
     const targets = identitySelect(branch, node);
-    // A valid restricted xpath yields at most one node per field; take the
-    // first rather than failing the document over a schema-level slip.
+    // A valid restricted xpath yields at most one node per field; a schema
+    // yielding several is in error per XSD, but take the first rather than
+    // failing the document over a schema-level slip.
     const first = targets[0];
     if (first === undefined) {
       continue;
@@ -2964,13 +2974,7 @@ const identityIssues = (rootSchema: AnySchema, data: unknown): z.core.$ZodIssue[
   let schema = peelOnce(rootSchema);
   const union = xsiTypeUnionDef(schema);
   if (union !== undefined && data !== null && typeof data === "object" && !Array.isArray(data)) {
-    const options = union.options as readonly AnySchema[];
-    const xsiType = (data as Record<string, unknown>)[XSI_TYPE_FIELD];
-    const match =
-      typeof xsiType === "string"
-        ? options.find((option) => xsiTypeOptionQName(option) === xsiType)
-        : undefined;
-    schema = match ?? options[0] ?? schema;
+    schema = identityXsiMember(union.options as readonly AnySchema[], data, schema);
   }
   walkIdentity(schema, data, [], meta?.identity ?? [], state);
   return state.issues;
