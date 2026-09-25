@@ -30,6 +30,8 @@ const TEST_SETS: W3cTestSetRef[] = [
   "msMeta/Group_w3c.xml",
   "msMeta/ModelGroups_w3c.xml",
   "msMeta/Particles_w3c.xml",
+  "msMeta/IdentityConstraint_w3c.xml",
+  "sunMeta/IdConstrDefs.testSet",
   "msMeta/DataTypes_w3c.xml",
   "msMeta/Schema_w3c.xml",
   "msMeta/Additional_w3c.xml",
@@ -62,6 +64,10 @@ const KNOWN_ANOMALIES = new Map<string, string>([
     "both tiers accept (needs triage — likely XSD 1.0/1.1 expectation difference)",
   ],
   ["Additional/addB066/addB066.i", "both tiers accept (needs triage)"],
+  [
+    "IdentityConstraint/idZ012/idZ012.i",
+    "both tiers accept (ID/IDREF/IDREFS referential semantics are not enforced — the dangling IDREFS default is out of scope)",
+  ],
 ]);
 
 // libxml2 verdict for one instance against the XSD whose targetNamespace

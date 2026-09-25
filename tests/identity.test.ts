@@ -580,4 +580,234 @@ describe("identity constraints", () => {
     );
     expect(expectFailure(dup)).toContain("duplicate key value");
   });
+
+  it("rejects a field xpath selecting more than one node", async () => {
+    const xsd = (constraint: string): string => `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="uid" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    ${constraint}
+  </xs:element>
+  <xs:element name="uid">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="pid" type="xs:string" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+    const doc = `<root><uid><pid>a</pid><pid>b</pid></uid></root>`;
+    const uniqueSchema = await schemaFor(
+      xsd(`<xs:unique name="u"><xs:selector xpath=".//uid"/><xs:field xpath="pid"/></xs:unique>`),
+      doc,
+    );
+    expect(expectFailure(safeParseXml(uniqueSchema, doc))).toContain("more than one node");
+    const keySchema = await schemaFor(
+      xsd(`<xs:key name="k"><xs:selector xpath=".//uid"/><xs:field xpath="pid"/></xs:key>`),
+      doc,
+    );
+    expect(expectFailure(safeParseXml(keySchema, doc))).toContain("more than one node");
+    // Exactly one pid per uid is fine.
+    expect(safeParseXml(uniqueSchema, `<root><uid><pid>a</pid></uid></root>`).success).toBe(true);
+  });
+
+  it("rejects a field target that is not simple-typed", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="uid" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="u">
+      <xs:selector xpath=".//uid"/>
+      <xs:field xpath="pid"/>
+    </xs:unique>
+  </xs:element>
+  <xs:element name="uid">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="pid">
+          <xs:complexType>
+            <xs:attribute name="p" type="xs:string"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<root><uid><pid p="1"/></uid></root>`,
+    );
+    expect(expectFailure(safeParseXml(schema, `<root><uid><pid p="1"/></uid></root>`))).toContain(
+      "not simple-typed",
+    );
+  });
+
+  it("matches identity xpath steps by instance tag, not substitution-group membership", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="t" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="tableu">
+      <xs:selector xpath=".//t"/>
+      <xs:field xpath="r"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="t">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="r"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="r" type="xs:string"/>
+  <xs:element name="r2" substitutionGroup="r" type="xs:string"/>
+</xs:schema>`,
+      `<root><t><r>1</r></t></root>`,
+    );
+    // r2 substitutes for r in the content model, but the field xpath "r" does
+    // not match an r2 tag: the key field is absent there.
+    const missing = safeParseXml(schema, `<root><t><r>1</r></t><t><r2>2</r2></t></root>`);
+    expect(expectFailure(missing)).toContain('xs:key "tableu"');
+    expect(safeParseXml(schema, `<root><t><r>1</r></t><t><r>2</r></t></root>`).success).toBe(true);
+  });
+
+  it("compares xsi:type values per primitive type family", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="uid" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="uuid">
+      <xs:selector xpath=".//uid"/>
+      <xs:field xpath="."/>
+    </xs:unique>
+  </xs:element>
+  <xs:element name="uid" type="xs:anyType"/>
+</xs:schema>`,
+      `<root><uid>1</uid></root>`,
+    );
+    const decl = `xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // unsignedByte derives from decimal: same primitive family, same value.
+    const dup = safeParseXml(
+      schema,
+      `<root ${decl}><uid xsi:type="xs:decimal">1</uid><uid xsi:type="xs:unsignedByte">1</uid></root>`,
+    );
+    expect(expectFailure(dup)).toContain('xs:unique "uuid"');
+    // float and double are distinct primitives: not equal.
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${decl}><uid xsi:type="xs:float">1</uid><uid xsi:type="xs:double">1</uid></root>`,
+      ).success,
+    ).toBe(true);
+  });
+
+  it("supports NameTest wildcards in selector and field xpaths", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified" attributeFormDefault="qualified">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element ref="t:row" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:key name="anyChild">
+      <xs:selector xpath=".//t:*"/>
+      <xs:field xpath="@t:*"/>
+    </xs:key>
+    <xs:unique name="singleChild">
+      <xs:selector xpath=".//t:row"/>
+      <xs:field xpath="*"/>
+    </xs:unique>
+  </xs:element>
+  <xs:element name="row">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="cell" type="xs:string" minOccurs="0"/>
+        <xs:element name="cell2" type="xs:string" minOccurs="0"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:string"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<t:root xmlns:t="urn:t"><t:row t:id="1"/></t:root>`,
+    );
+    expect(
+      safeParseXml(schema, `<t:root xmlns:t="urn:t"><t:row t:id="1"/><t:row t:id="2"/></t:root>`)
+        .success,
+    ).toBe(true);
+    // @t:* picks up the one qualified attribute on each row: duplicate key.
+    const dup = safeParseXml(
+      schema,
+      `<t:root xmlns:t="urn:t"><t:row t:id="1"/><t:row t:id="1"/></t:root>`,
+    );
+    expect(expectFailure(dup)).toContain('xs:key "anyChild"');
+    // The * field matches a row's single cell; with two children it selects
+    // more than one node.
+    expect(
+      safeParseXml(
+        schema,
+        `<t:root xmlns:t="urn:t"><t:row t:id="1"><t:cell>a</t:cell></t:row><t:row t:id="2"><t:cell>a</t:cell></t:row></t:root>`,
+      ).success,
+    ).toBe(false);
+    const multi = safeParseXml(
+      schema,
+      `<t:root xmlns:t="urn:t"><t:row t:id="1"><t:cell>a</t:cell><t:cell2>b</t:cell2></t:row></t:root>`,
+    );
+    expect(expectFailure(multi)).toContain("more than one node");
+  });
+
+  it("counts xsi:nil among the @* attributes of a nil element", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element ref="row" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:key name="rowKey">
+      <xs:selector xpath=".//row"/>
+      <xs:field xpath="@*"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="row" nillable="true">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="id" type="xs:string"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<root><row id="1"/></root>`,
+    );
+    const xsi = `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // @* matches both id and xsi:nil on a nil element: more than one node.
+    const multi = safeParseXml(schema, `<root ${xsi}><row id="1" xsi:nil="true"/></root>`);
+    expect(expectFailure(multi)).toContain("more than one node");
+    // A non-nil row carries only id.
+    expect(
+      safeParseXml(schema, `<root><row id="1">x</row><row id="2">y</row></root>`).success,
+    ).toBe(true);
+  });
 });

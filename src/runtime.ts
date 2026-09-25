@@ -18,6 +18,7 @@ import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -520,6 +521,65 @@ const valuesEqual = (a: unknown, b: unknown): boolean => {
     return a.length === b.length && a.every((item, i) => valuesEqual(item, b[i]));
   }
   return a === b;
+};
+
+// Value-space form of an open-content lexical under its instance xsi:type
+// (XSD §3.11.1: equal values share a primitive type, and equal values of one
+// type compare equal — decimal "3.0" is decimal "3.00"). Numerics and booleans
+// coerce to their JS values, date/time builtins canonicalize; anything else
+// (strings, QNames, unknown namespaces) keeps the lexical. Failures fall back
+// to the lexical so an invalid value never breaks the identity pass.
+const STRUCTURED_IDENTITY_TYPES: ReadonlySet<string> = new Set([
+  "date",
+  "dateTime",
+  "time",
+  "gYear",
+  "gYearMonth",
+  "gMonth",
+  "gMonthDay",
+  "gDay",
+  "duration",
+]);
+const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
+  if (typeof lexical !== "string") {
+    return lexical;
+  }
+  if (!xsiType.startsWith("{http://www.w3.org/2001/XMLSchema}")) {
+    return lexical;
+  }
+  const local = splitClark(xsiType).local;
+  try {
+    if (local === "boolean") {
+      return coerceBoolean(lexical);
+    }
+    if (XSD_BIGINT_TYPE_NAMES.has(local)) {
+      return coerceBigInt(lexical);
+    }
+    if (XSD_SAFE_INTEGER_TYPE_NAMES.has(local)) {
+      const trimmed = lexical.trim();
+      if (!INTEGER_LEXICAL.test(trimmed)) {
+        throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(lexical)}`);
+      }
+      return Number(trimmed);
+    }
+    if (local === "decimal") {
+      const trimmed = lexical.trim();
+      if (!FLOAT_LEXICAL.test(trimmed)) {
+        throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
+      }
+      return Number(trimmed);
+    }
+    if (local === "float" || local === "double") {
+      return coerceNumberValue(lexical.trim());
+    }
+    if (STRUCTURED_IDENTITY_TYPES.has(local)) {
+      const datatype = local as XsdDatatypeName;
+      return writeXsdDatatype(datatype, parseXsdDatatype(datatype, lexical));
+    }
+  } catch {
+    return lexical;
+  }
+  return lexical;
 };
 
 // Enumeration membership is a value-space compare, both sides prepared the
@@ -2527,6 +2587,12 @@ const writeObjectFields = (
 // Field-value extraction yields this for absent/nil/non-simple targets;
 // xs:key reports it, xs:unique and xs:keyref skip the node (XSD §3.11.4).
 const IDENTITY_ABSENT: unique symbol = Symbol("identity-absent");
+// A field xpath matching more than one node is a violation for every kind
+// (§3.11.4: a key sequence needs exactly one value per field).
+const IDENTITY_MULTIPLE: unique symbol = Symbol("identity-multiple");
+// A field target that is not simple-typed (element with complex content)
+// cannot contribute to a key sequence — a violation for every kind.
+const IDENTITY_COMPLEX: unique symbol = Symbol("identity-complex");
 
 type IdentityNode = {
   value: unknown;
@@ -2646,10 +2712,21 @@ const identityOccurrenceSchema = (
   return item;
 };
 
-// Element children of a data node, filtered by step qname (all children when
-// undefined): declared fields via the fields meta, plus open-shape extras,
-// which are keyed by their Clark qname already.
-const identityChildren = (node: IdentityNode, qname: QName | undefined): IdentityNode[] => {
+// Element children of a data node: declared fields via the fields meta, plus
+// open-shape extras, which are keyed by their Clark qname already. Filter by
+// exact step qname, or by namespace for an `ns:*` step (both undefined: all
+// children). A substitution-group occurrence is exposed under its actual
+// member tag — identity xpaths match instance tags, substitution-group
+// membership does not apply.
+const identityChildren = (
+  node: IdentityNode,
+  qname: QName | undefined,
+  namespace?: string,
+): IdentityNode[] => {
+  const matches = (childQName: QName): boolean =>
+    qname === undefined
+      ? namespace === undefined || splitClark(childQName).namespace === namespace
+      : childQName === qname;
   const { value } = node;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return [];
@@ -2663,9 +2740,10 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
     const qnameNsRecord = qnameNsStore.get(obj);
     const xsiTypeRecord = openXsiTypeStore.get(obj);
     const nilRecord = nilAttributeStore.get(obj);
+    const substRecord = substQNameStore.get(obj);
     for (const [key, fieldMeta] of Object.entries(fields)) {
       declaredKeys.add(key);
-      if (fieldMeta.kind !== "element" || (qname !== undefined && fieldMeta.qname !== qname)) {
+      if (fieldMeta.kind !== "element") {
         continue;
       }
       const fieldValue = obj[key];
@@ -2676,11 +2754,17 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
       const isArray = Array.isArray(fieldValue);
       const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
       const bindings = qnameNsRecord?.get(key);
+      const storedTags = substRecord?.get(key);
       occurrences.forEach((occ, i) => {
+        const effectiveQName = ((Array.isArray(storedTags) ? storedTags[i] : storedTags) ??
+          fieldMeta.qname) as QName;
+        if (!matches(effectiveQName)) {
+          return;
+        }
         out.push({
           value: occ,
           schema: identityOccurrenceSchema(fieldSchema, obj, key, occ, i),
-          qname: fieldMeta.qname,
+          qname: effectiveQName,
           path: [...node.path, key, ...(isArray ? [i] : [])],
           qnameNs: Array.isArray(bindings) ? bindings[i] : bindings,
           xsiType: xsiTypeRecord?.get(key)?.[i],
@@ -2693,7 +2777,7 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
     if (declaredKeys.has(key) || !key.startsWith("{")) {
       continue;
     }
-    if (qname !== undefined && key !== qname) {
+    if (!matches(key as QName)) {
       continue;
     }
     const isArray = Array.isArray(entryValue);
@@ -2750,6 +2834,73 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
     : { value: openValue, schema: undefined, qname, path: node.path };
 };
 
+// All attribute nodes of a data node (the `@*`/`@ns:*` field steps): declared
+// attributes via the fields meta, open-shape extras, nil-captured attributes.
+// XPath's @* covers xsi:nil too — a nil node contributes it implicitly.
+const identityAttributeNodes = (node: IdentityNode, namespace?: string): IdentityNode[] => {
+  const inNamespace = (clark: string): boolean =>
+    namespace === undefined || splitClark(clark).namespace === namespace;
+  const { value } = node;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    const out: IdentityNode[] = (node.nilAttributes ?? [])
+      .filter(([clark]) => inNamespace(clark))
+      .map(([clark, lexical]) => ({
+        value: lexical,
+        schema: undefined,
+        qname: clark as QName,
+        path: node.path,
+      }));
+    if (value === null && inNamespace(`{${XSI_NS}}nil`)) {
+      out.push({
+        value: "true",
+        schema: undefined,
+        qname: `{${XSI_NS}}nil`,
+        path: node.path,
+      });
+    }
+    return out;
+  }
+  const obj = value as Record<string, unknown>;
+  const out: IdentityNode[] = [];
+  const declaredKeys = new Set<string>();
+  const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+  if (fields !== undefined) {
+    const shape = objectDefOf(node.schema as AnySchema)?.shape ?? {};
+    for (const [key, fieldMeta] of Object.entries(fields)) {
+      declaredKeys.add(key);
+      if (fieldMeta.kind !== "attribute" || !inNamespace(fieldMeta.qname)) {
+        continue;
+      }
+      const attrValue = obj[key];
+      if (attrValue === undefined) {
+        continue;
+      }
+      const bindings = qnameNsStore.get(obj)?.get(key);
+      out.push({
+        value: attrValue,
+        schema: shape[key],
+        qname: fieldMeta.qname,
+        path: node.path,
+        qnameNs: Array.isArray(bindings) ? undefined : bindings,
+      });
+    }
+  }
+  for (const [key, openValue] of Object.entries(obj)) {
+    if (declaredKeys.has(key) || !key.startsWith("@")) {
+      continue;
+    }
+    if (openValue !== undefined && inNamespace(key.slice(1))) {
+      out.push({
+        value: openValue,
+        schema: undefined,
+        qname: key.slice(1) as QName,
+        path: node.path,
+      });
+    }
+  }
+  return out;
+};
+
 // Evaluate one restricted-xpath branch against a context node.
 const identitySelect = (path: IdentityPath, contextNode: IdentityNode): IdentityNode[] => {
   let current: IdentityNode[] = [contextNode];
@@ -2762,12 +2913,18 @@ const identitySelect = (path: IdentityPath, contextNode: IdentityNode): Identity
       if (step.axis === "attribute") {
         // Attribute steps are only legal as the last xs:field step (enforced
         // at parse time); the value rides as a leaf node.
+        if ("wildcard" in step) {
+          next.push(...identityAttributeNodes(node, step.namespace));
+          continue;
+        }
         const attr = identityAttributeNode(node, step.qname);
         if (attr !== undefined) {
           next.push(attr);
         }
         continue;
       }
+      const stepQname = "wildcard" in step ? undefined : step.qname;
+      const stepNs = "wildcard" in step ? step.namespace : undefined;
       if (i === 0 && path.descendant) {
         // Leading .//: the step matches at any depth below the context node.
         const stack = identityChildren(node, undefined);
@@ -2776,35 +2933,98 @@ const identitySelect = (path: IdentityPath, contextNode: IdentityNode): Identity
           if (desc === undefined) {
             break;
           }
-          if (desc.qname === step.qname) {
+          if (
+            stepQname === undefined
+              ? stepNs === undefined || splitClark(desc.qname ?? "{}").namespace === stepNs
+              : desc.qname === stepQname
+          ) {
             next.push(desc);
           }
           stack.push(...identityChildren(desc, undefined));
         }
         continue;
       }
-      next.push(...identityChildren(node, step.qname));
+      next.push(...identityChildren(node, stepQname, stepNs));
     }
     current = next;
   }
   return current;
 };
 
+// The primitive datatype an xsi:type belongs to for identity comparison
+// (§3.11.1: values of related types compare in the base's value space —
+// unsignedByte "1" is decimal "1"; values of different primitives never
+// compare equal — float "1" is not double "1"). Non-XSD types keep their
+// exact qname.
+const XSD_DECIMAL_FAMILY = new Set([
+  "decimal",
+  "integer",
+  "nonPositiveInteger",
+  "negativeInteger",
+  "long",
+  "int",
+  "short",
+  "byte",
+  "nonNegativeInteger",
+  "unsignedLong",
+  "unsignedInt",
+  "unsignedShort",
+  "unsignedByte",
+  "positiveInteger",
+]);
+const XSD_STRING_FAMILY = new Set([
+  "string",
+  "normalizedString",
+  "token",
+  "language",
+  "NMTOKEN",
+  "NMTOKENS",
+  "Name",
+  "NCName",
+  "ID",
+  "IDREF",
+  "IDREFS",
+  "ENTITY",
+  "ENTITIES",
+]);
+const xsdIdentityFamily = (typeQName: string): string => {
+  const { namespace, local } = splitClark(typeQName);
+  if (namespace !== "http://www.w3.org/2001/XMLSchema") {
+    return typeQName;
+  }
+  if (XSD_DECIMAL_FAMILY.has(local)) {
+    return "{http://www.w3.org/2001/XMLSchema}decimal";
+  }
+  if (XSD_STRING_FAMILY.has(local)) {
+    return "{http://www.w3.org/2001/XMLSchema}string";
+  }
+  return typeQName;
+};
+
 // The schema-normalized simple value of a field target: scalars as-is,
 // objects through their text field (simple content). whiteSpace-collapsed
 // types compare their collapsed form; QName-typed values resolve to their
-// Clark form so equal QNames written with different prefixes match. Anything
-// else is ABSENT.
+// Clark form so equal QNames written with different prefixes match. A target
+// with complex content is COMPLEX (a violation, §3.11.4); a nil/absent one
+// is ABSENT.
 const identitySimpleValue = (node: IdentityNode): unknown => {
   const { value } = node;
   if (value === null || value === undefined) {
     return IDENTITY_ABSENT;
   }
-  // An xsi:type-annotated open value compares under that datatype (§3.11.1:
-  // equal values must share a primitive type — boolean "1" is not decimal "1").
+  // An xsi:type-annotated open value compares under its primitive datatype
+  // (§3.11.1: equal values must share a primitive type — boolean "1" is not
+  // decimal "1"; equal values of one family compare equal — unsignedByte "1"
+  // is decimal "1", and decimal "3.0" is decimal "3.00").
   if (node.xsiType !== undefined) {
     const simple = identitySimpleValue({ ...node, xsiType: undefined });
-    return simple === IDENTITY_ABSENT ? simple : { $xsiType: node.xsiType, $value: simple };
+    if (simple === IDENTITY_ABSENT || simple === IDENTITY_COMPLEX) {
+      return simple;
+    }
+    return {
+      $xsiType: xsdIdentityFamily(node.xsiType),
+      $value: openIdentityValue(simple, node.xsiType),
+    };
   }
   if (typeof value === "string") {
     if (node.qnameNs !== undefined) {
@@ -2831,25 +3051,33 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
       }
     }
   }
-  return IDENTITY_ABSENT;
+  // An object without simple content is a complex-typed field target.
+  return IDENTITY_COMPLEX;
 };
 
+// One field's value for a selected node: the union of all branch targets.
+// Zero targets is ABSENT (key reports, unique/keyref skip); more than one is
+// a violation per §3.11.4 (a key sequence needs exactly one value per field).
 const identityFieldValue = (branches: IdentityPath[], node: IdentityNode): unknown => {
+  const targets: IdentityNode[] = [];
+  const seen = new Set<string>();
   for (const branch of branches) {
-    const targets = identitySelect(branch, node);
-    // A valid restricted xpath yields at most one node per field; a schema
-    // yielding several is in error per XSD, but take the first rather than
-    // failing the document over a schema-level slip.
-    const first = targets[0];
-    if (first === undefined) {
-      continue;
-    }
-    const value = identitySimpleValue(first);
-    if (value !== IDENTITY_ABSENT) {
-      return value;
+    for (const target of identitySelect(branch, node)) {
+      const key = `${identityPathString(target.path)}|${target.qname ?? ""}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push(target);
+      }
     }
   }
-  return IDENTITY_ABSENT;
+  if (targets.length === 0) {
+    return IDENTITY_ABSENT;
+  }
+  const first = targets[0];
+  if (targets.length > 1 || first === undefined) {
+    return IDENTITY_MULTIPLE;
+  }
+  return identitySimpleValue(first);
 };
 
 const identityPathString = (path: readonly (string | number)[]): string => JSON.stringify(path);
@@ -2914,6 +3142,35 @@ const identitySelectedNodes = (
   return out;
 };
 
+// A field that matched several nodes, or a complex-typed target, is a
+// violation for every constraint kind (§3.11.4: a key sequence needs exactly
+// one simple value per field). Returns the issue, or undefined when the
+// tuple is usable (ABSENT entries are the caller's kind-specific concern).
+const identityFieldIssue = (
+  constraint: IdentityConstraint,
+  tuple: unknown[],
+  node: IdentityNode,
+): z.core.$ZodIssue | undefined => {
+  const local = splitClark(constraint.name).local;
+  if (tuple.some((v) => v === IDENTITY_MULTIPLE)) {
+    return {
+      code: "custom",
+      message: `xs:${constraint.kind} "${local}": a field xpath selects more than one node`,
+      path: [...node.path],
+      input: node.value,
+    };
+  }
+  if (tuple.some((v) => v === IDENTITY_COMPLEX)) {
+    return {
+      code: "custom",
+      message: `xs:${constraint.kind} "${local}": a field target is not simple-typed`,
+      path: [...node.path],
+      input: node.value,
+    };
+  }
+  return undefined;
+};
+
 // Uniqueness and presence are enforced on the constraint's own qualified node
 // set; the table returned for upward propagation additionally carries the
 // children's entries (merged by the caller).
@@ -2926,6 +3183,11 @@ const evaluateUniqueOrKey = (
   const localEntries = new Map<string, string>();
   for (const node of identitySelectedNodes(constraint, scopeNode)) {
     const tuple = constraint.fields.map((f) => identityFieldValue(f, node));
+    const fieldIssue = identityFieldIssue(constraint, tuple, node);
+    if (fieldIssue !== undefined) {
+      state.issues.push(fieldIssue);
+      continue;
+    }
     if (tuple.some((v) => v === IDENTITY_ABSENT)) {
       if (constraint.kind === "key") {
         state.issues.push({
@@ -2966,6 +3228,11 @@ const evaluateKeyref = (
   const referLocal = splitClark(refer).local;
   for (const node of identitySelectedNodes(constraint, scopeNode)) {
     const tuple = constraint.fields.map((f) => identityFieldValue(f, node));
+    const fieldIssue = identityFieldIssue(constraint, tuple, node);
+    if (fieldIssue !== undefined) {
+      state.issues.push(fieldIssue);
+      continue;
+    }
     if (tuple.some((v) => v === IDENTITY_ABSENT)) {
       continue;
     }

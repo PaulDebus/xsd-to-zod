@@ -2,6 +2,10 @@
 export type IdentityStep =
   | { axis: "child"; qname: QName }
   | { axis: "attribute"; qname: QName }
+  // NameTest wildcards (legal in xs:field xpaths only): `*`/`@*` match
+  // everything, `ns:*`/`@ns:*` everything in one namespace.
+  | { axis: "child"; wildcard: true; namespace?: string | undefined }
+  | { axis: "attribute"; wildcard: true; namespace?: string | undefined }
   | { axis: "self" };
 
 /** One union branch of an identity-constraint xpath. */
