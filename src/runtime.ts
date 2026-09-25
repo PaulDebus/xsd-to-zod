@@ -18,6 +18,7 @@ import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
@@ -522,6 +523,65 @@ const valuesEqual = (a: unknown, b: unknown): boolean => {
   return a === b;
 };
 
+// Value-space form of an open-content lexical under its instance xsi:type
+// (XSD §3.11.1: equal values share a primitive type, and equal values of one
+// type compare equal — decimal "3.0" is decimal "3.00"). Numerics and booleans
+// coerce to their JS values, date/time builtins canonicalize; anything else
+// (strings, QNames, unknown namespaces) keeps the lexical. Failures fall back
+// to the lexical so an invalid value never breaks the identity pass.
+const STRUCTURED_IDENTITY_TYPES: ReadonlySet<string> = new Set([
+  "date",
+  "dateTime",
+  "time",
+  "gYear",
+  "gYearMonth",
+  "gMonth",
+  "gMonthDay",
+  "gDay",
+  "duration",
+]);
+const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
+  if (typeof lexical !== "string") {
+    return lexical;
+  }
+  if (!xsiType.startsWith("{http://www.w3.org/2001/XMLSchema}")) {
+    return lexical;
+  }
+  const local = splitClark(xsiType).local;
+  try {
+    if (local === "boolean") {
+      return coerceBoolean(lexical);
+    }
+    if (XSD_BIGINT_TYPE_NAMES.has(local)) {
+      return coerceBigInt(lexical);
+    }
+    if (XSD_SAFE_INTEGER_TYPE_NAMES.has(local)) {
+      const trimmed = lexical.trim();
+      if (!INTEGER_LEXICAL.test(trimmed)) {
+        throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(lexical)}`);
+      }
+      return Number(trimmed);
+    }
+    if (local === "decimal") {
+      const trimmed = lexical.trim();
+      if (!FLOAT_LEXICAL.test(trimmed)) {
+        throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
+      }
+      return Number(trimmed);
+    }
+    if (local === "float" || local === "double") {
+      return coerceNumberValue(lexical.trim());
+    }
+    if (STRUCTURED_IDENTITY_TYPES.has(local)) {
+      const datatype = local as XsdDatatypeName;
+      return writeXsdDatatype(datatype, parseXsdDatatype(datatype, lexical));
+    }
+  } catch {
+    return lexical;
+  }
+  return lexical;
+};
+
 // Enumeration membership is a value-space compare, both sides prepared the
 // same way: date/time builtins canonicalize (-00:00 equals +00:00), anything
 // else compares the coerced JS values (decimal 1.0 equals 1.00).
@@ -635,7 +695,8 @@ const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>
 // Attributes of xsi:nil occurrences: the nil collapse to null drops them, but
 // XSD still evaluates attribute key fields on nil elements — container object
 // → field key → per-occurrence [Clark qname, lexical] pairs.
-const nilAttributeStore = new WeakMap<object, Map<string, ([string, string][] | undefined)[]>>();
+type NilAttr = [clark: string, lexical: string];
+const nilAttributeStore = new WeakMap<object, Map<string, (NilAttr[] | undefined)[]>>();
 
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
@@ -664,12 +725,7 @@ const recordQNameNs = (
   key: string,
   bindings: Record<string, string> | (Record<string, string> | undefined)[],
 ): void => {
-  let record = qnameNsStore.get(container);
-  if (record === undefined) {
-    record = new Map();
-    qnameNsStore.set(container, record);
-  }
-  record.set(key, bindings);
+  recordInto(qnameNsStore, container, key, bindings);
 };
 
 // Simple-typed roots have no containing object — keyed by the root schema,
@@ -705,6 +761,26 @@ const recordLexical = (
 // zod's safeParse rebuilds the data tree, so entries keyed by the walked
 // objects would be unreachable from the validated result. The two trees are
 // structurally isomorphic — re-key by position.
+const transferRecord = <V>(
+  store: WeakMap<object, Map<string, V>>,
+  walked: object,
+  parsed: object,
+): void => {
+  const record = store.get(walked);
+  if (record !== undefined) {
+    store.delete(walked);
+    store.set(parsed, record);
+  }
+};
+
+// One occurrence of an index-aligned side channel:
+// container object → field key → occurrence index.
+const occurrenceAt = <V>(
+  store: WeakMap<object, Map<string, (V | undefined)[]>>,
+  obj: object,
+  key: string,
+  index: number,
+): V | undefined => store.get(obj)?.get(key)?.[index];
 const transferLexicals = (walked: unknown, parsed: unknown): void => {
   if (
     walked === null ||
@@ -714,23 +790,11 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   ) {
     return;
   }
-  for (const store of [lexicalStore, substQNameStore, openXsiTypeStore]) {
-    const record = store.get(walked);
-    if (record !== undefined) {
-      store.delete(walked);
-      store.set(parsed, record);
-    }
-  }
-  const nilRecord = nilAttributeStore.get(walked);
-  if (nilRecord !== undefined) {
-    nilAttributeStore.delete(walked);
-    nilAttributeStore.set(parsed, nilRecord);
-  }
-  const qnameRecord = qnameNsStore.get(walked);
-  if (qnameRecord !== undefined) {
-    qnameNsStore.delete(walked);
-    qnameNsStore.set(parsed, qnameRecord);
-  }
+  transferRecord(lexicalStore, walked, parsed);
+  transferRecord(substQNameStore, walked, parsed);
+  transferRecord(openXsiTypeStore, walked, parsed);
+  transferRecord(nilAttributeStore, walked, parsed);
+  transferRecord(qnameNsStore, walked, parsed);
   documentOrderTracker.transfer(walked, parsed);
   const xsiCapture = xsiCaptureStore.get(walked);
   if (xsiCapture !== undefined) {
@@ -1465,9 +1529,9 @@ const substituteEmpty = (
 const nilAttributesOf = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
-): [string, string][] | undefined => {
+): NilAttr[] | undefined => {
   const context = withNamespaceContext(namespaceContext, node);
-  const attributes: [string, string][] = [];
+  const attributes: NilAttr[] = [];
   for (const [key, raw] of Object.entries(node)) {
     if (!key.startsWith("@_") || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
       continue;
@@ -1496,7 +1560,7 @@ const readOccurrence = (
   /** xsi:type of an open-content occurrence, resolved to Clark notation. */
   openXsiType?: string | undefined;
   /** Attributes of a nil occurrence (see nilAttributesOf). */
-  nilAttributes?: [string, string][] | undefined;
+  nilAttributes?: NilAttr[] | undefined;
 } => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
@@ -1605,7 +1669,7 @@ type FieldRead = {
   /** Per-occurrence xsi:type of open content (Clark), index-aligned. */
   openXsiTypes?: (string | undefined)[];
   /** Per-occurrence attributes of nil elements, index-aligned. */
-  nilAttributes?: ([string, string][] | undefined)[];
+  nilAttributes?: (NilAttr[] | undefined)[];
   /**
    * Raw parser-node occurrences the field claimed, index-aligned with the
    * produced value(s) — readObject maps them onto document-order positions.
@@ -2312,7 +2376,7 @@ const writeObjectFields = (
       usesXsi = true;
       // Nil attributes captured at parse time (identity key fields survive
       // xsi:nil) re-emit alongside the nil marker.
-      const nilAttrs = (nilAttributeStore.get(obj)?.get(key)?.[i] ?? []).map(
+      const nilAttrs = (occurrenceAt<NilAttr[]>(nilAttributeStore, obj, key, i) ?? []).map(
         ([clark, lexical]) =>
           `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
       );
@@ -2323,7 +2387,7 @@ const writeObjectFields = (
       const inner = openSerialize(item, ctx);
       usesXsi = usesXsi || inner.usesXsi;
       // Captured xsi:type of the open occurrence (see openXsiTypeStore).
-      const openXsiType = openXsiTypeStore.get(obj)?.get(key)?.[i];
+      const openXsiType = occurrenceAt<string>(openXsiTypeStore, obj, key, i);
       const attrs = [...inner.attributes];
       if (openXsiType !== undefined) {
         usesXsi = true;
@@ -2365,7 +2429,7 @@ const writeObjectFields = (
     // datatype, and dropping it would change identity-constraint semantics
     // on re-parse.
     const simpleXsiType =
-      fieldMeta.anySimpleType === true ? openXsiTypeStore.get(obj)?.get(key)?.[i] : undefined;
+      fieldMeta.anySimpleType === true ? occurrenceAt<string>(openXsiTypeStore, obj, key, i) : undefined;
     const typeAttr =
       simpleXsiType === undefined
         ? ""
@@ -2542,7 +2606,7 @@ type IdentityNode = {
    */
   xsiType?: string | undefined;
   /** Attributes of a nil occurrence — nil collapses content, not attributes. */
-  nilAttributes?: [string, string][] | undefined;
+  nilAttributes?: NilAttr[] | undefined;
 };
 
 // One element occurrence's identity-constraint table: per constraint name,
@@ -2661,8 +2725,6 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
   const shape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
   if (fields !== undefined) {
     const qnameNsRecord = qnameNsStore.get(obj);
-    const xsiTypeRecord = openXsiTypeStore.get(obj);
-    const nilRecord = nilAttributeStore.get(obj);
     for (const [key, fieldMeta] of Object.entries(fields)) {
       declaredKeys.add(key);
       if (fieldMeta.kind !== "element" || (qname !== undefined && fieldMeta.qname !== qname)) {
@@ -2683,8 +2745,8 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
           qname: fieldMeta.qname,
           path: [...node.path, key, ...(isArray ? [i] : [])],
           qnameNs: Array.isArray(bindings) ? bindings[i] : bindings,
-          xsiType: xsiTypeRecord?.get(key)?.[i],
-          nilAttributes: nilRecord?.get(key)?.[i],
+          xsiType: occurrenceAt<string>(openXsiTypeStore, obj, key, i),
+          nilAttributes: occurrenceAt<NilAttr[]>(nilAttributeStore, obj, key, i),
         });
       });
     }
@@ -2704,7 +2766,7 @@ const identityChildren = (node: IdentityNode, qname: QName | undefined): Identit
         schema: undefined,
         qname: key as QName,
         path: [...node.path, key, ...(isArray ? [i] : [])],
-        xsiType: openXsiTypeStore.get(obj)?.get(key)?.[i],
+        xsiType: occurrenceAt<string>(openXsiTypeStore, obj, key, i),
       });
     });
   }
@@ -2717,9 +2779,34 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
     // A nil element's attributes survive the collapse to null in the side
     // channel — XSD evaluates attribute fields of nil elements normally.
     const found = node.nilAttributes?.find(([clark]) => clark === qname);
-    return found === undefined
-      ? undefined
-      : { value: found[1], schema: undefined, qname, path: node.path };
+    if (found === undefined) {
+      return undefined;
+    }
+    // Typed key fields compare in value space like the non-nil path (int "01"
+    // is int "1"); QName-typed attributes keep the lexical since the side
+    // channel doesn't retain their prefix bindings.
+    const nilFields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+    let nilSchema: AnySchema | undefined;
+    if (nilFields !== undefined) {
+      const nilShape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
+      for (const [key, fieldMeta] of Object.entries(nilFields)) {
+        if (fieldMeta.kind === "attribute" && fieldMeta.qname === qname) {
+          if (fieldMeta.qnameValue !== true) {
+            nilSchema = nilShape[key];
+          }
+          break;
+        }
+      }
+    }
+    let nilValue: unknown = found[1];
+    if (nilSchema !== undefined) {
+      try {
+        nilValue = coerceLexical(found[1], nilSchema);
+      } catch {
+        nilValue = found[1];
+      }
+    }
+    return { value: nilValue, schema: nilSchema, qname, path: node.path };
   }
   const obj = value as Record<string, unknown>;
   const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
@@ -2801,10 +2888,14 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
     return IDENTITY_ABSENT;
   }
   // An xsi:type-annotated open value compares under that datatype (§3.11.1:
-  // equal values must share a primitive type — boolean "1" is not decimal "1").
+  // equal values must share a primitive type — boolean "1" is not decimal "1";
+  // equal values of one type compare equal — decimal "3.0" is decimal "3.00").
   if (node.xsiType !== undefined) {
     const simple = identitySimpleValue({ ...node, xsiType: undefined });
-    return simple === IDENTITY_ABSENT ? simple : { $xsiType: node.xsiType, $value: simple };
+    if (simple === IDENTITY_ABSENT) {
+      return simple;
+    }
+    return { $xsiType: node.xsiType, $value: openIdentityValue(simple, node.xsiType) };
   }
   if (typeof value === "string") {
     if (node.qnameNs !== undefined) {

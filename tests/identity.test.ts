@@ -508,6 +508,12 @@ describe("identity constraints", () => {
       `<root ${decl}><uid xsi:type="xs:string">1</uid><uid xsi:type="xs:string">1</uid></root>`,
     );
     expect(expectFailure(dup)).toContain('xs:unique "uuid"');
+    // Same datatype, different lexicals, same value: still a duplicate.
+    const lexDup = safeParseXml(
+      schema,
+      `<root ${decl}><uid xsi:type="xs:decimal">3.0</uid><uid xsi:type="xs:decimal">3.00</uid></root>`,
+    );
+    expect(expectFailure(lexDup)).toContain('xs:unique "uuid"');
   });
 
   it("compares xs:anySimpleType keys per their xsi:type datatype", async () => {
@@ -537,6 +543,20 @@ describe("identity constraints", () => {
       `<root ${decl}><number xsi:type="xs:decimal">3.0</number><number xsi:type="xs:decimal">3.0</number></root>`,
     );
     expect(expectFailure(dup)).toContain("duplicate key value");
+    // Same datatype, different lexicals, same value: still a duplicate.
+    const lexDup = safeParseXml(
+      schema,
+      `<root ${decl}><number xsi:type="xs:decimal">3.0</number><number xsi:type="xs:decimal">3.00</number></root>`,
+    );
+    expect(expectFailure(lexDup)).toContain("duplicate key value");
+    // Round-trip: the serializer re-emits xsi:type so re-parse keeps the types.
+    const parsed = parseXml(
+      schema,
+      `<root ${decl}><number xsi:type="xs:decimal">3.0</number></root>`,
+    );
+    const reserialized = serializeXml(schema, parsed);
+    expect(reserialized).toContain("xsi:type");
+    expect(safeParseXml(schema, reserialized).success).toBe(true);
   });
 
   it("evaluates attribute key fields of nil elements", async () => {
@@ -577,6 +597,54 @@ describe("identity constraints", () => {
     const dup = safeParseXml(
       schema,
       `<root ${xsi}><row id="1" xsi:nil="true"/><row id="1" xsi:nil="true"/></root>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+    // Round-trip: the serializer re-emits the nil attributes next to xsi:nil.
+    const parsed = parseXml(schema, `<root ${xsi}><row id="1" xsi:nil="true"/></root>`);
+    const reserialized = serializeXml(schema, parsed);
+    expect(reserialized).toContain('id="1"');
+    expect(reserialized).toContain("xsi:nil");
+    expect(safeParseXml(schema, reserialized).success).toBe(true);
+  });
+
+  it("compares typed attribute key fields of nil elements in value space", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element ref="row" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:key name="rowKey">
+      <xs:selector xpath=".//row"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="row" nillable="true">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="id" type="xs:int"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<root><row id="1"/></root>`,
+    );
+    const xsi = `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${xsi}><row id="1" xsi:nil="true"/><row id="2" xsi:nil="true"/></root>`,
+      ).success,
+    ).toBe(true);
+    // Same value, different lexicals: still a duplicate.
+    const dup = safeParseXml(
+      schema,
+      `<root ${xsi}><row id="01" xsi:nil="true"/><row id="1" xsi:nil="true"/></root>`,
     );
     expect(expectFailure(dup)).toContain("duplicate key value");
   });
