@@ -404,6 +404,33 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
+  it("counts xs:ID/IDREF usage as dropped referential semantics", async () => {
+    const XSD_WITH_IDREFS = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:attribute name="refs" type="xs:IDREFS"/>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="maybeId">
+    <xs:union memberTypes="xs:ID xs:string"/>
+  </xs:simpleType>
+  <xs:simpleType name="idList">
+    <xs:list itemType="xs:IDREF"/>
+  </xs:simpleType>
+</xs:schema>`;
+
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD_WITH_IDREFS);
+      const ir = await parseXsd([file]);
+      expect(ir.unenforcedConstructs.dropped).toEqual({
+        "xs:ID uniqueness": 1,
+        "xs:IDREF referential integrity": 2,
+      });
+    });
+  });
+
   it("reports unresolved references and unknown prefixes instead of silently dropping them (#77)", async () => {
     const BROKEN_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:broken" xmlns:b="urn:broken" elementFormDefault="qualified">
