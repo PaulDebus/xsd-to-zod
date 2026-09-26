@@ -1454,6 +1454,9 @@ const fieldsMetaFor = (
     if (field.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       parts.push("open: true");
     }
+    if (field.typeName === "{http://www.w3.org/2001/XMLSchema}anySimpleType") {
+      parts.push("anySimpleType: true");
+    }
     const st = structured ? structuredTypeOfTypeName(field.typeName, ir) : undefined;
     if (st) {
       // Lets the serializer canonicalize structured values back to lexicals.
