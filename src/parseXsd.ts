@@ -1217,13 +1217,56 @@ const isMixedComplexType = (node: AnyNode): boolean => {
 // generated file can name what is not fully honored. Identity constraints
 // are no longer counted here: they are parsed structurally and enforced at
 // runtime; only ones that fail to parse bump `dropped` at their parse site.
-const countUnenforcedConstructs = (node: AnyNode, counts: XsdIr["unenforcedConstructs"]): void => {
+//
+// xs:ID / xs:IDREF / xs:IDREFS: the zod tier validates the lexical shape
+// (NCName) but not the referential semantics — ID document-uniqueness and
+// IDREF(S) resolution are dropped (counted here so the warning machinery
+// says so at generation time).
+const ID_FAMILY_TYPE_ATTRS = ["@_type", "@_base", "@_itemType"] as const;
+const countIdFamilyRefs = (
+  node: AnyNode,
+  nsMap: Record<string, string>,
+  counts: XsdIr["unenforcedConstructs"],
+): void => {
+  const raws: string[] = [];
+  for (const attrName of ID_FAMILY_TYPE_ATTRS) {
+    const raw = node[attrName];
+    if (raw !== undefined) {
+      raws.push(String(raw));
+    }
+  }
+  const memberTypes = node["@_memberTypes"];
+  if (memberTypes !== undefined) {
+    raws.push(...String(memberTypes).trim().split(/\s+/));
+  }
+  for (const raw of raws) {
+    const { prefix, local } = splitQName(raw.trim());
+    const ns = prefix === "" ? nsMap[""] : nsMap[prefix];
+    if (ns !== "http://www.w3.org/2001/XMLSchema") {
+      continue;
+    }
+    if (local === "ID") {
+      counts.dropped["xs:ID uniqueness"] = (counts.dropped["xs:ID uniqueness"] ?? 0) + 1;
+    } else if (local === "IDREF" || local === "IDREFS") {
+      counts.dropped["xs:IDREF referential integrity"] =
+        (counts.dropped["xs:IDREF referential integrity"] ?? 0) + 1;
+    }
+  }
+};
+
+const countUnenforcedConstructs = (
+  node: AnyNode,
+  counts: XsdIr["unenforcedConstructs"],
+  nsMap: Record<string, string> = {},
+): void => {
+  const context = { ...nsMap, ...localNsDeclarations(node) };
+  countIdFamilyRefs(node, context, counts);
   for (const [tag, child] of nodeChildren(node)) {
     const local = getNodeTagLocalName(tag);
     if (local === "complexType" && isMixedComplexType(child)) {
       counts.weakened["mixed content"] = (counts.weakened["mixed content"] ?? 0) + 1;
     }
-    countUnenforcedConstructs(child, counts);
+    countUnenforcedConstructs(child, counts, context);
   }
 };
 
@@ -1237,9 +1280,10 @@ const IDENTITY_STEP_QNAME = /^[^\s/@*|[\]().:]+(?::[^\s/@*|[\]().:]+)?$/;
 // leading .//, then '/'-separated steps (a trailing @attribute step only in
 // xs:field), branches unioned with '|'. Unprefixed steps are in NO
 // namespace (the XPath 1.0 rule: the default namespace does not apply).
-// Anything outside the subset (predicates, '..', axes, wildcards) is
-// rejected so the caller can drop the constraint loudly instead of
-// enforcing a wrong reading of it.
+// The NameTest wildcards `*` and `ns:*` are part of the restricted grammar
+// (§3.11.6); the `@`-forms are legal as the last xs:field step. Anything else
+// outside the subset (predicates, '..', axes) is rejected so the caller can
+// drop the constraint loudly instead of enforcing a wrong reading of it.
 const parseIdentityXPath = (
   raw: string,
   nsMap: Record<string, string>,
@@ -1273,6 +1317,30 @@ const parseIdentityXPath = (
         break;
       }
       const name = attribute ? step.slice(1) : step;
+      // NameTest wildcards (`*`, `ns:*`) are part of the restricted grammar
+      // (§3.11.6) for both selector and field child steps; `@`-forms remain
+      // field-only (checked above).
+      const wildcardNs =
+        name === "*" ? "" : name.length > 2 && name.endsWith(":*") ? name.slice(0, -2) : undefined;
+      if (wildcardNs !== undefined) {
+        if (wildcardNs !== "" && nsMap[wildcardNs] === undefined) {
+          report(
+            diagnostics,
+            "unknown-namespace-prefix",
+            `unknown namespace prefix "${wildcardNs}" in identity constraint xpath "${raw}"`,
+            raw,
+          );
+          failed = true;
+          break;
+        }
+        const namespace = wildcardNs === "" ? undefined : nsMap[wildcardNs];
+        steps.push(
+          attribute
+            ? { axis: "attribute", wildcard: true, namespace }
+            : { axis: "child", wildcard: true, namespace },
+        );
+        continue;
+      }
       if (!IDENTITY_STEP_QNAME.test(name)) {
         failed = true;
         break;
@@ -1288,10 +1356,11 @@ const parseIdentityXPath = (
         failed = true;
         break;
       }
-      steps.push({
-        axis: attribute ? "attribute" : "child",
-        qname: toClark(prefix === "" ? "" : (nsMap[prefix] ?? ""), local),
-      });
+      steps.push(
+        attribute
+          ? { axis: "attribute", qname: toClark(prefix === "" ? "" : (nsMap[prefix] ?? ""), local) }
+          : { axis: "child", qname: toClark(prefix === "" ? "" : (nsMap[prefix] ?? ""), local) },
+      );
     }
     if (failed || steps.length === 0) {
       return undefined;

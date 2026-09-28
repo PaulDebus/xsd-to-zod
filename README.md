@@ -354,6 +354,7 @@ Zod-tier specifics worth knowing:
 
 - Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced over the parsed tree at the end of `parseXml`/`safeParseXml`, scoped per occurrence of the declaring element. The selector/field xpaths must stay within XSD's restricted subset (no predicates, axes, or `..`) — anything else is dropped with a generation-time warning and a header comment in the generated file; unprefixed xpath steps are in *no* namespace (the XPath 1.0 rule), and constraints on substitution-group *members* (as opposed to the head) are not enforced
 - Mixed content: an element's character data segments are concatenated into `_text` — their interleaving with child elements is not preserved on round-trip (also flagged by the generation-time warning)
+- `xs:ID`/`xs:IDREF`/`xs:IDREFS`: the lexical shape (NCName) is validated, but the referential semantics are not — ID document-uniqueness and IDREF resolution are not checked (flagged by the generation-time warning; the conformance tier covers them). Prefer `xs:key`/`xs:keyref`, which are enforced
 - `xs:any` / `xs:anyAttribute` wildcards are captured in an open shape and round-tripped; namespace constraints (`##other`, `##targetNamespace`, …) are enforced, but wildcard content itself is not validated (lax tier)
 - Element order and unexpected elements are not enforced (conformance tier covers them)
 - Facets Zod cannot express are not promised (conformance tier covers them)
