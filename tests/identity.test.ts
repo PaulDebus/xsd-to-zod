@@ -877,5 +877,10 @@ describe("identity constraints", () => {
     expect(
       safeParseXml(schema, `<root><row id="1">x</row><row id="2">y</row></root>`).success,
     ).toBe(true);
+    // An empty non-nil row is not nil: @* still sees just id, no phantom xsi:nil.
+    expect(safeParseXml(schema, `<root><row id="1"/><row id="2"/></root>`).success).toBe(true);
+    expect(
+      expectFailure(safeParseXml(schema, `<root><row id="1"/><row id="1"/></root>`)),
+    ).toContain('xs:key "rowKey"');
   });
 });

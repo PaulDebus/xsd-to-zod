@@ -2429,7 +2429,9 @@ const writeObjectFields = (
     // datatype, and dropping it would change identity-constraint semantics
     // on re-parse.
     const simpleXsiType =
-      fieldMeta.anySimpleType === true ? occurrenceAt<string>(openXsiTypeStore, obj, key, i) : undefined;
+      fieldMeta.anySimpleType === true
+        ? occurrenceAt<string>(openXsiTypeStore, obj, key, i)
+        : undefined;
     const typeAttr =
       simpleXsiType === undefined
         ? ""
@@ -2716,6 +2718,20 @@ const identityOccurrenceSchema = (
   return item;
 };
 
+// A NameTest step matches an instance tag: exact qname, or — for `*`/`ns:*`
+// steps (both qname and namespace undefined / namespace-scoped) — any tag
+// optionally confined to one namespace.
+const identityStepMatches = (
+  stepQname: QName | undefined,
+  stepNs: string | undefined,
+  qname: QName | undefined,
+): boolean => {
+  if (stepQname !== undefined) {
+    return qname === stepQname;
+  }
+  return stepNs === undefined || splitClark(qname ?? "{}").namespace === stepNs;
+};
+
 // Element children of a data node: declared fields via the fields meta, plus
 // open-shape extras, which are keyed by their Clark qname already. Filter by
 // exact step qname, or by namespace for an `ns:*` step (both undefined: all
@@ -2727,10 +2743,7 @@ const identityChildren = (
   qname: QName | undefined,
   namespace?: string,
 ): IdentityNode[] => {
-  const matches = (childQName: QName): boolean =>
-    qname === undefined
-      ? namespace === undefined || splitClark(childQName).namespace === namespace
-      : childQName === qname;
+  const matches = (childQName: QName): boolean => identityStepMatches(qname, namespace, childQName);
   const { value } = node;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return [];
@@ -2868,6 +2881,8 @@ const identityAttributeNodes = (node: IdentityNode, namespace?: string): Identit
   const inNamespace = (clark: string): boolean =>
     namespace === undefined || splitClark(clark).namespace === namespace;
   const { value } = node;
+  // value === null holds only for xsi:nil=true occurrences (see readOccurrence),
+  // so the implicit xsi:nil attribute below cannot leak onto non-nil nodes.
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     const out: IdentityNode[] = (node.nilAttributes ?? [])
       .filter(([clark]) => inNamespace(clark))
@@ -2960,11 +2975,7 @@ const identitySelect = (path: IdentityPath, contextNode: IdentityNode): Identity
           if (desc === undefined) {
             break;
           }
-          if (
-            stepQname === undefined
-              ? stepNs === undefined || splitClark(desc.qname ?? "{}").namespace === stepNs
-              : desc.qname === stepQname
-          ) {
+          if (identityStepMatches(stepQname, stepNs, desc.qname)) {
             next.push(desc);
           }
           stack.push(...identityChildren(desc, undefined));
