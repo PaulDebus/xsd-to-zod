@@ -1193,12 +1193,14 @@ describe("xsd-to-zod v1 pipeline", () => {
       const ir = await parseXsd([xsdFile]);
       const { schemas } = irToZod(ir);
 
+      // Only types on an inference cycle keep the explicit annotation; the
+      // rest infer freely so their input type stays precise.
       expect(schemas).toContain(
         "const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({",
       );
-      expect(schemas).toContain(
-        "const TeamTypeSchema: z.ZodType<TeamType> = z.lazy(() => z.object({",
-      );
+      expect(schemas).toContain("const TeamTypeSchema = z.lazy(() => z.object({");
+      expect(schemas).toContain("export type PersonTypeIn = z.input<typeof PersonTypeSchema>;");
+      expect(schemas).toContain("export type TeamTypeIn = z.input<typeof TeamTypeSchema>;");
       expect(schemas).toContain(
         'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person", generatedBy });',
       );

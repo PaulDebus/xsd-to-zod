@@ -2416,8 +2416,84 @@ export const irToZod = (
       .join(", ");
   };
 
+  // Inference dependency graph between complex-type consts: an edge A → B
+  // means A's emitted expression references B's schema const with no explicit
+  // type annotation in between (direct reference or unannotated z.lazy), so
+  // TS must infer B before A. Types on a cycle keep the z.ZodType<Interface>
+  // annotation — it breaks the circular inference. Every other const infers
+  // freely, keeping its z.input precise (defaults, optionals).
+  const recursiveTypes = new Set<QName>();
+  {
+    const typeRefDeps = (typeName: QName): QName[] =>
+      ir.complexTypes[typeName] !== undefined && definedTypes.has(typeName) ? [typeName] : [];
+    const directDeps = (name: QName): Set<QName> => {
+      const out = new Set<QName>();
+      const seen = new Set<string>();
+      // The main const of a family member lazily references its eager object
+      // const; non-family consts inline their (non-eager) props. Polymorphic
+      // slots reference the variant-union const, which reaches every variant's
+      // eager object const; in eager context those slots carry an explicit
+      // return-type annotation — an inference boundary, so no edge.
+      const addFields = (typeName: QName, eager: boolean): void => {
+        if (seen.has(`${typeName} ${eager}`)) {
+          return;
+        }
+        seen.add(`${typeName} ${eager}`);
+        const def = ir.complexTypes[typeName];
+        if (def === undefined) {
+          return;
+        }
+        for (const field of dedupeEmissionFields(def)) {
+          const variants = polymorphicVariants(field);
+          if (variants !== undefined) {
+            if (!eager) {
+              for (const variant of variants) {
+                addFields(variant, true);
+              }
+            }
+            continue;
+          }
+          for (const dep of typeRefDeps(field.typeName)) {
+            out.add(dep);
+          }
+          for (const member of membersByHead.get(field.qname) ?? []) {
+            for (const dep of typeRefDeps(member.typeName)) {
+              out.add(dep);
+            }
+          }
+        }
+      };
+      addFields(name, familyTypes.has(name));
+      return out;
+    };
+    const depsByType = new Map<QName, Set<QName>>();
+    for (const complexType of Object.values(ir.complexTypes)) {
+      depsByType.set(complexType.name, directDeps(complexType.name));
+    }
+    for (const name of depsByType.keys()) {
+      const stack = [...(depsByType.get(name) ?? [])];
+      const reached = new Set<QName>();
+      while (stack.length > 0) {
+        const current = stack.pop() as QName;
+        if (current === name) {
+          recursiveTypes.add(name);
+          break;
+        }
+        if (reached.has(current)) {
+          continue;
+        }
+        reached.add(current);
+        stack.push(...(depsByType.get(current) ?? []));
+      }
+    }
+  }
+
   // Interfaces first: exported so consumers can name the inferred types, and
   // the const annotations below refer to them. js mode has no type level.
+  // Each interface is paired with an input alias for hand-building data:
+  // the In shape makes defaulted/optional fields optional at construction.
+  // Recursive types keep their const annotation (circular inference), which
+  // erases the input side — their In alias degrades to unknown.
   if (!opts?.js) {
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
@@ -2441,11 +2517,13 @@ export const irToZod = (
           ? "\n  [key: string]: unknown;"
           : "";
       const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
+      const iface = ifaceName.get(complexType.name);
       schemaLines.push(
         withNamingComment(
           complexType.name,
-          `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+          `${jsDoc}export interface ${iface} {\n${props}${indexSignature}\n}`,
         ),
+        `export type ${alloc(`${iface}In`)} = z.input<typeof ${constName.get(complexType.name)}>;`,
       );
     }
   }
@@ -2540,7 +2618,10 @@ export const irToZod = (
 
   for (const complexType of Object.values(ir.complexTypes)) {
     schemaLines.push(...hoistedLinesFor(complexType.name));
-    const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
+    const annotation =
+      opts?.js || !recursiveTypes.has(complexType.name)
+        ? ""
+        : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     if (familyTypes.has(complexType.name)) {
       // Family member: the object shape lives in its own const (shared with
       // the xsiType variant below); the named const stays a lazy wrapper.
