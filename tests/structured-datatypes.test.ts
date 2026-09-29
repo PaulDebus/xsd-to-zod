@@ -394,11 +394,13 @@ describe("datatypes: structured runtime round-trip", () => {
     });
   });
 
-  it("passes plain strings through the serializer unchanged", async () => {
+  it("accepts hand-built lexicals and structured values, serializing canonically", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
       const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       const mod = await importGeneratedSchemas(schemas);
       const schema = mod["eventSchema"] as z.ZodType;
+      // Both input forms validate: the lexical string (canonicalized through
+      // the value space) and the structured object (passed through).
       const data = {
         date: "2002-10-10+05:00",
         at: "24:00:00",
@@ -410,11 +412,14 @@ describe("datatypes: structured runtime round-trip", () => {
         span: "P1Y",
       };
       const serialized = serializeXml(schema, data);
-      expect(serialized).toContain("<date>2002-10-10+05:00</date>");
-      expect(serialized).toContain("<at>24:00:00</at>");
+      expect(serialized).toContain("<date>2002-10-09Z</date>");
+      expect(serialized).toContain("<at>00:00:00</at>");
       expect(serialized).toContain("<yearMonth>2002-10</yearMonth>");
       expect(serialized).toContain("<span>P1Y</span>");
       expect(serialized).toContain("<year>2002</year>");
+      // An invalid lexical now fails at serialize time instead of passing
+      // through unchecked.
+      expect(() => serializeXml(schema, { ...data, date: "2002-13-40" })).toThrow();
     });
   });
 

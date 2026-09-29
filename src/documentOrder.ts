@@ -113,8 +113,10 @@ export class DocumentOrderTracker {
    * validated trees are structurally isomorphic). The recording is
    * index-based, so it transfers verbatim: zod's rebuild preserves array
    * positions (added defaults are caught by usable's staleness check).
+   * serializeXml passes move=false: the caller's data keeps its recording, so
+   * serializing the same parsed tree twice replays the order both times.
    */
-  transfer(walked: unknown, parsed: unknown): void {
+  transfer(walked: unknown, parsed: unknown, move = true): void {
     if (
       walked === null ||
       parsed === null ||
@@ -125,7 +127,9 @@ export class DocumentOrderTracker {
     }
     const order = this.retainedStore.get(walked);
     if (order !== undefined) {
-      this.retainedStore.delete(walked);
+      if (move) {
+        this.retainedStore.delete(walked);
+      }
       this.retainedStore.set(parsed, order);
     }
   }

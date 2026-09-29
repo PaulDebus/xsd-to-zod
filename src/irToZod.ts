@@ -282,12 +282,47 @@ const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QN
     : undefined;
 };
 
+// Structured-mode values are objects on the output side, but the wire form
+// (and hand-built input) is the lexical string. The schema accepts both: a
+// custom branch passes structured objects through unchanged, the string
+// branch keeps lexical validation and the transform. serializeXml validates
+// its input through the schema, so parseXml's output must re-validate.
+const XSD_STRUCTURED_REQUIRED_FIELDS: ReadonlyMap<string, string[]> = new Map([
+  ["date", ["year", "month", "day"]],
+  ["dateTime", ["year", "month", "day", "hour", "minute", "second"]],
+  ["time", ["hour", "minute", "second"]],
+  ["gYear", ["year"]],
+  ["gYearMonth", ["year", "month"]],
+  ["gMonth", ["month"]],
+  ["gMonthDay", ["month", "day"]],
+  ["gDay", ["day"]],
+  ["duration", ["sign"]],
+]);
+
+const structuredValueGuard = (
+  st: { parseFn: string; writeFn: string; tsType: string; name: XsdDatatypeName },
+  dt: { usedTypes: Set<string> } | undefined,
+): string => {
+  const fields = XSD_STRUCTURED_REQUIRED_FIELDS.get(st.name) ?? [];
+  const check = [
+    `typeof v === "object"`,
+    `v !== null`,
+    ...fields.map((f) => `"${f}" in v && typeof v.${f} === "number"`),
+  ].join(" && ");
+  if (dt === undefined) {
+    return `z.custom((v) => ${check})`;
+  }
+  dt.usedTypes.add(st.tsType);
+  return `z.custom<${st.tsType}>((v) => ${check})`;
+};
+
 const primitiveToZod = (
   typeName: QName,
   definedTypes: Set<string>,
   constName: ReadonlyMap<QName, string>,
   usedHelpers: Set<string>,
   structured: boolean,
+  dt: { usedTypes: Set<string> } | undefined,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -339,7 +374,7 @@ const primitiveToZod = (
     const structuredInfo = structured ? structuredType(parts.local) : undefined;
     if (structuredInfo) {
       usedHelpers.add(structuredInfo.parseFn);
-      return `${base}.transform(${structuredInfo.parseFn})`;
+      return `z.union([${structuredValueGuard(structuredInfo, dt)}, ${base}.transform(${structuredInfo.parseFn})])`;
     }
     return base;
   }
@@ -2335,6 +2370,7 @@ export const irToZod = (
       constName,
       usedHelpers,
       structured,
+      dt,
     );
     const eagerHeadExpr =
       eager && ir.complexTypes[field.typeName] !== undefined && definedTypes.has(field.typeName)
@@ -2349,7 +2385,7 @@ export const irToZod = (
     const options = [
       ...substMembers.map((m) =>
         option(
-          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured),
+          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured, dt),
           m.name,
         ),
       ),
@@ -2424,11 +2460,12 @@ export const irToZod = (
         constName,
         usedHelpers,
         structured,
+        dt,
       );
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
       const memberExprs = simpleType.memberTypes.map((mt) =>
-        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured),
+        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured, dt),
       );
       // Distinct member types can emit identical expressions (two
       // string-derived types both become z.string()) — z.union([A, A]) is A.
@@ -2444,6 +2481,7 @@ export const irToZod = (
         constName,
         usedHelpers,
         structured,
+        dt,
       );
       const lexical: XmlLexicalFacets = {};
       expr = simpleType.facets
@@ -2604,7 +2642,7 @@ export const irToZod = (
     // root whose type is polymorphic wraps the xsi:type variant union.
     const rootTypeExpr =
       variantSets.get(rootDef.typeName) === undefined
-        ? primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured)
+        ? primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured, dt)
         : (unionConstName.get(rootDef.typeName) ?? "z.unknown()");
     const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
