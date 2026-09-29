@@ -11,7 +11,11 @@ import type {
 } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import type { XmlChoiceMeta, XmlLexicalFacets } from "./xmlMeta.js";
-import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
+import {
+  XSD_BIGINT_TYPE_NAMES,
+  XSD_INTEGER_TYPE_NAMES,
+  XSD_SAFE_INTEGER_TYPE_NAMES,
+} from "./xsdBuiltins.js";
 import { xsdDecimalCompare } from "./xsdChecks.js";
 import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
 
@@ -195,6 +199,24 @@ const XSD_BIGINT_BOUNDS: ReadonlyMap<string, { min?: string; max?: string }> = n
   ["positiveInteger", { min: "1n" }],
 ]);
 
+// Number-mode bounds for the same builtins: only bounds inside
+// ±MAX_SAFE_INTEGER are emitted — beyond it a double cannot represent the
+// boundary exactly (precision there is lost in number mode anyway), so the
+// long/unsignedLong outer bounds are dropped rather than rounded.
+const XSD_INTEGER_NUMBER_BOUNDS: ReadonlyMap<string, { min?: number; max?: number }> = new Map([
+  ["unsignedLong", { min: 0 }],
+  ["nonNegativeInteger", { min: 0 }],
+  ["nonPositiveInteger", { max: 0 }],
+  ["negativeInteger", { max: -1 }],
+  ["positiveInteger", { min: 1 }],
+]);
+
+// Where the xs:integer family lands: JS numbers (JSON-safe, exact below
+// 2^53) by default, bigint on opt-in (exact at any magnitude).
+type IntegersMode = "number" | "bigint";
+
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
 const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | undefined => {
   const s = seen ?? new Set<string>();
   if (s.has(name)) {
@@ -209,6 +231,7 @@ const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | un
 const resolvePrimitiveKind = (
   typeName: QName,
   ir: XsdIr,
+  integers: IntegersMode,
   seen?: Set<string>,
 ): "number" | "bigint" | "boolean" | "string" => {
   const parts = trySplitClark(typeName);
@@ -217,7 +240,7 @@ const resolvePrimitiveKind = (
   }
   if (parts.ns === XSD_NS) {
     if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
-      return "bigint";
+      return integers;
     }
     if (NUMBER_PRIMITIVES.has(parts.local)) {
       return "number";
@@ -238,7 +261,7 @@ const resolvePrimitiveKind = (
       : simple.kind === "list"
         ? simple.itemType
         : simple.memberTypes[0];
-  return base ? resolvePrimitiveKind(base, ir, next) : "string";
+  return base ? resolvePrimitiveKind(base, ir, integers, next) : "string";
 };
 
 // The XSD builtin local name a (possibly user-defined) simple type derives
@@ -288,6 +311,7 @@ const primitiveToZod = (
   constName: ReadonlyMap<QName, string>,
   usedHelpers: Set<string>,
   structured: boolean,
+  integers: IntegersMode,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -313,6 +337,17 @@ const primitiveToZod = (
   }
 
   if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
+    if (integers === "number") {
+      const bounds = XSD_INTEGER_NUMBER_BOUNDS.get(parts.local);
+      let expr = "z.number().int()";
+      if (bounds?.min !== undefined) {
+        expr += `.min(${bounds.min})`;
+      }
+      if (bounds?.max !== undefined) {
+        expr += `.max(${bounds.max})`;
+      }
+      return expr;
+    }
     const bounds = XSD_BIGINT_BOUNDS.get(parts.local);
     let expr = "z.bigint()";
     if (bounds?.min !== undefined) {
@@ -397,12 +432,12 @@ const listTokens = (raw: string): string[] => {
 // Typed array literal for a list-typed fixed lexical: one typed item per
 // whitespace-separated token. The runtime substitutes it from the field meta —
 // the schema constrains with a refine, not a z.literal.
-const listLiteral = (typeName: QName, ir: XsdIr, raw: string): string => {
+const listLiteral = (typeName: QName, ir: XsdIr, raw: string, integers: IntegersMode): string => {
   const listItemType = resolveListItemType(typeName, ir);
   if (listItemType === undefined) {
-    return typedLiteral(resolvePrimitiveKind(typeName, ir), raw);
+    return typedLiteral(resolvePrimitiveKind(typeName, ir, integers), raw);
   }
-  const itemKind = resolvePrimitiveKind(listItemType, ir);
+  const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
   return `[${listTokens(raw)
     .map((token) => typedLiteral(itemKind, token))
     .join(", ")}]`;
@@ -616,28 +651,46 @@ const withFacets = (
     }
   }
 
-  // xs:decimal order facets compare the original lexicals exactly: both the
-  // boundary and the instance value can carry more significant digits than a
-  // double holds (#136), so they route to the runtime meta.
-  const isDecimalOrderFacet = (
+  // Order facets whose boundary a double cannot represent exactly compare
+  // the original lexicals in the runtime (facet meta): xs:decimal boundaries
+  // can always carry more significant digits than a double holds (#136), and
+  // a number-mode integer boundary beyond ±MAX_SAFE_INTEGER would round to
+  // the wrong edge.
+  const isLexicalOrderFacet = (
     f: Facet,
   ): f is Extract<
     Facet,
     { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" }
-  > =>
-    builtinLocal === "decimal" &&
-    kind === "number" &&
-    (f.kind === "minInclusive" ||
-      f.kind === "maxInclusive" ||
-      f.kind === "minExclusive" ||
-      f.kind === "maxExclusive");
-  for (const f of facets.filter(isDecimalOrderFacet)) {
+  > => {
+    if (
+      kind !== "number" ||
+      (f.kind !== "minInclusive" &&
+        f.kind !== "maxInclusive" &&
+        f.kind !== "minExclusive" &&
+        f.kind !== "maxExclusive")
+    ) {
+      return false;
+    }
+    if (builtinLocal === "decimal") {
+      return true;
+    }
+    if (builtinLocal !== undefined && XSD_INTEGER_TYPE_NAMES.has(builtinLocal)) {
+      try {
+        const boundary = BigInt(f.value.trim());
+        return boundary > MAX_SAFE_BIGINT || boundary < -MAX_SAFE_BIGINT;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+  for (const f of facets.filter(isLexicalOrderFacet)) {
     lexical[f.kind] = f.value;
   }
 
   const otherFacets = facets.filter(
     (f): f is Exclude<Facet, { kind: "enumeration" | "whiteSpace" }> =>
-      f.kind !== "enumeration" && f.kind !== "whiteSpace" && !isDecimalOrderFacet(f),
+      f.kind !== "enumeration" && f.kind !== "whiteSpace" && !isLexicalOrderFacet(f),
   );
 
   // Patterns of this derivation step form one alternative set (XSD ORs
@@ -841,8 +894,9 @@ const withCardinality = (
   forceOptional: boolean,
   structured: boolean,
   usedHelpers: Set<string>,
+  integers: IntegersMode,
 ): string => {
-  const kind = resolvePrimitiveKind(field.typeName, ir);
+  const kind = resolvePrimitiveKind(field.typeName, ir, integers);
   // Fixed/default literals are values: the type's whiteSpace facet applies to
   // the declared lexical before comparison.
   const ws = kind === "string" ? effectiveWhiteSpace(field.typeName, ir) : undefined;
@@ -874,7 +928,7 @@ const withCardinality = (
       // cannot deep-compare arrays (zod 4), so constrain the list schema with a
       // refine against the typed array literal.
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-      const itemKind = resolvePrimitiveKind(listItemType, ir);
+      const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
       const tokens = listTokens(field.fixedValue);
       if (itemSt) {
         usedHelpers.add(itemSt.writeFn);
@@ -905,7 +959,7 @@ const withCardinality = (
     // Merged same-qname siblings with per-position fixed constraints: the
     // array carries them (undefined = unconstrained position).
     if (field.positionalFixeds !== undefined) {
-      const itemKind = resolvePrimitiveKind(field.typeName, ir);
+      const itemKind = resolvePrimitiveKind(field.typeName, ir, integers);
       const lits = field.positionalFixeds.map((fx) =>
         fx === undefined ? "undefined" : typedLiteral(itemKind, wsProcessLiteral(fx, ws)),
       );
@@ -931,7 +985,7 @@ const withCardinality = (
       result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, defaultValue)})`;
     } else {
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-      const itemKind = resolvePrimitiveKind(listItemType, ir);
+      const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
       // A trimmed empty default is an empty list; splitting it would yield a
       // single empty token.
       const trimmed = field.defaultValue.trim();
@@ -1184,6 +1238,7 @@ const fixedValueMetaParts = (
   fixedValue: string,
   ir: XsdIr,
   structured: boolean,
+  integers: IntegersMode,
   root = false,
 ): string[] => {
   const parts: string[] = [];
@@ -1201,7 +1256,7 @@ const fixedValueMetaParts = (
       const trimmed = fixedValue.trim();
       parts.push(`fixedValue: ${trimmed === "" ? "[]" : JSON.stringify(fixedValue)}`);
     } else {
-      parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue)}`);
+      parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue, integers)}`);
     }
   } else if (structured && structuredTypeOfTypeName(typeName, ir)) {
     // Structured fixed values cannot ride a z.literal (reference equality
@@ -1211,7 +1266,7 @@ const fixedValueMetaParts = (
   } else if (root) {
     // Plain-typed roots: the schema is the bare type, so the runtime needs
     // the coerced value in the meta (fields read it from z.literal).
-    const kind = resolvePrimitiveKind(typeName, ir);
+    const kind = resolvePrimitiveKind(typeName, ir, integers);
     parts.push(
       `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
     );
@@ -1234,12 +1289,13 @@ const defaultValueMetaParts = (
   defaultValue: string,
   ir: XsdIr,
   structured: boolean,
+  integers: IntegersMode,
 ): string[] => {
   const listItemType = resolveListItemType(typeName, ir);
   const parts =
     listItemType === undefined
       ? (() => {
-          const kind = resolvePrimitiveKind(typeName, ir);
+          const kind = resolvePrimitiveKind(typeName, ir, integers);
           return [
             `defaultValue: ${typedLiteral(kind, wsProcessLiteral(defaultValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
           ];
@@ -1254,7 +1310,7 @@ const defaultValueMetaParts = (
             const trimmed = defaultValue.trim();
             return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
           }
-          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue)}`];
+          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue, integers)}`];
         })();
   if (!structured) {
     parts.push(`defaultLexical: ${JSON.stringify(defaultValue)}`);
@@ -1443,6 +1499,7 @@ const fieldsMetaFor = (
   type: ComplexTypeDef,
   ir: XsdIr,
   structured: boolean,
+  integers: IntegersMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = dedupeEmissionFields(type).map((field) => {
@@ -1476,10 +1533,14 @@ const fieldsMetaFor = (
       field.fixedValue === undefined &&
       (field.kind === "element" || (structured && st && field.kind === "attribute"))
     ) {
-      parts.push(...defaultValueMetaParts(field.typeName, field.defaultValue, ir, structured));
+      parts.push(
+        ...defaultValueMetaParts(field.typeName, field.defaultValue, ir, structured, integers),
+      );
     }
     if (field.fixedValue !== undefined) {
-      parts.push(...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured));
+      parts.push(
+        ...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured, integers),
+      );
     }
     if (field.positionalFixeds !== undefined) {
       const lits = field.positionalFixeds.map((fx) =>
@@ -1632,6 +1693,7 @@ const tsTypeOfTypeName = (
   ifaceName: ReadonlyMap<QName, string>,
   seen: Set<QName>,
   dt: { usedTypes: Set<string> } | undefined,
+  integers: IntegersMode,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -1639,7 +1701,7 @@ const tsTypeOfTypeName = (
   }
   if (parts.ns === XSD_NS) {
     if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
-      return "bigint";
+      return integers;
     }
     if (XSD_SAFE_INTEGER_TYPE_NAMES.has(parts.local)) {
       return "number";
@@ -1671,10 +1733,12 @@ const tsTypeOfTypeName = (
   }
   seen.add(typeName);
   if (simple.kind === "list") {
-    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen, dt));
+    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen, dt, integers));
   }
   if (simple.kind === "union") {
-    const members = simple.memberTypes.map((mt) => tsTypeOfTypeName(mt, ir, ifaceName, seen, dt));
+    const members = simple.memberTypes.map((mt) =>
+      tsTypeOfTypeName(mt, ir, ifaceName, seen, dt, integers),
+    );
     const unique = [...new Set(members)];
     return unique.length > 0 ? unique.join(" | ") : "unknown";
   }
@@ -1701,10 +1765,10 @@ const tsTypeOfTypeName = (
     if (XSD_STRUCTURED_TYPES.has(baseParts.local)) {
       return "string";
     }
-    const kind = resolvePrimitiveKind(simple.baseType, ir);
+    const kind = resolvePrimitiveKind(simple.baseType, ir, integers);
     return enumFacets.map((f) => typedLiteral(kind, f.value)).join(" | ");
   }
-  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt);
+  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt, integers);
 };
 
 // Escape `*/` and format a description as a JSDoc block.
@@ -1729,6 +1793,7 @@ const tsFieldLine = (
   ifaceName: ReadonlyMap<QName, string>,
   forceOptional: boolean,
   dt: { usedTypes: Set<string> } | undefined,
+  integers: IntegersMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
   polymorphicSlotType?: (field: IrField) => string | undefined,
 ): string => {
@@ -1737,13 +1802,15 @@ const tsFieldLine = (
   if (polymorphicType !== undefined) {
     type = polymorphicType;
   } else if (field.fixedValue === undefined) {
-    const headType = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
+    const headType = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers);
     const substMembers = membersByHead.get(field.qname) ?? [];
     // The field accepts any substitution-group member: the TS type is the
     // union of the member types and the head type (deduped).
     const types = [
       ...new Set([
-        ...substMembers.map((m) => tsTypeOfTypeName(m.typeName, ir, ifaceName, new Set(), dt)),
+        ...substMembers.map((m) =>
+          tsTypeOfTypeName(m.typeName, ir, ifaceName, new Set(), dt, integers),
+        ),
         headType,
       ]),
     ];
@@ -1756,10 +1823,10 @@ const tsFieldLine = (
       type = st.tsType;
     } else {
       type = typedLiteral(
-        resolvePrimitiveKind(field.typeName, ir),
+        resolvePrimitiveKind(field.typeName, ir, integers),
         wsProcessLiteral(
           field.fixedValue,
-          resolvePrimitiveKind(field.typeName, ir) === "string"
+          resolvePrimitiveKind(field.typeName, ir, integers) === "string"
             ? effectiveWhiteSpace(field.typeName, ir)
             : undefined,
         ),
@@ -1768,7 +1835,7 @@ const tsFieldLine = (
   } else {
     // List-typed fixed: the schema keeps the list type (the constraint is a
     // refine, not a literal), so the interface does too.
-    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt);
+    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers);
   }
   if (field.nillable) {
     type += " | null";
@@ -1903,6 +1970,12 @@ export type IrToZodOptions = {
   // (xsdDateTime.ts) via a transform after the lexical check; "string"
   // (default) keeps them as validated strings.
   datatypes?: "string" | "structured";
+  // Where the xs:integer family (integer, long/unsignedLong and the
+  // *Integer derivations) lands: "number" (default) keeps parsed values
+  // JSON-serializable and is exact below 2^53; "bigint" is exact at any
+  // magnitude but breaks JSON.stringify. Bounds beyond ±MAX_SAFE_INTEGER
+  // (long/unsignedLong) are only enforced in "bigint" mode.
+  integers?: "number" | "bigint";
 };
 
 export const irToZod = (
@@ -1910,6 +1983,7 @@ export const irToZod = (
   opts?: IrToZodOptions,
 ): { schemas: string; warnings: string[] } => {
   const structured = opts?.datatypes === "structured";
+  const integers: IntegersMode = opts?.integers ?? "number";
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([
     ...Object.keys(ir.simpleTypes),
@@ -2139,7 +2213,13 @@ export const irToZod = (
     const fieldsEntriesByType = new Map<QName, string[]>();
     const choicesBodyByType = new Map<QName, string>();
     for (const t of Object.values(ir.complexTypes)) {
-      const { fieldsEntries, choicesBody } = fieldsMetaFor(t, ir, structured, membersByHead);
+      const { fieldsEntries, choicesBody } = fieldsMetaFor(
+        t,
+        ir,
+        structured,
+        integers,
+        membersByHead,
+      );
       fieldsEntriesByType.set(t.name, fieldsEntries);
       if (choicesBody !== undefined) {
         choicesBodyByType.set(t.name, choicesBody);
@@ -2335,6 +2415,7 @@ export const irToZod = (
       constName,
       usedHelpers,
       structured,
+      integers,
     );
     const eagerHeadExpr =
       eager && ir.complexTypes[field.typeName] !== undefined && definedTypes.has(field.typeName)
@@ -2349,7 +2430,7 @@ export const irToZod = (
     const options = [
       ...substMembers.map((m) =>
         option(
-          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured),
+          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured, integers),
           m.name,
         ),
       ),
@@ -2373,6 +2454,7 @@ export const irToZod = (
               field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
               structured,
               usedHelpers,
+              integers,
             ),
             field.description,
           )}`,
@@ -2394,6 +2476,7 @@ export const irToZod = (
             ifaceName,
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
             dt,
+            integers,
             membersByHead,
             (f) =>
               polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
@@ -2424,11 +2507,12 @@ export const irToZod = (
         constName,
         usedHelpers,
         structured,
+        integers,
       );
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
       const memberExprs = simpleType.memberTypes.map((mt) =>
-        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured),
+        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured, integers),
       );
       // Distinct member types can emit identical expressions (two
       // string-derived types both become z.string()) — z.union([A, A]) is A.
@@ -2444,6 +2528,7 @@ export const irToZod = (
         constName,
         usedHelpers,
         structured,
+        integers,
       );
       const lexical: XmlLexicalFacets = {};
       expr = simpleType.facets
@@ -2451,7 +2536,7 @@ export const irToZod = (
             baseExpr,
             simpleType.facets,
             usage,
-            resolvePrimitiveKind(simpleType.name, ir),
+            resolvePrimitiveKind(simpleType.name, ir, integers),
             resolveBuiltinLocal(simpleType.name, ir),
             structured,
             usedHelpers,
@@ -2530,6 +2615,7 @@ export const irToZod = (
               field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
               structured,
               usedHelpers,
+              integers,
             ),
             field.description,
           )}`,
@@ -2604,7 +2690,14 @@ export const irToZod = (
     // root whose type is polymorphic wraps the xsi:type variant union.
     const rootTypeExpr =
       variantSets.get(rootDef.typeName) === undefined
-        ? primitiveToZod(rootDef.typeName, definedTypes, constName, usedHelpers, structured)
+        ? primitiveToZod(
+            rootDef.typeName,
+            definedTypes,
+            constName,
+            usedHelpers,
+            structured,
+            integers,
+          )
         : (unionConstName.get(rootDef.typeName) ?? "z.unknown()");
     const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
@@ -2627,12 +2720,19 @@ export const irToZod = (
     }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(
-        ...defaultValueMetaParts(rootDef.typeName, rootDef.defaultValue, ir, structured),
+        ...defaultValueMetaParts(rootDef.typeName, rootDef.defaultValue, ir, structured, integers),
       );
     }
     if (rootDef.fixedValue !== undefined) {
       rootMeta.push(
-        ...fixedValueMetaParts(rootDef.typeName, rootDef.fixedValue, ir, structured, true),
+        ...fixedValueMetaParts(
+          rootDef.typeName,
+          rootDef.fixedValue,
+          ir,
+          structured,
+          integers,
+          true,
+        ),
       );
     }
     // JSDoc on the export so IDE hover shows the docs: the element's own

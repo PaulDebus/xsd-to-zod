@@ -237,6 +237,7 @@ type GenerateOptions = {
   allowMissingImports?: boolean;
   silent?: boolean;
   datatypes?: string;
+  integers?: string;
   fetch?: boolean;
   frozen?: boolean;
   offline?: boolean;
@@ -328,6 +329,10 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   const datatypes = opts.datatypes ?? "string";
   if (datatypes !== "string" && datatypes !== "structured") {
     throw new Error(`invalid --datatypes mode: ${datatypes} (expected "string" or "structured")`);
+  }
+  const integers = opts.integers ?? "number";
+  if (integers !== "number" && integers !== "bigint") {
+    throw new Error(`invalid --integers mode: ${integers} (expected "number" or "bigint")`);
   }
   if (opts.revalidate === true && opts.offline === true) {
     throw new Error("--revalidate and --offline cannot be used together");
@@ -424,7 +429,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   }
   warnUnenforcedConstructs(ir);
 
-  const { schemas, warnings } = irToZod(ir, { datatypes });
+  const { schemas, warnings } = irToZod(ir, { datatypes, integers });
   reportWarnings(warnings);
 
   const outDir = resolve(out);
@@ -555,6 +560,10 @@ const program = new Command()
   .option(
     "--datatypes <mode>",
     'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
+  )
+  .option(
+    "--integers <mode>",
+    'Mapping for the xs:integer family: "number" (default; JSON-safe, exact below 2^53, long/unsignedLong outer bounds dropped) or "bigint" (exact at any magnitude, but JSON.stringify throws on the parsed data)',
   )
   .option("--fetch", "Resolve remote imports/includes for local schema inputs")
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
