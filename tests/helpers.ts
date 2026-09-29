@@ -13,6 +13,7 @@ import {
   serializeXml,
   xmlRegistry,
 } from "../src/index.js";
+import type { IrToZodOptions } from "../src/irToZod.js";
 import { decodeTagNameCharRefs } from "../src/runtime.js";
 import type { SimpleTypeDef } from "../src/types.js";
 
@@ -104,8 +105,11 @@ export async function importGeneratedSchemas(
 }
 
 // parseXsd → irToZod → importGeneratedSchemas in one call (#84).
-export const generateAndImport = async (xsdFiles: string[]): Promise<Record<string, unknown>> =>
-  importGeneratedSchemas(irToZod(await parseXsd(xsdFiles)).schemas);
+export const generateAndImport = async (
+  xsdFiles: string[],
+  opts?: IrToZodOptions,
+): Promise<Record<string, unknown>> =>
+  importGeneratedSchemas(irToZod(await parseXsd(xsdFiles), opts).schemas);
 
 const stripProlog = (xml: string): string =>
   xml
@@ -383,8 +387,9 @@ export async function runRoundTrip(
   xsdFiles: string[],
   xmlFile: string,
   expected?: unknown,
+  opts?: IrToZodOptions,
 ): Promise<void> {
-  const { schemas } = irToZod(await parseXsd(xsdFiles));
+  const { schemas } = irToZod(await parseXsd(xsdFiles), opts);
   const xml = readXmlFile(xmlFile);
   const mod = await importGeneratedSchemas(schemas);
   const rootSchema = findRootSchema(mod, xml);

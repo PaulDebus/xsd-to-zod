@@ -3,15 +3,11 @@
   "lineItem": [
     {
       "productId": "P-100",
-      "quantity": {
-        "$bigint": "2"
-      }
+      "quantity": 2
     },
     {
       "productId": "P-200",
-      "quantity": {
-        "$bigint": "5"
-      }
+      "quantity": 5
     }
   ]
 }

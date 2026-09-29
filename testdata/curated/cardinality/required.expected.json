@@ -1,6 +1,4 @@
 {
   "mustExist": "I am required",
-  "alsoRequired": {
-    "$bigint": "42"
-  }
+  "alsoRequired": 42
 }
