@@ -58,10 +58,11 @@ const structuredLiteral = (name: XsdDatatypeName, raw: string): string =>
   JSON.stringify(parseXsdDatatype(name, raw));
 
 // Builtins whose lexical space the zod tier can check (xsdLexicals.ts has the
-// validators): builtin local name → exported validator function. QName,
-// NOTATION, anyURI, normalizedString and token are absent on purpose — see
+// validators): builtin local name → exported validator function. NOTATION,
+// anyURI, normalizedString and token are absent on purpose — see
 // xsdLexicals.ts for why their lexical check is impossible or vacuous.
 export const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
+  ["QName", "xsdQName"],
   ["date", "xsdDate"],
   ["dateTime", "xsdDateTime"],
   ["time", "xsdTime"],

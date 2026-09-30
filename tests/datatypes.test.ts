@@ -20,6 +20,7 @@ import {
   xsdNCNames,
   xsdNMTOKEN,
   xsdNMTOKENS,
+  xsdQName,
   xsdTime,
 } from "../src/xsdLexicals.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
@@ -201,6 +202,14 @@ describe("xsdLexicals validators", () => {
 
   it("xs:NMTOKEN", async () => {
     cases(xsdNMTOKEN, ["foo", "1foo", ".", "-", "a:b", "12.5"], ["", "a b", "a?b"]);
+  });
+
+  it("xs:QName", async () => {
+    cases(
+      xsdQName,
+      ["foo", "fo:foo", "xml:lang", "é-1:x"],
+      ["", "1fo", "-foo", ":foo", "fo:1fo", "fo:o:bar", "@test", "//foo", "xmlns:xsi", "fo o"],
+    );
   });
 
   it("xs:NMTOKENS", async () => {
