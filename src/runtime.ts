@@ -19,7 +19,7 @@ import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
-import { xsdDecimalCompare } from "./xsdChecks.js";
+import { countLexicalFractionDigits, xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
   writeXsdDatatype,
@@ -622,6 +622,12 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
     if (!member) {
       throw new Error(`Invalid lexical ${JSON.stringify(raw)}: not one of the allowed values`);
     }
+  }
+  if (
+    facets.fractionDigits !== undefined &&
+    countLexicalFractionDigits(lexical) > facets.fractionDigits
+  ) {
+    throw new Error(`Invalid lexical ${JSON.stringify(raw)}: too many fraction digits`);
   }
   const orderChecks: [string | undefined, (cmp: number) => boolean][] = [
     [facets.minInclusive, (cmp) => cmp >= 0],
