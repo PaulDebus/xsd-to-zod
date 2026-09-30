@@ -51,6 +51,17 @@ export const xsdFractionDigits =
 
 const DECIMAL_LEXICAL = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
+// Fraction digits of a decimal LEXICAL in value space: trailing zeros carry no
+// value (1.100 is 1.1), so they do not count. Non-decimal lexicals (exponent
+// notation) return 0 — other checks reject them.
+export const countLexicalFractionDigits = (lexical: string): number => {
+  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  if (!m) {
+    return 0;
+  }
+  return (m[3] ?? m[4] ?? "").replace(/0+$/, "").length;
+};
+
 const decimalParts = (lexical: string): { neg: boolean; digits: bigint; scale: number } => {
   const m = DECIMAL_LEXICAL.exec(lexical.trim());
   if (!m) {

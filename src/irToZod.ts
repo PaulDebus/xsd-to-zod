@@ -737,6 +737,11 @@ const withFacets = (
         case "fractionDigits":
           if (kind === "bigint") {
             result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
+          } else if (builtinLocal === "decimal" && kind === "number") {
+            // The coerced double loses digits beyond its precision, so the
+            // count must happen on the original lexical (same reason as the
+            // decimal order facets) — enforced by the runtime.
+            lexical.fractionDigits = facet.value;
           } else {
             usage.fractionDigits = true;
             result += `.refine(xsdFractionDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} fraction digits`)} })`;
@@ -851,6 +856,16 @@ const mergeLexicalFacets = (
   const maxExclusive = tighter(base.maxExclusive, own.maxExclusive, false);
   if (maxExclusive !== undefined) {
     merged.maxExclusive = maxExclusive;
+  }
+  // fractionDigits only narrows down a derivation chain.
+  const fractionDigits =
+    base.fractionDigits === undefined
+      ? own.fractionDigits
+      : own.fractionDigits === undefined
+        ? base.fractionDigits
+        : Math.min(base.fractionDigits, own.fractionDigits);
+  if (fractionDigits !== undefined) {
+    merged.fractionDigits = fractionDigits;
   }
   return merged;
 };
