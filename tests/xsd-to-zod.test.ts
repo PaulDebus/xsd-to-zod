@@ -955,7 +955,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("imports the digit-check helpers from xsd-to-zod when digit facets are used", async () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
-        // Decimal order facets moved to the runtime's facet meta (#136); the
+        // Decimal order facets moved to the runtime's facet meta; the
         // digit facets ride the xsdTotalDigits/xsdFractionDigits helpers.
         expect(generated.schemas).toContain(
           "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits, xsdPattern } from 'xsd-to-zod';",

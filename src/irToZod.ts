@@ -653,7 +653,7 @@ const withFacets = (
 
   // Order facets whose boundary a double cannot represent exactly compare
   // the original lexicals in the runtime (facet meta): xs:decimal boundaries
-  // can always carry more significant digits than a double holds (#136), and
+  // can always carry more significant digits than a double holds, and
   // a number-mode integer boundary beyond ±MAX_SAFE_INTEGER would round to
   // the wrong edge.
   const isLexicalOrderFacet = (

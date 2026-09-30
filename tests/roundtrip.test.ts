@@ -3,7 +3,7 @@ import { describe, it } from "vitest";
 import { discoverCuratedCases, runRoundTrip } from "./helpers.js";
 
 // Golden assertions on the parsed object, so symmetric silent data loss in
-// parseXml/serializeXml cannot pass undetected (#83). Parsed values are
+// parseXml/serializeXml cannot pass undetected. Parsed values are
 // JSON-representable by construction (the xs:integer family maps to number).
 function goldenFor(xmlFile: string): unknown {
   const goldenFile = xmlFile.replace(/\.xml$/, ".expected.json");
