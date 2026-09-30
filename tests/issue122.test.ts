@@ -317,9 +317,9 @@ describe("xs:list root element fixed/default values", () => {
     const schema = await generate(ROOT_LIST_FIXED_XSD);
     expect(parseXml(schema, "<dims/>")).toEqual([1, 2]);
     expect(parseXml(schema, "<dims>1 2</dims>")).toEqual([1, 2]);
-    // Roots never encode the fixed constraint in the schema (same as scalar
-    // roots): present content is validated as the bare list type.
-    expect(parseXml(schema, "<dims>3 4</dims>")).toEqual([3, 4]);
+    // Roots carry the fixed constraint in the meta (same as scalar roots):
+    // present content that differs in value space is rejected.
+    expect(() => parseXml(schema, "<dims>3 4</dims>")).toThrow(/fixed value/);
     expect(serializeXml(schema, [1, 2])).toBe("<dims>1 2</dims>");
   });
 
