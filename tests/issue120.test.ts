@@ -18,7 +18,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
   return onlyRootSchema(mod);
 };
 
-describe("root element fixed/default on empty content (#120)", () => {
+describe("root element fixed/default on empty content", () => {
   it("applies the default to a present-but-empty root", async () => {
     const schema = await schemaFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -44,7 +44,7 @@ describe("root element fixed/default on empty content (#120)", () => {
   });
 });
 
-describe("empty simpleContent (#120)", () => {
+describe("empty simpleContent", () => {
   const SIMPLE_CONTENT_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:sc" xmlns:t="urn:sc" elementFormDefault="qualified">
   <xs:complexType name="Doc">

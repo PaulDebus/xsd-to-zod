@@ -2,7 +2,7 @@
 // as zod refinements in generated schemas. Both count digits of the numeric
 // VALUE in canonical form (shortest round-trip representation), so neither
 // 'e'/'-' nor leading/trailing zeros count — and 1.19 is not rejected for
-// failing a float multipleOf(0.01) (#69).
+// failing a float multipleOf(0.01).
 
 const canonicalParts = (value: number): { digits: string; exponent: number } => {
   const abs = Math.abs(value);
@@ -42,7 +42,7 @@ export const xsdFractionDigits =
     !Number.isFinite(value) || countFractionDigits(value) <= limit;
 
 // ---------------------------------------------------------------------------
-// Exact order-facet comparison for xs:decimal (#136). Both the facet boundary
+// Exact order-facet comparison for xs:decimal. Both the facet boundary
 // and the instance value can carry more significant digits than a double
 // holds, so generated schemas compare the original decimal lexicals — scaled
 // to integers and cross-multiplied in BigInt arithmetic — before the value is

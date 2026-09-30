@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`golden generated output (#84) > matches the golden output for annotations/documentation 1`] = `
+exports[`golden generated output > matches the golden output for annotations/documentation 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';
@@ -22,7 +22,7 @@ export const invoiceSchema = z.lazy(() => InvoiceTypeSchema).describe("Root invo
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for basic/attributes 1`] = `
+exports[`golden generated output > matches the golden output for basic/attributes 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -58,7 +58,7 @@ export const messageSchema = z.lazy(() => MessageTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for cardinality/min-occurs-zero 1`] = `
+exports[`golden generated output > matches the golden output for cardinality/min-occurs-zero 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -93,7 +93,7 @@ export const tagListSchema = z.lazy(() => TagListTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for chameleon/rootA 1`] = `
+exports[`golden generated output > matches the golden output for chameleon/rootA 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -117,7 +117,7 @@ export const rootBSchema = z.lazy(() => TSchema3).register(xmlRegistry, { root: 
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for content-models/all 1`] = `
+exports[`golden generated output > matches the golden output for content-models/all 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 // Only partially preserved: mixed content (1) — mixed-content text is concatenated into "_text"; its interleaving with child elements is lost on round-trip.
 import { z } from 'zod';
@@ -180,7 +180,7 @@ export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry,
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for cyclic/cyclic 1`] = `
+exports[`golden generated output > matches the golden output for cyclic/cyclic 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -202,7 +202,7 @@ export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { r
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for defaults/defaults 1`] = `
+exports[`golden generated output > matches the golden output for defaults/defaults 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -220,7 +220,7 @@ export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, {
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for entities/cdata 1`] = `
+exports[`golden generated output > matches the golden output for entities/cdata 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -237,7 +237,7 @@ export const docSchema = z.lazy(() => DocTypeSchema).register(xmlRegistry, { roo
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for imports/chained-imports 1`] = `
+exports[`golden generated output > matches the golden output for imports/chained-imports 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -273,7 +273,7 @@ export const includeExampleSchema = z.lazy(() => IncludeExampleTypeSchema).regis
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for namespaces/multi-ns 1`] = `
+exports[`golden generated output > matches the golden output for namespaces/multi-ns 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -302,7 +302,7 @@ export const unqualifiedExampleSchema = z.lazy(() => UnqualifiedTypeSchema).regi
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for substitution-groups/substitution-groups 1`] = `
+exports[`golden generated output > matches the golden output for substitution-groups/substitution-groups 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -348,7 +348,7 @@ export const LibrarySchema = z.lazy(() => LibraryTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for types/boolean 1`] = `
+exports[`golden generated output > matches the golden output for types/boolean 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';

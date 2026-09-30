@@ -1,6 +1,6 @@
 import type { QName } from "./types.js";
 
-// Shared QName/Clark-notation helpers (#84). Clark notation: `{ns-uri}local`.
+// Shared QName/Clark-notation helpers. Clark notation: `{ns-uri}local`.
 
 export const splitQName = (name: string): { prefix: string; local: string } => {
   const idx = name.indexOf(":");

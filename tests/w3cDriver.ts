@@ -5,7 +5,7 @@ import { readXmlFile } from "../src/index.js";
 import { splitQName } from "../src/qname.js";
 import { createOutputBuilder } from "../src/runtime.js";
 
-// Driver for the W3C XML Schema Test Suite (#108). Parses the `.testSet`
+// Driver for the W3C XML Schema Test Suite. Parses the `.testSet`
 // metadata files to discover test groups automatically instead of hardcoding
 // data directories.
 //

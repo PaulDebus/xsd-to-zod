@@ -68,7 +68,7 @@ export type IrField = Cardinality & {
    * their values.
    */
   fieldKey?: string;
-  /** Text of xs:annotation/xs:documentation, emitted as .describe() (#25). */
+  /** Text of xs:annotation/xs:documentation, emitted as .describe(). */
   description?: string;
   /** Identity constraints declared on this element particle. */
   identityConstraints?: IdentityConstraint[];
@@ -147,7 +147,7 @@ export type ElementDef = {
   /** Head element qname when this element declares substitutionGroup. */
   substitutionGroup?: QName;
   description?: string;
-  /** Raw lexicals; coerced to the JS type at emission (#68). */
+  /** Raw lexicals; coerced to the JS type at emission. */
   defaultValue?: string;
   fixedValue?: string;
   /** Identity constraints declared on this element. */

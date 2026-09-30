@@ -1,4 +1,4 @@
-// Known failures for the W3C sun/ms selection (#108), keyed by
+// Known failures for the W3C sun/ms selection, keyed by
 // `<testSetName>/<testGroup>/<instanceTest>`. Each entry pins a genuine bug
 // or an unsupported feature with its reason. Entries run as `it.fails`, so a
 // fix that makes a case pass turns the suite red — remove the entry in the

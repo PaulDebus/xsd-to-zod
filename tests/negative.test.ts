@@ -9,7 +9,7 @@ const NEGATIVE_DIR = path.resolve("testdata/curated/negative");
 
 type NegativeExpectation =
   // Parsing must succeed with exactly this result (pinned so silent data loss
-  // becomes visible, #83).
+  // becomes visible).
   | { data: unknown }
   // Parsing must fail: `error` is a stable message substring; `zod: true`
   // pins a ZodError (validation failure), `zod: false` a plain structural

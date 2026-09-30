@@ -159,7 +159,7 @@ const generate = async (xsd: string): Promise<z.ZodType> => {
   return schema;
 };
 
-describe("XML-namespace attributes without a declaration (#122)", () => {
+describe("XML-namespace attributes without a declaration", () => {
   it("parses and re-serializes an undeclared xml:base attribute", async () => {
     const schema = await generate(XML_BASE_XSD);
     const parsed = parseXml(schema, '<root xml:base="a"/>');
@@ -174,7 +174,7 @@ describe("XML-namespace attributes without a declaration (#122)", () => {
   });
 });
 
-describe("xs:list attribute defaults (#122)", () => {
+describe("xs:list attribute defaults", () => {
   it("applies list defaults as typed arrays, not scalars", async () => {
     const schema = await generate(LIST_DEFAULT_XSD);
     expect(parseXml(schema, "<root/>")).toEqual({

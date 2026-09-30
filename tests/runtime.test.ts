@@ -68,7 +68,7 @@ describe("validation modes", () => {
   });
 });
 
-describe("entities in character data (#64)", () => {
+describe("entities in character data", () => {
   it("decodes predefined and numeric entities in text", async () => {
     const parsed = parseXml(
       doc("<text>a &lt; b &amp; c &gt; d &#65;&#x42;</text><count>1</count><flag>true</flag>"),
@@ -111,7 +111,7 @@ describe("entities in character data (#64)", () => {
   });
 });
 
-describe("type coercion (#65)", () => {
+describe("type coercion", () => {
   it("coerces attribute values through their declared type", async () => {
     const parsed = parseXml(doc("<text>x</text><count>1</count><flag>0</flag>"));
     expect(parsed["@version"]).toBe(7);
@@ -142,7 +142,7 @@ describe("type coercion (#65)", () => {
     );
   });
 
-  it("parses and serializes INF/-INF/NaN for xs:double (#116)", async () => {
+  it("parses and serializes INF/-INF/NaN for xs:double", async () => {
     // The generated xs:double schema accepts non-finite numbers via an
     // explicit union; serialization maps them back to the XSD lexicals.
     const negInf = parseXml(
@@ -155,7 +155,7 @@ describe("type coercion (#65)", () => {
     expect(serializeXml(nan)).toContain(">NaN</ns0:measure>");
   });
 
-  it("preserves the sign of -0 through the round-trip (#117)", async () => {
+  it("preserves the sign of -0 through the round-trip", async () => {
     const parsed = parseXml(
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-0</measure>"),
     );

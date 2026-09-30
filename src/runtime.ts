@@ -54,7 +54,7 @@ class AttributeWhitespaceNormalizer extends BaseValueParser {
 
 const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
 
-// Works around a declaration bug in @nodable/compact-builder@2.0.0 (#86):
+// Works around a declaration bug in @nodable/compact-builder@2.0.0:
 // CompactBuilder.addElement is declared as addElement(tag, matcher) while the
 // implementation — like BaseOutputBuilder.addElement — is addElement(tag),
 // which makes CompactBuilderFactory structurally incompatible with
@@ -64,7 +64,7 @@ const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
 class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   // Entity decoding is left to the parser; number/boolean coercion is disabled
   // so that every value arrives as a raw lexical and coerceLexical stays the
-  // single coercion point for elements and attributes (#65).
+  // single coercion point for elements and attributes.
   private readonly inner = new CompactBuilderFactory({
     tags: { valueParsers: ["entity"] },
     attributes: { valueParsers: [attributeWhitespaceNormalizer, "entity"] },
@@ -100,7 +100,7 @@ const parser = new XMLParser({
   skip: { attributes: false, whitespaceText: false },
   attributes: { prefix: "@_" },
   // Keep CDATA under its own key: merged text passes through the entity value
-  // parser, which would corrupt literal entity text inside CDATA sections (#64).
+  // parser, which would corrupt literal entity text inside CDATA sections.
   nameFor: { cdata: "#cdata" },
   OutputBuilder: createOutputBuilder(),
 });
@@ -351,7 +351,7 @@ const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
     return checkDef.check === "number_format" && INT_FORMATS.has(checkDef.format ?? "");
   });
 
-// XSD float/double special lexicals → JS values (#116).
+// XSD float/double special lexicals → JS values.
 const FLOAT_SPECIALS: Record<string, number> = {
   INF: Infinity,
   "-INF": -Infinity,
@@ -360,7 +360,7 @@ const FLOAT_SPECIALS: Record<string, number> = {
 
 const coerceNumberValue = (trimmed: string): number => {
   // The specials are valid xs:float/xs:double lexicals; the generated schemas
-  // for those types accept them via an explicit union (#116). For plain
+  // for those types accept them via an explicit union. For plain
   // numeric types the schema validation rejects the non-finite result, which
   // keeps decimal & co. rejecting "INF" coherently.
   const special = FLOAT_SPECIALS[trimmed];
@@ -451,7 +451,7 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
         try {
           const result = coerceLexical(raw, option);
           // A NaN produced for anything but the "NaN" lexical means the
-          // numeric option was the wrong branch — try the next one (#116).
+          // numeric option was the wrong branch — try the next one.
           if (typeof result === "number" && Number.isNaN(result) && String(raw).trim() !== "NaN") {
             continue;
           }
@@ -1151,7 +1151,7 @@ const extractRoot = (
   }
   if (Array.isArray(entry[1])) {
     // A repeated root tag parses to an array — treating its first item as the
-    // root would silently drop siblings (#67).
+    // root would silently drop siblings.
     throw new Error(
       `XML payload contains ${entry[1].length} '${expectedQName}' root elements; expected exactly one`,
     );
@@ -1185,7 +1185,7 @@ const readObject = (
       .map((f) => f.qname),
   );
   // Null prototype: an XSD element named __proto__ must become an own property,
-  // not a silent prototype mutation (#84).
+  // not a silent prototype mutation.
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const fieldList = Object.values(fields);
   const hasTextField = fieldList.some((f) => f.kind === "text");
@@ -1349,7 +1349,7 @@ const rawChildClarkKey = (
 // Shared walk over a parsed node's content entries, into the normalized open
 // shape: character data and xmlns declarations are skipped, attributes resolve
 // to '@'-prefixed clark keys, elements to clark keys with the namespace
-// resolved per item (repeated siblings may redeclare prefixes, #67), and
+// resolved per item (repeated siblings may redeclare prefixes), and
 // repeated child keys accumulate into arrays. Returns whether anything was
 // written.
 const walkChildren = (
@@ -1820,7 +1820,7 @@ const readField = (
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
-  // present-but-empty elements, not absent ones (#66).
+  // present-but-empty elements, not absent ones.
   return { present: false, value: undefined };
 };
 
@@ -2125,7 +2125,7 @@ const serializePrimitive = (value: unknown): string => {
     return value ? "true" : "false";
   }
   if (typeof value === "number") {
-    // XSD lexicals for the float/double specials (#116).
+    // XSD lexicals for the float/double specials.
     if (Number.isNaN(value)) {
       return "NaN";
     }
@@ -2135,7 +2135,7 @@ const serializePrimitive = (value: unknown): string => {
     if (value === -Infinity) {
       return "-INF";
     }
-    // String(-0) is "0" — keep the sign so the round-trip preserves -0 (#117).
+    // String(-0) is "0" — keep the sign so the round-trip preserves -0.
     if (Object.is(value, -0)) {
       return "-0";
     }
@@ -2537,7 +2537,7 @@ const writeObjectFields = (
       continue;
     }
     // Elements are always written when present in the data — even when equal
-    // to their default/fixed, which are parse-time concerns only (#66).
+    // to their default/fixed, which are parse-time concerns only.
     const field = analyzeField(fieldSchema);
     const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
     for (let i = 0; i < values.length; i++) {

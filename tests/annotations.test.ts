@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
 import { withTempDirAsync } from "./helpers.js";
 
-// Issue #25: xs:annotation/xs:documentation is extracted into the IR and
+// xs:annotation/xs:documentation is extracted into the IR and
 // emitted as zod .describe() on types, elements, attributes and fields.
 
 const FIXTURE = path.resolve("testdata/curated/annotations/documentation.xsd");
@@ -32,7 +32,7 @@ const REFS_XSD = `<?xml version="1.0"?>
   <xs:element name="invoice" type="t:InvoiceType"/>
 </xs:schema>`;
 
-describe("xs:annotation/xs:documentation (#25)", () => {
+describe("xs:annotation/xs:documentation", () => {
   it("extracts documentation into the IR", async () => {
     const ir = await parseXsd([FIXTURE]);
 

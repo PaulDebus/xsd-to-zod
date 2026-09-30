@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd, safeParseXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
-// Targeted regression tests for the issue-#114 facet codegen fixes: facet
+// Targeted regression tests for facet codegen fixes: facet
 // checks must only be emitted in a form the mapped Zod schema supports.
 
 const codeFor = async (xsd: string): Promise<string> => {
@@ -17,7 +17,7 @@ const codeFor = async (xsd: string): Promise<string> => {
   return code;
 };
 
-describe("facet codegen on incompatible Zod types (#114)", () => {
+describe("facet codegen on incompatible Zod types", () => {
   it("routes pattern on non-string bases to the lexical-facet meta", async () => {
     const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">

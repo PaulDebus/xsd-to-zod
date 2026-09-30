@@ -1,4 +1,4 @@
-// Typed error for xsd-to-zod diagnostics (#84): a machine-readable `code` plus
+// Typed error for xsd-to-zod diagnostics: a machine-readable `code` plus
 // optional source-file context, so the CLI can print clean one-line errors
 // instead of bare generic Errors.
 export class Xsd2ZodError extends Error {

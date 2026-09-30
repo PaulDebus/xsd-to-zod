@@ -15,7 +15,7 @@ const schemaFor = async (xsd: string): Promise<z.ZodType> => {
   return onlyRootSchema(mod);
 };
 
-// Regression test for #156: inherited repeated-choice fields must not get a
+// Inherited repeated-choice fields must not get a
 // mutual-exclusion refine that rejects valid XML.
 const INHERITED_CHOICE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
@@ -41,7 +41,7 @@ const INHERITED_CHOICE_XSD = `<?xml version="1.0"?>
   <xs:element name="Root" type="DerivedType"/>
 </xs:schema>`;
 
-describe("inherited repeated-choice refinements (#156)", () => {
+describe("inherited repeated-choice refinements", () => {
   it("accepts both branches of an inherited repeated choice", async () => {
     const schema = await schemaFor(INHERITED_CHOICE_XSD);
     expect(
