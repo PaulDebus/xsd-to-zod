@@ -122,7 +122,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("choice refine counts an absent repeated branch as absent (#73)", async () => {
+  it("choice refine counts an absent repeated branch as absent", async () => {
     // Absent repeated fields are omitted from the parsed object; presence in
     // the choice refine means >=1 occurrences (see has() in choiceCheck).
     const xsd = `<?xml version="1.0"?>
@@ -228,7 +228,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("inherits base-type fields for anonymous inline complexType extensions (#76)", async () => {
+  it("inherits base-type fields for anonymous inline complexType extensions", async () => {
     const INLINE_EXT_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-ext" xmlns:t="urn:inline-ext" elementFormDefault="qualified">
   <xs:complexType name="Base">
@@ -296,7 +296,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("resolves cross-file refs regardless of CLI argument order and types attribute refs from global declarations (#77)", async () => {
+  it("resolves cross-file refs regardless of CLI argument order and types attribute refs from global declarations", async () => {
     const DECLARES_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:declares" xmlns:d="urn:declares" elementFormDefault="qualified">
   <xs:element name="shared" type="xs:string"/>
@@ -431,7 +431,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("reports unresolved references and unknown prefixes instead of silently dropping them (#77)", async () => {
+  it("reports unresolved references and unknown prefixes instead of silently dropping them", async () => {
     const BROKEN_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:broken" xmlns:b="urn:broken" elementFormDefault="qualified">
   <xs:complexType name="Holder">
@@ -502,7 +502,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("redefine of xs:group and xs:attributeGroup affects their consumers (#78)", async () => {
+  it("redefine of xs:group and xs:attributeGroup affects their consumers", async () => {
     const BASE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:redefine-group" xmlns:t="urn:redefine-group" elementFormDefault="qualified">
   <xs:group name="G">
@@ -662,7 +662,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("parses inline xs:simpleType on elements and attributes into synthetic simple types (#75)", async () => {
+  it("parses inline xs:simpleType on elements and attributes into synthetic simple types", async () => {
     const INLINE_SIMPLE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:inline-simple" xmlns:t="urn:inline-simple" elementFormDefault="qualified">
   <xs:element name="age">
@@ -740,7 +740,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("round-trips nested complex types without producing [object Object] (#8)", async () => {
+  it("round-trips nested complex types without producing [object Object]", async () => {
     const NESTED_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:nested-test" xmlns:t="urn:nested-test" elementFormDefault="qualified">
   <xs:complexType name="LineItemType">
@@ -779,7 +779,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     expect(reparsed).toEqual(parsed);
   });
 
-  describe("simple type facets (#24)", () => {
+  describe("simple type facets", () => {
     const FACET_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:facets" xmlns:t="urn:facets" elementFormDefault="qualified">
   <xs:simpleType name="CountryCode">
@@ -1019,7 +1019,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("coerces fixed/default values to the field type (#66, #68)", async () => {
+    it("coerces fixed/default values to the field type", async () => {
       const TYPED_DEFAULTS_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:typedDefaults" xmlns:t="urn:typedDefaults" elementFormDefault="qualified">
   <xs:complexType name="Cfg">
@@ -1038,7 +1038,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         const generated = irToZod(await parseXsd([file]));
         // fixed → z.literal. Element defaults are NOT zod .default(): XSD
         // applies them to present-but-empty elements, not absent ones, so they
-        // live in the field's registry meta as defaultValue (#66).
+        // live in the field's registry meta as defaultValue.
         expect(generated.schemas).toContain('"ratio": z.number().optional()');
         expect(generated.schemas).toContain('"level": z.literal(3).optional()');
         expect(generated.schemas).toContain('"enabled": z.boolean().optional()');
@@ -1104,7 +1104,7 @@ describe("xsd-to-zod v1 pipeline", () => {
         const reparsed = parseXml(facetsSchema, serialized);
         expect(reparsed).toEqual(parsed);
 
-        // whiteSpace: collapse applies via the z.preprocess wrapper (#69).
+        // whiteSpace: collapse applies via the z.preprocess wrapper.
         const withWhitespace = parseXml(
           facetsSchema,
           xml.replace("<token>hello</token>", "<token>  hello   world </token>"),
@@ -1166,7 +1166,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  it("wraps cyclic complex types in z.lazy so generated module loads without ReferenceError (#31)", async () => {
+  it("wraps cyclic complex types in z.lazy so generated module loads without ReferenceError", async () => {
     const CYCLIC_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:cyclic" xmlns:t="urn:cyclic" elementFormDefault="qualified">
   <xs:complexType name="PersonType">
@@ -1223,7 +1223,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  describe("xs:list and xs:union simple types (#29)", () => {
+  describe("xs:list and xs:union simple types", () => {
     const LIST_INLINE_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:listunion" xmlns:t="urn:listunion" elementFormDefault="qualified">
   <xs:simpleType name="InlineIntList">
@@ -1271,7 +1271,7 @@ describe("xsd-to-zod v1 pipeline", () => {
   <xs:element name="unionContainer" type="t:UnionContainer"/>
 </xs:schema>`;
 
-    it("coerces inline list item simpleType to its base XSD primitive (#29)", async () => {
+    it("coerces inline list item simpleType to its base XSD primitive", async () => {
       const mod = await importFromXsd(LIST_INLINE_XSD);
       const parsed = parseXml(
         mod["listContainerSchema"] as z.ZodType,
@@ -1291,7 +1291,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       ).toThrow("Too big: expected number to be <=10");
     });
 
-    it("coerces inline union members and falls through on member mismatch (#29)", async () => {
+    it("coerces inline union members and falls through on member mismatch", async () => {
       const mod = await importFromXsd(UNION_INLINE_XSD);
       const unionContainerSchema = mod["unionContainerSchema"] as z.ZodType;
 
@@ -1388,7 +1388,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     });
   });
 
-  describe("misc robustness (#79)", () => {
+  describe("misc robustness", () => {
     it("populates targetNamespaces in the returned IR", async () => {
       await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");

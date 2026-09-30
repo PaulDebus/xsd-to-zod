@@ -33,7 +33,7 @@ const XSD = (body: string): string => `<?xml version="1.0"?>
   <xs:element name="v">${body}</xs:element>
 </xs:schema>`;
 
-describe("length facet units (#115)", () => {
+describe("length facet units", () => {
   it("hexBinary length counts octets, not characters", async () => {
     const code = await codeFor(
       XSD(`

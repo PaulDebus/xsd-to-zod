@@ -28,7 +28,7 @@ const XSD = `<?xml version="1.0"?>
   <xs:element name="root" type="t:Derived"/>
 </xs:schema>`;
 
-describe("choice groups across extension (#121)", () => {
+describe("choice groups across extension", () => {
   it("accepts one branch from the base choice plus one from the extension choice", async () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");

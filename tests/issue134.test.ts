@@ -5,7 +5,7 @@ import type { z } from "zod";
 import { parseXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
-// Regression tests for the issue-#134 choice emptiness fix: a choice group
+// Choice emptiness: a choice group
 // with any minOccurs="0" branch is emptiable, even when other branches are
 // required and the choice repeats.
 
@@ -32,7 +32,7 @@ const CONCEPT_XSD = `<?xml version="1.0"?>
   <xs:element name="Concept" type="ConceptType"/>
 </xs:schema>`;
 
-describe("emptiable choice groups (#134)", () => {
+describe("emptiable choice groups", () => {
   it("accepts the empty instance when any branch is optional", async () => {
     const schema = await schemaFor(CONCEPT_XSD);
     // Absent repeated-choice branches are omitted from the parsed object.

@@ -172,7 +172,7 @@ const XSD_PRIMITIVE_EMITTERS: ReadonlyMap<string, string> = new Map([
   ["boolean", "z.boolean()"],
   ["decimal", "z.number()"],
   // xs:float/xs:double include INF/-INF/NaN in their value space; zod's
-  // z.number() rejects non-finite numbers at the base-type level (#116).
+  // z.number() rejects non-finite numbers at the base-type level.
   ["float", "z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])"],
   ["double", "z.union([z.number(), z.literal(Infinity), z.literal(-Infinity), z.nan()])"],
 ]);
@@ -227,7 +227,7 @@ const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | un
 };
 
 // Resolve a (possibly user-defined) simple type to its builtin base kind, so
-// fixed/default values are coerced to the JS type the runtime produces (#87).
+// fixed/default values are coerced to the JS type the runtime produces.
 const resolvePrimitiveKind = (
   typeName: QName,
   ir: XsdIr,
@@ -387,7 +387,7 @@ const isNumberType = (zodExpr: string): boolean => zodExpr.startsWith("z.number(
 const isBigIntType = (zodExpr: string): boolean => zodExpr.startsWith("z.bigint()");
 
 // fixed/default values arrive as XSD lexicals; emit them coerced to the JS type
-// the runtime produces for the field's (resolved) primitive kind (#68, #87).
+// the runtime produces for the field's (resolved) primitive kind.
 const typedLiteral = (kind: "number" | "bigint" | "boolean" | "string", raw: string): string => {
   if (kind === "number") {
     const trimmed = raw.trim();
@@ -455,7 +455,7 @@ const toFieldKey = (field: IrField): string => {
 };
 
 // xs:annotation/xs:documentation surfaces as zod .describe() — IDE tooltips and
-// downstream form generators pick it up from the schema (#25).
+// downstream form generators pick it up from the schema.
 const withDescription = (expr: string, description: string | undefined): string =>
   description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
 
@@ -583,7 +583,7 @@ const applyOrderFacet = (
 
 // Enum facet values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the resolved primitive kind — same rule as
-// fixed/default values (#68, #84). Facets the generated schema cannot check
+// fixed/default values. Facets the generated schema cannot check
 // against the coerced value (pattern on non-string/list/union bases, enums on
 // list/union/date-time bases, exact xs:decimal order bounds) are collected
 // into `lexical` instead — the runtime enforces those against the original
@@ -765,7 +765,7 @@ const withFacets = (
   }
 
   // whiteSpace applies before the other facets per XSD, so it wraps the
-  // checked schema in a preprocess (#69). 'preserve' is deliberately a no-op.
+  // checked schema in a preprocess. 'preserve' is deliberately a no-op.
   if (whiteSpace?.value === "collapse") {
     lexical.whiteSpace = "collapse";
     result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
@@ -857,7 +857,7 @@ const mergeLexicalFacets = (
 
 // Emit simple types in dependency order — a restriction/list/union can
 // reference a user-defined type declared later in the XSD, and the generated
-// module evaluates these assignments eagerly (#72).
+// module evaluates these assignments eagerly.
 const sortSimpleTypes = (ir: XsdIr): SimpleTypeDef[] => {
   const types = Object.values(ir.simpleTypes);
   const byName = new Map(types.map((t) => [t.name, t]));
@@ -949,7 +949,7 @@ const withCardinality = (
   if (field.maxOccurs === "unbounded" || field.maxOccurs > 1) {
     result = `z.array(${result})`;
     // Skip .min() for choice fields (forceOptional): absent choice branches
-    // materialise as [] and must not fail cardinality validation (#73).
+    // materialise as [] and must not fail cardinality validation.
     if (field.minOccurs > 0 && !forceOptional) {
       result += `.min(${field.minOccurs})`;
     }
@@ -972,7 +972,7 @@ const withCardinality = (
   // Attribute defaults apply on absence — zod .default() (after .optional(),
   // which would otherwise make it dead). Element defaults are NOT emitted as
   // .default(): XSD applies them to present-but-empty elements, not absent
-  // ones, so the runtime substitutes them via meta.defaultValue (#66).
+  // ones, so the runtime substitutes them via meta.defaultValue.
   if (
     field.kind === "attribute" &&
     field.defaultValue !== undefined &&
@@ -1668,11 +1668,11 @@ const derivedClosure = (base: QName, index: ReadonlyMap<QName, QName[]>): QName[
 // Small emitter layer — systematic codegen helpers instead of raw string
 // concatenation.  Centralises schema-reference formatting, .register() calls,
 // with-description wrapping, and reserved-keyword / forward-ref wiring so that
-// the structural logic in irToZod stays readable (#84).
+// the structural logic in irToZod stays readable.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Static types (#146). Every named type becomes a standalone const so its
+// Static types. Every named type becomes a standalone const so its
 // inferred zod type survives; the old `schemas: Record<string, z.ZodTypeAny>`
 // registry erased all of it (z.infer → any). Complex types additionally get
 // an exported TS interface, and their schema const is annotated
@@ -2770,7 +2770,7 @@ export const irToZod = (
 export const fieldKeyFromIr = toFieldKey;
 
 // JS reserved words — an export/identifier matching one of these must be
-// prefixed so the generated module is valid JavaScript (#70, #84).
+// prefixed so the generated module is valid JavaScript.
 const JS_RESERVED = new Set([
   "break",
   "case",
@@ -2827,7 +2827,7 @@ const JS_RESERVED = new Set([
 
 // Generated export identifiers must be valid JS identifiers and unique across
 // all roots — legal XSD names (unicode letters, or the same local name in two
-// namespaces) otherwise produce invalid TypeScript (#70).
+// namespaces) otherwise produce invalid TypeScript.
 export const sanitizeIdentifier = (name: string): string => {
   const cleaned = name.replace(/[^\p{L}\p{N}_$]/gu, "_");
   const valid = /^[\p{L}_$]/u.test(cleaned) ? cleaned : `_${cleaned}`;

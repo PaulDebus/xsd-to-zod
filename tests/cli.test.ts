@@ -18,7 +18,7 @@ const XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 // Runs the CLI in-process, capturing console output — much faster and less
-// fragile than spawning `npx tsx` per test (#83).
+// fragile than spawning `npx tsx` per test.
 const runCli = async (
   args: string[],
 ): Promise<{ code: number; stdout: string; stderr: string }> => {
@@ -268,7 +268,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("reports missing input files in the CLI error style instead of a stack trace (#82)", async () => {
+  it("reports missing input files in the CLI error style instead of a stack trace", async () => {
     await withTempDirAsync(async (dir) => {
       const r = await runCli([path.join(dir, "missing.xsd"), "-o", dir]);
       expect(r.code).toBe(1);
@@ -277,7 +277,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("reports malformed XML in the CLI error style (#82)", async () => {
+  it("reports malformed XML in the CLI error style", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "broken.xsd");
       fs.writeFileSync(
@@ -290,7 +290,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("warns about schema references that could not be resolved (#77)", async () => {
+  it("warns about schema references that could not be resolved", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "test.xsd");
       fs.writeFileSync(
@@ -314,7 +314,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("prints file context and error code for typed errors (#84)", async () => {
+  it("prints file context and error code for typed errors", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "not-a-schema.xsd");
       fs.writeFileSync(xsdFile, '<?xml version="1.0"?><notschema/>');
@@ -325,7 +325,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("expands a directory argument into .xsd files (#34)", async () => {
+  it("expands a directory argument into .xsd files", async () => {
     await withTempDirAsync(async (dir) => {
       const xsd1 = path.join(dir, "first.xsd");
       const xsd2 = path.join(dir, "second.xsd");
@@ -338,7 +338,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("skips non-.xsd files when expanding directories (#34)", async () => {
+  it("skips non-.xsd files when expanding directories", async () => {
     await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "schema.xsd"), XSD);
       fs.writeFileSync(path.join(dir, "readme.txt"), "not an xsd");
@@ -350,7 +350,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("errors when directory contains no .xsd files (#34)", async () => {
+  it("errors when directory contains no .xsd files", async () => {
     await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "readme.txt"), "no xsd here");
       const r = await runCli([dir, "-o", dir]);
@@ -359,7 +359,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("requires --name when processing multiple inputs (#82)", async () => {
+  it("requires --name when processing multiple inputs", async () => {
     await withTempDirAsync(async (dir) => {
       const xsd1 = path.join(dir, "a.xsd");
       const xsd2 = path.join(dir, "b.xsd");
@@ -371,7 +371,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("derives the output name from a single directory input (#34)", async () => {
+  it("derives the output name from a single directory input", async () => {
     await withTempDirAsync(async (dir) => {
       const schemaDir = path.join(dir, "schemas");
       fs.mkdirSync(schemaDir);
@@ -384,7 +384,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("does not recurse infinitely into symlinked directories (#34)", async () => {
+  it("does not recurse infinitely into symlinked directories", async () => {
     await withTempDirAsync(async (dir) => {
       fs.writeFileSync(path.join(dir, "schema.xsd"), XSD);
       fs.symlinkSync(dir, path.join(dir, "loop"));
@@ -395,7 +395,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("writes no output files when any XSD in a directory is invalid (#34)", async () => {
+  it("writes no output files when any XSD in a directory is invalid", async () => {
     await withTempDirAsync(async (dir) => {
       const validFile = path.join(dir, "valid.xsd");
       const brokenFile = path.join(dir, "broken.xsd");
@@ -412,7 +412,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("skips type-definition libraries by default (#34)", async () => {
+  it("skips type-definition libraries by default", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "lib.xsd");
       fs.writeFileSync(
@@ -434,7 +434,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("includes type-definition libraries with --include-libraries (#34)", async () => {
+  it("includes type-definition libraries with --include-libraries", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "lib.xsd");
       fs.writeFileSync(
@@ -455,7 +455,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("suppresses unresolved ref warnings with --allow-missing-imports (#34)", async () => {
+  it("suppresses unresolved ref warnings with --allow-missing-imports", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "test.xsd");
       fs.writeFileSync(
@@ -479,7 +479,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("suppresses informational output with --silent (#34)", async () => {
+  it("suppresses informational output with --silent", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "test.xsd");
       fs.writeFileSync(xsdFile, XSD);
@@ -490,7 +490,7 @@ describe("CLI e2e", () => {
     });
   });
 
-  it("still shows warnings with --silent (#34)", async () => {
+  it("still shows warnings with --silent", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "test.xsd");
       fs.writeFileSync(
@@ -619,7 +619,7 @@ describe("CLI e2e", () => {
   });
 });
 
-describe("isDirectInvocation (#80)", () => {
+describe("isDirectInvocation", () => {
   it("resolves symlinks before comparing", () => {
     withTempDir((dir) => {
       const real = path.join(dir, "cli.js");

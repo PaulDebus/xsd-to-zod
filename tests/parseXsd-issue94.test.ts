@@ -4,13 +4,13 @@ import { parseXsd } from "../src/index.js";
 import type { ComplexTypeDef, IrField, QName } from "../src/types.js";
 import { asRestriction } from "./helpers.js";
 
-// Reproductions for the three parseXsd robustness gaps tracked in #94.
+// Reproductions for three parseXsd robustness gaps.
 const FIXTURES = path.resolve("testdata/regressions/issue-94");
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
 
 const localName = (field: IrField): string => field.qname.split("}").pop() ?? field.qname;
 
-describe("issue #94: circular simpleContent bases", () => {
+describe("circular simpleContent bases", () => {
   it("chain-walk terminates on redefine of circular simpleContent types", async () => {
     const ir = await parseXsd([path.join(FIXTURES, "cycle-redefine.xsd")]);
     const typeA = ir.complexTypes["{urn:cycle}A" as QName]!;
@@ -21,7 +21,7 @@ describe("issue #94: circular simpleContent bases", () => {
   });
 });
 
-describe("issue #94: cross-file group/attributeGroup refs", () => {
+describe("cross-file group/attributeGroup refs", () => {
   let ir!: Awaited<ReturnType<typeof parseXsd>>;
   let main!: ComplexTypeDef;
   beforeAll(async () => {
@@ -42,7 +42,7 @@ describe("issue #94: cross-file group/attributeGroup refs", () => {
   });
 });
 
-describe("issue #94: unprefixed type refs vs default xmlns", () => {
+describe("unprefixed type refs vs default xmlns", () => {
   let ir!: Awaited<ReturnType<typeof parseXsd>>;
   let main!: ComplexTypeDef;
   beforeAll(async () => {

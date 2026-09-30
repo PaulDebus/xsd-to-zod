@@ -1,6 +1,6 @@
 // XSD builtin type names with integer value space — used by codegen (irToZod
 // maps them to z.number().int() or z.bigint()); the runtime detects int-ness
-// from the generated schema's zod checks, so it no longer needs type names (#75).
+// from the generated schema's zod checks, so it no longer needs type names.
 
 // Bounded integer builtins whose value space fits Number.MAX_SAFE_INTEGER —
 // these map to z.number().int().

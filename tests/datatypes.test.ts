@@ -525,7 +525,7 @@ describe("bigint integer types (integers: bigint)", () => {
 
 describe("decimal order-facet precision", () => {
   // The boundary's significant digits exceed double precision: comparing in
-  // doubles would move the boundary to the rounded edge (#136).
+  // doubles would move the boundary to the rounded edge.
   const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">

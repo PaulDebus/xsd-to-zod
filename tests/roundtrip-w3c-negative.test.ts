@@ -6,7 +6,7 @@ import { discoverInvalidCases, type W3cTestSetRef } from "./w3cDriver.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
-// Same selection as the positive extended suite (#108 Phase 3): for instances
+// Same selection as the positive extended suite: for instances
 // the suite marks INVALID, assert the generated Zod schema rejects them. Where
 // the zod tier is intentionally lenient (unenforced facets, unsupported
 // features), the libxml2 tier is the conformance authority: the case passes

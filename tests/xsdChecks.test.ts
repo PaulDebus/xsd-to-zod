@@ -73,7 +73,7 @@ describe("xsdDecimalCompare", () => {
     [".5", "0.5", 0],
     ["5.", "5.0", 0],
     ["+007", "7", 0],
-    // The #136 case: boundary digits beyond double precision compare exactly.
+    // Boundary digits beyond double precision compare exactly.
     ["1000000000000000000", "999999999999999999.488264", 1],
     ["999999999999999999", "999999999999999999.488264", -1],
     ["-1000000000000000000", "-999999999999999999.488264", -1],

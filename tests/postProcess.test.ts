@@ -29,7 +29,7 @@ const withProject = (
 const readLog = (log: string): string[] =>
   fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [];
 
-describe("runPostGenerationFormatting (#74)", () => {
+describe("runPostGenerationFormatting", () => {
   it("does nothing when there are no files", () => {
     withProject(["eslint"], ["eslint.config.js"], ({ cwd, log }) => {
       expect(runPostGenerationFormatting([], cwd)).toBe(false);
@@ -61,7 +61,7 @@ describe("runPostGenerationFormatting (#74)", () => {
     });
   });
 
-  it("skips eslint when only a legacy .eslintrc exists — ESLint v9 ignores it (#74)", () => {
+  it("skips eslint when only a legacy .eslintrc exists — ESLint v9 ignores it", () => {
     withProject(["eslint"], [".eslintrc.json"], ({ cwd, log }) => {
       expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(false);
       expect(readLog(log)).toEqual([]);
@@ -122,7 +122,7 @@ describe("runPostGenerationFormatting (#74)", () => {
   });
 });
 
-describe("runPostGenerationFormatting — formatting must not be silently skipped (#143)", () => {
+describe("runPostGenerationFormatting — formatting must not be silently skipped", () => {
   it("runs biome without a biome.json — biome formats fine with defaults", () => {
     withProject(["biome"], [], ({ cwd, log }) => {
       expect(runPostGenerationFormatting(["out.zod.ts"], cwd)).toBe(true);

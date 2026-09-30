@@ -51,7 +51,7 @@ const parser = new XMLParser({
   skip: { attributes: false },
   attributes: { prefix: "@_" },
   // Decode entities but keep attribute/text lexicals verbatim: default number
-  // coercion would corrupt schema values like fixed="1.0" or enum values (#68).
+  // coercion would corrupt schema values like fixed="1.0" or enum values.
   OutputBuilder: createOutputBuilder(),
 });
 
@@ -624,7 +624,7 @@ const dropCircularSimpleTypeRefs = (
 };
 
 // Human-readable text from xs:annotation/xs:documentation children, emitted as
-// .describe() in the generated schemas (#25). A documentation node parses to a
+// .describe() in the generated schemas. A documentation node parses to a
 // plain string when it has no attributes, or an object with #text when it has
 // (e.g. xml:lang) — both shapes are handled, multiple entries are joined.
 const extractDocumentation = (node: AnyNode): string | undefined => {
@@ -653,7 +653,7 @@ const extractDocumentation = (node: AnyNode): string | undefined => {
 // A named group/attributeGroup definition plus the namespace context of the
 // schema document that defined it: members are resolved and namespaced with
 // the defining file's nsMap, target namespace and form defaults, not the
-// referencing file's (#94).
+// referencing file's.
 type GroupEntry = {
   ownerNs: string;
   formDefaults: SchemaFormDefaults;
@@ -661,7 +661,7 @@ type GroupEntry = {
   node: AnyNode;
 };
 
-/** A global attribute declaration: its type plus documentation (#25). */
+/** A global attribute declaration: its type plus documentation. */
 type GlobalAttributeDecl = {
   typeName: QName;
   description?: string;
@@ -860,7 +860,7 @@ const resolveElementTypeName = (
 ): QName => {
   if (child["@_type"]) {
     // nsMap already maps '' to the declared default xmlns, falling back to
-    // the target namespace only when none is declared (#94).
+    // the target namespace only when none is declared.
     return resolveTypeQName(String(child["@_type"]), ctx.nsMap, ctx.diagnostics);
   }
   const inlineComplex = nodeChildren(child).find(
@@ -1092,7 +1092,7 @@ const collectChoice: FieldHandler = (child, ctx, scope) => {
   }
   // Each direct child of the xs:choice is one branch. Branch identity is
   // threaded through as choiceBranch so fields inlined from a group ref or
-  // nested compositor stay together as a single branch (#73 / ipo-style
+  // nested compositor stay together as a single branch (ipo-style
   // shipTo+billTo vs singleAddress choices).
   let branchIndex = 0;
   for (const [branchTag, branchChild] of nodeChildrenOrdered(child)) {
@@ -1159,7 +1159,7 @@ const collectSimpleContent: FieldHandler = (child, ctx, scope) => {
     let textType = baseType;
     const seenAttrs = new Set<string>();
     // Type-level cycle guard: circular simpleContent bases (invalid XSD)
-    // would otherwise spin forever once all types are collected (#94).
+    // would otherwise spin forever once all types are collected.
     const seenTypes = new Set<QName>([baseType]);
     let current = ctx.complexTypes[baseType];
     while (current) {
@@ -1979,7 +1979,7 @@ const collectRedefineOverrides = (
 // Declaration collection is separated from field collection
 // (collectTopLevelElements / collectComplexTypes) so element, group,
 // attributeGroup and attribute references always resolve against the complete
-// declaration maps, regardless of file and CLI argument order (#77).
+// declaration maps, regardless of file and CLI argument order.
 const collectDeclarations = (
   state: ParseState,
   files: ScannedFile[],
@@ -1996,7 +1996,7 @@ const collectDeclarations = (
     formDefaults: fileFormDefaults,
   } of files) {
     const effectiveNs = fileTargetNs || entry.inheritedTargetNs || "";
-    // Namespace-less schemas contribute no entry — '' would be noise (#79).
+    // Namespace-less schemas contribute no entry — '' would be noise.
     if (effectiveNs) {
       state.targetNamespaces.add(effectiveNs);
     }
@@ -2133,7 +2133,7 @@ const collectDeclarations = (
 };
 
 // Group/attributeGroup redefines must land before any field collection:
-// references to them are inlined into consumers at collection time (#78).
+// references to them are inlined into consumers at collection time.
 // Self-refs inside the override are expanded against the original first.
 const applyGroupRedefines = (state: ParseState, overrides: RedefineOverride[]): void => {
   for (const override of overrides) {
