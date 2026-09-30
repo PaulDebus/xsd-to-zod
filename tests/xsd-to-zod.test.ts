@@ -1081,6 +1081,36 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
+    it("compares union-typed fixed values in value space (member-type agreement)", async () => {
+      const UNION_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root" fixed="2">
+    <xs:simpleType>
+      <xs:union memberTypes="xs:boolean xs:int xs:string"/>
+    </xs:simpleType>
+  </xs:element>
+</xs:schema>`;
+      await withTempDirAsync(async (dir) => {
+        const file = path.join(dir, "schema.xsd");
+        fs.writeFileSync(file, UNION_FIXED_XSD);
+        const generated = irToZod(await parseXsd([file]));
+        // No z.literal: the member type accepting the fixed lexical ("2" →
+        // xs:int) decides the value — only the runtime's branch-agreed
+        // coercion knows it. The constraint rides the fixedLexical meta.
+        expect(generated.schemas).not.toContain("z.literal");
+        expect(generated.schemas).toContain('fixedLexical: "2"');
+
+        const mod = await importGeneratedSchemas(generated.schemas);
+        const rootSchema = mod["rootSchema"] as z.ZodType;
+        // "2" validates as the int 2 — the fixed value's own member.
+        expect(parseXml(rootSchema, "<root>2</root>")).toBe(2);
+        // "false" validates as the boolean false — a different member type,
+        // so it is not value-space equal to the int 2.
+        expect(() => parseXml(rootSchema, "<root>false</root>")).toThrow(/fixed value/);
+        expect(() => parseXml(rootSchema, "<root>3</root>")).toThrow(/fixed value/);
+      });
+    });
+
     it("round-trips facet-constrained data", async () => {
       await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");

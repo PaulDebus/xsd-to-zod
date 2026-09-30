@@ -305,6 +305,26 @@ const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QN
     : undefined;
 };
 
+// Resolve a (possibly user-defined) simple type to whether it is a union. A
+// union-typed fixed value cannot ride a z.literal: the member type accepting
+// the declared lexical decides the value (branch agreement), which only the
+// runtime's coercion knows — the runtime enforces the constraint from the
+// meta instead (see fixedValueSatisfied).
+const resolvesToUnion = (typeName: QName, ir: XsdIr, seen?: Set<string>): boolean => {
+  const next = nextSeen(seen, typeName);
+  if (!next) {
+    return false;
+  }
+  const simple = ir.simpleTypes[typeName];
+  if (simple === undefined) {
+    return false;
+  }
+  if (simple.kind === "union") {
+    return true;
+  }
+  return simple.kind === "restriction" ? resolvesToUnion(simple.baseType, ir, next) : false;
+};
+
 const primitiveToZod = (
   typeName: QName,
   definedTypes: Set<string>,
@@ -905,24 +925,36 @@ const withCardinality = (
     const fixedValue = wsProcessLiteral(field.fixedValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
     if (listItemType === undefined) {
-      // Structured date/time fixed: z.literal compares objects by reference, so
-      // constrain by canonical lexical equality instead. The value itself is in
-      // the field meta (the runtime substitutes present-but-empty content).
-      const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
-      if (st) {
-        usedHelpers.add(st.writeFn);
-        const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
-        result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
+      if (resolvesToUnion(field.typeName, ir)) {
+        // Union-typed fixed: no z.literal — the member type accepting the
+        // declared lexical decides the value (branch agreement), which only
+        // the runtime's coercion knows. The runtime enforces the constraint
+        // from the fixedLexical meta.
       } else {
-        // z.literal replaces the type expression, so the type's whiteSpace
-        // preprocessing must be re-applied around it (NMTOKENS fixed values
-        // compare after collapse).
-        const literal = `z.literal(${typedLiteral(kind, fixedValue)})`;
-        result =
-          ws === undefined
-            ? literal
-            : `z.preprocess((v) => typeof v === "string" ? ${ws === "collapse" ? XSD_WS_COLLAPSE : XSD_WS_REPLACE} : v, ${literal})`;
+        // Structured date/time fixed: z.literal compares objects by reference, so
+        // constrain by canonical lexical equality instead. The value itself is in
+        // the field meta (the runtime substitutes present-but-empty content).
+        const st = structured
+          ? structuredType(resolveBuiltinLocal(field.typeName, ir))
+          : undefined;
+        if (st) {
+          usedHelpers.add(st.writeFn);
+          const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
+          result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
+        } else {
+          // z.literal replaces the type expression, so the type's whiteSpace
+          // preprocessing must be re-applied around it (NMTOKENS fixed values
+          // compare after collapse).
+          const literal = `z.literal(${typedLiteral(kind, fixedValue)})`;
+          result =
+            ws === undefined
+              ? literal
+              : `z.preprocess((v) => typeof v === "string" ? ${ws === "collapse" ? XSD_WS_COLLAPSE : XSD_WS_REPLACE} : v, ${literal})`;
+        }
       }
+    } else if (resolvesToUnion(listItemType, ir)) {
+      // List-of-union fixed: same branch-agreement problem as union-typed
+      // fixed — the runtime enforces from the fixedLexical meta.
     } else {
       // List-typed fixed: the lexical is whitespace-separated items. z.literal
       // cannot deep-compare arrays (zod 4), so constrain the list schema with a
