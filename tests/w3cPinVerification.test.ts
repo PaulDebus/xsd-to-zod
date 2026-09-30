@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { readXmlFile } from "../src/index.js";
 import { splitQName } from "../src/qname.js";
 import { createOutputBuilder } from "../src/runtime.js";
-import { extractRootInfo, validateXmlAgainstSchemas } from "./helpers.js";
+import { extractRootInfo, runRoundTrip, validateXmlAgainstSchemas } from "./helpers.js";
 import { W3C_CORPUS_KNOWN_FAILURES, W3C_CORPUS_REASONS } from "./w3cCorpusKnownFailures.js";
 import { discoverValidCases, type W3cCase } from "./w3cDriver.js";
 import { REASONS, W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
@@ -19,6 +19,8 @@ import { REASONS, W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 //   still fail libxml2 validation against the original schemas.
 // - noRootDeclaration: no schema of the case may declare a top-level
 //   element matching the instance root.
+// - beyondSafeInteger: the case must round-trip in the exact integer
+//   mapping (integers: bigint) — the safe-integer ceiling is the only blocker.
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
@@ -158,6 +160,13 @@ describe("W3C pin verification", () => {
       it(`selection pin ${key}: no global element matches the instance root`, () => {
         expectNoRootDeclaration(selectionCase(key));
       });
+    } else if (reason === REASONS.beyondSafeInteger) {
+      // The pin claims the safe-integer ceiling is the only blocker — so the
+      // exact mapping (integers: bigint) must round-trip the case.
+      it(`selection pin ${key}: bigint mode round-trips it`, async () => {
+        const c = selectionCase(key);
+        await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, { integers: "bigint" });
+      }, 30_000);
     }
   }
 

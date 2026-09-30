@@ -234,6 +234,40 @@ describe("CLI e2e", () => {
     });
   });
 
+  it("maps the xs:integer family to numbers by default, bigint with --integers bigint", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "ints.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="version" type="xs:nonNegativeInteger"/>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(fs.readFileSync(path.join(dir, "ints.zod.ts"), "utf8")).toContain(
+        "z.number().int().min(0)",
+      );
+
+      const rBig = await runCli([xsdFile, "-o", dir, "--name", "ints-big", "--integers", "bigint"]);
+      expect(rBig.code).toBe(0);
+      expect(fs.readFileSync(path.join(dir, "ints-big.zod.ts"), "utf8")).toContain(
+        "z.bigint().min(0n)",
+      );
+    });
+  });
+
+  it("rejects an invalid --integers mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "test.xsd");
+      fs.writeFileSync(xsdFile, XSD);
+      const r = await runCli([xsdFile, "-o", dir, "--integers", "float"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('invalid --integers mode: float (expected "number" or "bigint")');
+    });
+  });
+
   it("reports missing input files in the CLI error style instead of a stack trace (#82)", async () => {
     await withTempDirAsync(async (dir) => {
       const r = await runCli([path.join(dir, "missing.xsd"), "-o", dir]);

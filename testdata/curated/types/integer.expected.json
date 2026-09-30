@@ -1,8 +1,4 @@
 {
-  "count": {
-    "$bigint": "42"
-  },
-  "total": {
-    "$bigint": "100"
-  }
+  "count": 42,
+  "total": 100
 }

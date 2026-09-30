@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { irToZod, parseXml, parseXsd, safeParseXml, serializeXml } from "../src/index.js";
+import type { IrToZodOptions } from "../src/irToZod.js";
 import {
   xsdBase64Binary,
   xsdDate,
@@ -212,12 +213,12 @@ describe("xsdLexicals validators", () => {
   });
 });
 
-const codeFor = async (xsd: string): Promise<string> => {
+const codeFor = async (xsd: string, opts?: IrToZodOptions): Promise<string> => {
   let code = "";
   await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
-    code = irToZod(await parseXsd([file])).schemas;
+    code = irToZod(await parseXsd([file]), opts).schemas;
   });
   return code;
 };
@@ -260,6 +261,28 @@ describe("builtin lexical codegen", () => {
   </xs:element>
 </xs:schema>`);
     expect(code).toContain('"b": z.number().int().min(-128).max(127)');
+    // The xs:integer family defaults to numbers too; bounds beyond
+    // ±MAX_SAFE_INTEGER (long's) cannot be expressed exactly as doubles, so
+    // they are dropped rather than rounded.
+    expect(code).toContain('"n": z.number().int().min(0)');
+    expect(code).toContain('"l": z.number().int()');
+  });
+
+  it("emits bigint with exact bounds under integers: bigint", async () => {
+    const code = await codeFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="n" type="xs:nonNegativeInteger"/>
+        <xs:element name="l" type="xs:long"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      { integers: "bigint" },
+    );
     // Arbitrary-precision and 64-bit integers map to bigint; long's bounds
     // exceed MAX_SAFE_INTEGER, so they are expressed as bigint literals.
     expect(code).toContain('"n": z.bigint().min(0n)');
@@ -351,7 +374,7 @@ describe("parseXml lexical validation", () => {
   });
 });
 
-describe("bigint integer types", () => {
+describe("integer types default to number", () => {
   const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
@@ -372,6 +395,73 @@ describe("bigint integer types", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file]);
+      root = Object.values(mod).find(
+        (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
+      );
+    });
+    if (root === undefined) {
+      throw new Error("no root schema generated");
+    }
+    return root;
+  };
+
+  const doc = (i: string, l: string, ul: string, n: string) =>
+    `<root><i>${i}</i><l>${l}</l><ul>${ul}</ul><n>${n}</n></root>`;
+
+  it("parses the xs:integer family as plain numbers; JSON.stringify works", async () => {
+    const root = await importRoot();
+    const parsed = parseXml(root, doc("+007", "-0", "0", "+5")) as Record<string, unknown>;
+    expect(parsed).toEqual({ i: 7, l: 0, ul: 0, n: 5 });
+    // The number default exists for JSON interop — bigint would throw here.
+    expect(JSON.stringify(parsed)).toBe('{"i":7,"l":0,"ul":0,"n":5}');
+    // Round-trip: serialization keeps the canonical lexical.
+    const serialized = serializeXml(root, parsed);
+    expect(parseXml(root, serialized)).toEqual(parsed);
+  });
+
+  it("enforces the safe-integer bounds (unsignedLong min, int range, 2^53 ceiling)", async () => {
+    const root = await importRoot();
+    expect(safeParseXml(root, doc("0", "0", "-1", "0")).success, "ul: -1").toBe(false);
+    expect(safeParseXml(root, doc("0", "0", "0", "2147483648")).success, "n: 2^31").toBe(false);
+    // zod's int check caps at the safe-integer range: beyond it the value is
+    // rejected, not silently rounded (bigint mode accepts it exactly).
+    expect(safeParseXml(root, doc("9007199254740991", "0", "0", "0")).success, "i: 2^53-1").toBe(
+      true,
+    );
+    expect(safeParseXml(root, doc("9007199254740993", "0", "0", "0")).success, "i: 2^53+1").toBe(
+      false,
+    );
+  });
+
+  it("rejects non-integer lexicals", async () => {
+    const root = await importRoot();
+    for (const bad of ["1.5", "1e3", "NaN", "INF", ""]) {
+      expect(safeParseXml(root, doc(bad, "0", "0", "0")).success, bad).toBe(false);
+    }
+  });
+});
+
+describe("bigint integer types (integers: bigint)", () => {
+  const XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="i" type="xs:integer"/>
+        <xs:element name="l" type="xs:long"/>
+        <xs:element name="ul" type="xs:unsignedLong"/>
+        <xs:element name="n" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+  const importRoot = async (): Promise<z.ZodType> => {
+    let root: z.ZodType | undefined;
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD);
+      const mod = await generateAndImport([file], { integers: "bigint" });
       root = Object.values(mod).find(
         (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
       );

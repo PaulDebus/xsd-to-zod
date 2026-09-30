@@ -15,7 +15,8 @@ export const XSD_SAFE_INTEGER_TYPE_NAMES: ReadonlySet<string> = new Set([
 
 // Integer builtins that are arbitrary-precision (integer + derivations) or
 // 64-bit-bounded beyond MAX_SAFE_INTEGER (long/unsignedLong) — these map to
-// z.bigint() so no valid lexical is lost to double rounding.
+// z.number().int() by default (JSON-safe; irToZod's integers option) or to
+// z.bigint() on opt-in, so no valid lexical is lost to double rounding.
 export const XSD_BIGINT_TYPE_NAMES: ReadonlySet<string> = new Set([
   "integer",
   "long",

@@ -379,7 +379,9 @@ const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
     if (!INTEGER_LEXICAL.test(trimmed)) {
       throw new Error(`Invalid xs:int lexical: ${JSON.stringify(trimmed)}`);
     }
-    return Number(trimmed);
+    const value = Number(trimmed);
+    // The integer value space has no -0 (bigint coercion yields 0n too).
+    return value === 0 ? 0 : value;
   }
   return coerceNumberValue(trimmed);
 };
