@@ -471,6 +471,13 @@ const readSchema = (
     });
   }
   const schemaNode = schemaEntry[1];
+  // blockDefault is the file-level default for the block attribute of every
+  // element declaration and type definition in this document — apply it
+  // eagerly so downstream code only ever reads @\_block.
+  const blockDefault = schemaNode["@_blockDefault"];
+  if (blockDefault !== undefined) {
+    applyBlockDefault(schemaNode, String(blockDefault));
+  }
   const nsMap = collectNamespaceMap(schemaNode);
   const targetNs = String(schemaNode["@_targetNamespace"] ?? "");
   const formDefaults: SchemaFormDefaults = {
@@ -478,6 +485,27 @@ const readSchema = (
     attribute: normalizeFormDefault(schemaNode["@_attributeFormDefault"], "unqualified"),
   };
   return { schemaNode, nsMap, targetNs, formDefaults };
+};
+
+// Deep blockDefault application: every xs:element / xs:complexType node in
+// the document without its own block attribute gets the file's default.
+const applyBlockDefault = (node: AnyNode, blockDefault: string): void => {
+  for (const [key, value] of Object.entries(node)) {
+    if (key.startsWith("@_") || key === "#text") {
+      continue;
+    }
+    for (const entry of asArray(value as AnyNode | AnyNode[])) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const child = entry as AnyNode;
+      const local = getNodeTagLocalName(key);
+      if ((local === "element" || local === "complexType") && child["@_block"] === undefined) {
+        child["@_block"] = blockDefault;
+      }
+      applyBlockDefault(child, blockDefault);
+    }
+  }
 };
 
 const collectChildren = (entries: Iterable<[string, unknown]>): [string, AnyNode][] => {
@@ -949,6 +977,8 @@ const collectElementRef = (
     // global declaration's default/fixed applies.
     ...optProp("defaultValue", referenced.defaultValue),
     ...optProp("fixedValue", referenced.fixedValue),
+    // Same for block: a ref particle declares none of its own.
+    ...optProp("block", referenced.block),
     // Identity constraints ride along too: they scope per occurrence of the
     // referenced element declaration.
     ...optProp("identityConstraints", referenced.identityConstraints),
@@ -988,6 +1018,7 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
     ),
     typeName,
     nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
+    ...optProp("block", child["@_block"] ? String(child["@_block"]) : undefined),
     ...optProp("choiceGroup", scope.choiceGroup),
     ...optProp("choiceBranch", scope.choiceBranch),
     ...valueConstraints(child),
@@ -2238,6 +2269,7 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
         typeName,
         cardinality: parseCardinality(child),
         nillable: child["@_nillable"] === true || child["@_nillable"] === "true",
+        ...optProp("block", child["@_block"] ? String(child["@_block"]) : undefined),
         ...optProp("substitutionGroup", substitutionGroup),
         ...optProp("description", description),
         ...valueConstraints(child),
@@ -2298,6 +2330,7 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
         ...optProp("baseType", baseType),
         ...optProp("restrictionBase", restrictionBase),
         ...(isAbstractComplexType(child) ? { abstract: true } : {}),
+        ...optProp("block", child["@_block"] ? String(child["@_block"]) : undefined),
         ...optProp("description", description),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
         ...choiceGuardsMeta(fCtx.choiceGroupGuards),
@@ -2365,6 +2398,12 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("baseType", original.baseType),
             ...optProp("restrictionBase", original.restrictionBase),
             ...(abstract || original.abstract === true ? { abstract: true } : {}),
+            ...optProp(
+              "block",
+              override.node["@_block"] === undefined
+                ? original.block
+                : String(override.node["@_block"]),
+            ),
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...choiceGuardsMeta(mergedChoiceGuards),
@@ -2376,6 +2415,10 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             fields,
             ...optProp("baseType", effectiveBaseType),
             ...(abstract ? { abstract: true } : {}),
+            ...optProp(
+              "block",
+              override.node["@_block"] ? String(override.node["@_block"]) : undefined,
+            ),
             ...optProp("description", description),
             ...choiceGroupMeta,
             ...choiceGuardMeta,
@@ -2388,6 +2431,10 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           fields,
           ...optProp("baseType", effectiveBaseType),
           ...(abstract ? { abstract: true } : {}),
+          ...optProp(
+            "block",
+            override.node["@_block"] ? String(override.node["@_block"]) : undefined,
+          ),
           ...optProp("description", description),
           ...choiceGroupMeta,
           ...choiceGuardMeta,
@@ -2469,6 +2516,7 @@ const processDeferredType = (
     ...optProp("baseType", baseType),
     ...optProp("restrictionBase", restrictionBase),
     ...(isAbstractComplexType(container) ? { abstract: true } : {}),
+    ...optProp("block", container["@_block"] ? String(container["@_block"]) : undefined),
     ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
     ...choiceGuardsMeta(fCtx.choiceGroupGuards),
     ...(wildcards.length > 0 ? { wildcards } : {}),

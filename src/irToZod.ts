@@ -1490,6 +1490,28 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
 const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, T> | object =>
   value === undefined ? {} : { [key]: value };
 
+// Meta parts for the runtime's xsi:type validity check (cvc-elt) on element
+// declarations whose block covers extension/restriction: the declared type,
+// its derived types with derivation methods, its ancestors, and the module's
+// known types. Complex-typed slots already enforce block through the variant
+// union meta; these entries only fire on the simple-typed read paths.
+const xsiBlockMetaParts = (typeName: QName, blockTokens: string[], ir: XsdIr): string[] => {
+  if (!blockTokens.includes("extension") && !blockTokens.includes("restriction")) {
+    return [];
+  }
+  const knownTypes = [
+    ...XSD_BUILTIN_QNAMES,
+    ...Object.keys(ir.simpleTypes),
+    ...Object.keys(ir.complexTypes),
+  ];
+  return [
+    `declaredType: ${JSON.stringify(typeName)}`,
+    `derivations: ${JSON.stringify(derivedSimpleAndComplex(typeName, ir))}`,
+    `ancestors: ${JSON.stringify(derivationAncestors(typeName, ir))}`,
+    `knownTypes: ${JSON.stringify(knownTypes)}`,
+  ];
+};
+
 // Per-field XML knowledge lives on the containing object schema: a named type
 // can be referenced by several elements with different qnames, so field-level
 // meta on shared schemas would conflict. Returns the fields entries and the
@@ -1507,6 +1529,33 @@ const fieldsMetaFor = (
     const substMembers = membersByHead.get(field.qname);
     if (substMembers !== undefined && substMembers.length > 0) {
       parts.push(`substitutes: ${JSON.stringify(substMembers.map((m) => m.name))}`);
+    }
+    const blockTokens = parseBlockTokens(field.block);
+    if (blockTokens.length > 0) {
+      parts.push(`block: ${JSON.stringify(blockTokens)}`);
+      parts.push(...xsiBlockMetaParts(field.typeName, blockTokens, ir));
+    }
+    // Substitution blocking: the head element's block ("substitution" rejects
+    // members outright) plus the union of the head element's and head type's
+    // extension/restriction blocks (a member whose type derives by a blocked
+    // method is rejected either way).
+    const substBlock = [
+      ...new Set(
+        [...blockTokens, ...parseBlockTokens(ir.complexTypes[field.typeName]?.block)].filter(
+          (token) => token !== "substitution",
+        ),
+      ),
+    ];
+    if (substBlock.length > 0 && substMembers !== undefined && substMembers.length > 0) {
+      const methods = Object.fromEntries(
+        substMembers
+          .map((m) => [m.name, derivationMethods(m.typeName, field.typeName, ir)] as const)
+          .filter((entry): entry is readonly [QName, string[]] => entry[1] !== undefined),
+      );
+      parts.push(`substBlock: ${JSON.stringify(substBlock)}`);
+      if (Object.keys(methods).length > 0) {
+        parts.push(`substMethods: ${JSON.stringify(methods)}`);
+      }
     }
     if (field.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       parts.push("open: true");
@@ -1628,6 +1677,253 @@ const knownDerivationBases = (type: ComplexTypeDef, ir: XsdIr): QName[] => {
     }
   }
   return bases;
+};
+
+// Tokenize a raw block lexical ("#all" or a whitespace-separated list of
+// extension / restriction / substitution) into the individual block tokens.
+const parseBlockTokens = (raw: string | undefined): string[] => {
+  if (raw === undefined) {
+    return [];
+  }
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  return tokens.includes("#all") ? ["extension", "restriction", "substitution"] : tokens;
+};
+
+const ANY_TYPE: QName = `{${XSD_NS}}anyType`;
+const ANY_SIMPLE_TYPE: QName = `{${XSD_NS}}anySimpleType`;
+
+// Builtin derivation parents (every step a restriction). Types absent here
+// derive directly from anySimpleType; the list builtins (NMTOKENS, IDREFS,
+// ENTITIES) derive from anySimpleType by list.
+const XSD_BUILTIN_PARENT: ReadonlyMap<string, string> = new Map([
+  ["normalizedString", "string"],
+  ["token", "normalizedString"],
+  ["language", "token"],
+  ["NMTOKEN", "token"],
+  ["Name", "token"],
+  ["NCName", "Name"],
+  ["ID", "NCName"],
+  ["IDREF", "NCName"],
+  ["ENTITY", "NCName"],
+  ["integer", "decimal"],
+  ["nonPositiveInteger", "integer"],
+  ["negativeInteger", "nonPositiveInteger"],
+  ["nonNegativeInteger", "integer"],
+  ["positiveInteger", "nonNegativeInteger"],
+  ["long", "integer"],
+  ["int", "long"],
+  ["short", "int"],
+  ["byte", "short"],
+  ["unsignedLong", "nonNegativeInteger"],
+  ["unsignedInt", "unsignedLong"],
+  ["unsignedShort", "unsignedInt"],
+  ["unsignedByte", "unsignedShort"],
+  ["dateTimeStamp", "dateTime"],
+]);
+
+// All builtin type qnames — the always-known entries of a module's type
+// universe for the "xsi:type must derive from the declared type" check.
+const XSD_BUILTIN_QNAMES: QName[] = [
+  ANY_TYPE,
+  ANY_SIMPLE_TYPE,
+  ...[
+    "string",
+    "normalizedString",
+    "token",
+    "language",
+    "NMTOKEN",
+    "NMTOKENS",
+    "Name",
+    "NCName",
+    "ID",
+    "IDREF",
+    "IDREFS",
+    "ENTITY",
+    "ENTITIES",
+    "boolean",
+    "decimal",
+    "integer",
+    "nonPositiveInteger",
+    "negativeInteger",
+    "long",
+    "int",
+    "short",
+    "byte",
+    "nonNegativeInteger",
+    "unsignedLong",
+    "unsignedInt",
+    "unsignedShort",
+    "unsignedByte",
+    "positiveInteger",
+    "float",
+    "double",
+    "duration",
+    "dateTime",
+    "time",
+    "date",
+    "gYearMonth",
+    "gYear",
+    "gMonthDay",
+    "gDay",
+    "gMonth",
+    "hexBinary",
+    "base64Binary",
+    "anyURI",
+    "QName",
+    "NOTATION",
+  ].map((local): QName => `{${XSD_NS}}${local}`),
+];
+
+// One derivation step upward from a type: the method and the base's qname.
+// Complex types without an explicit base restrict anyType; list/union types
+// derive from anySimpleType by list/union (methods block never covers).
+const derivationStep = (
+  typeName: QName,
+  ir: XsdIr,
+): { method: string; next: QName } | undefined => {
+  if (typeName === ANY_TYPE) {
+    return undefined;
+  }
+  if (typeName === ANY_SIMPLE_TYPE) {
+    return { method: "restriction", next: ANY_TYPE };
+  }
+  const complex = ir.complexTypes[typeName];
+  if (complex !== undefined) {
+    if (complex.restrictionBase !== undefined) {
+      return { method: "restriction", next: complex.restrictionBase };
+    }
+    if (complex.baseType !== undefined) {
+      return { method: "extension", next: complex.baseType };
+    }
+    return { method: "restriction", next: ANY_TYPE };
+  }
+  const simple = ir.simpleTypes[typeName];
+  if (simple !== undefined) {
+    if (simple.kind === "restriction") {
+      return { method: "restriction", next: simple.baseType };
+    }
+    return { method: simple.kind, next: ANY_SIMPLE_TYPE };
+  }
+  const parts = trySplitClark(typeName);
+  if (parts?.ns === XSD_NS) {
+    if (parts.local === "NMTOKENS" || parts.local === "IDREFS" || parts.local === "ENTITIES") {
+      return { method: "list", next: ANY_SIMPLE_TYPE };
+    }
+    return {
+      method: "restriction",
+      next: `{${XSD_NS}}${XSD_BUILTIN_PARENT.get(parts.local) ?? "anySimpleType"}`,
+    };
+  }
+  return undefined;
+};
+
+// Derivation methods along the chain from `from` up to `to` ("restriction"
+// for a restriction step, "extension" otherwise; "list"/"union" appear but
+// are never blocked) — the input of the runtime's block check. undefined
+// when the chain does not reach `to` (unrelated types): blocking is not
+// provable.
+const derivationMethods = (from: QName, to: QName, ir: XsdIr): string[] | undefined => {
+  const methods: string[] = [];
+  const seen = new Set<QName>([from]);
+  // Type Derivation OK (Simple): when `to` is a union, a type validly derived
+  // from one of its member types is validly derived from it — the union step
+  // itself contributes no blockable method.
+  const toSimple = ir.simpleTypes[to];
+  const toMembers = toSimple?.kind === "union" ? new Set(toSimple.memberTypes) : undefined;
+  let current = from;
+  for (;;) {
+    if (current === to || toMembers?.has(current) === true) {
+      return methods;
+    }
+    const step = derivationStep(current, ir);
+    if (step === undefined || seen.has(step.next)) {
+      return undefined;
+    }
+    methods.push(step.method);
+    seen.add(step.next);
+    current = step.next;
+  }
+};
+
+// The declared type's own ancestry chain (every base up to anyType) — an
+// xsi:type naming an ancestor is never valid.
+const derivationAncestors = (typeName: QName, ir: XsdIr): QName[] => {
+  const ancestors: QName[] = [];
+  const seen = new Set<QName>([typeName]);
+  let current = typeName;
+  for (;;) {
+    const step = derivationStep(current, ir);
+    if (step === undefined || seen.has(step.next)) {
+      return ancestors;
+    }
+    ancestors.push(step.next);
+    seen.add(step.next);
+    current = step.next;
+  }
+};
+
+// All types derived from `typeName` (transitively, complex + simple) with
+// their derivation methods — the allowed xsi:type targets of a blocked
+// element declaration.
+const derivedSimpleAndComplex = (typeName: QName, ir: XsdIr): Record<QName, string[]> => {
+  const baseIndex = new Map<QName, QName[]>();
+  const addEdge = (derived: QName, base: QName): void => {
+    const list = baseIndex.get(base) ?? [];
+    list.push(derived);
+    baseIndex.set(base, list);
+  };
+  for (const simple of Object.values(ir.simpleTypes)) {
+    if (simple.kind === "restriction") {
+      addEdge(simple.name, simple.baseType);
+    } else {
+      addEdge(simple.name, ANY_SIMPLE_TYPE);
+      if (simple.kind === "union") {
+        // Member types are validly derived from the union (same rule the
+        // derivationMethods member check follows).
+        for (const member of simple.memberTypes) {
+          addEdge(member, simple.name);
+        }
+      }
+    }
+  }
+  for (const complex of Object.values(ir.complexTypes)) {
+    const bases = [complex.restrictionBase, complex.baseType].filter(
+      (base): base is QName => base !== undefined,
+    );
+    for (const base of bases.length > 0 ? bases : [ANY_TYPE]) {
+      addEdge(complex.name, base);
+    }
+  }
+  // Builtin edges, so closures starting at anyType/anySimpleType or a builtin
+  // reach user types through the full hierarchy.
+  addEdge(ANY_SIMPLE_TYPE, ANY_TYPE);
+  for (const qname of XSD_BUILTIN_QNAMES) {
+    if (qname === ANY_TYPE || qname === ANY_SIMPLE_TYPE) {
+      continue;
+    }
+    const local = clarkToLocal(qname);
+    if (local === "NMTOKENS" || local === "IDREFS" || local === "ENTITIES") {
+      addEdge(qname, ANY_SIMPLE_TYPE);
+    } else {
+      const parent = XSD_BUILTIN_PARENT.get(local);
+      addEdge(qname, parent === undefined ? ANY_SIMPLE_TYPE : `{${XSD_NS}}${parent}`);
+    }
+  }
+  const result: Record<QName, string[]> = {};
+  const seen = new Set<QName>([typeName]);
+  const worklist = [...(baseIndex.get(typeName) ?? [])];
+  for (const current of worklist) {
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const methods = derivationMethods(current, typeName, ir);
+    if (methods !== undefined) {
+      result[current] = methods;
+    }
+    worklist.push(...(baseIndex.get(current) ?? []));
+  }
+  return result;
 };
 
 // Base type qname → direct derived type qnames, in declaration order. Only
@@ -2674,8 +2970,28 @@ export const irToZod = (
       .map((variant) => variantConstName.get(variant))
       .join(", ");
     const options = `${declaredVariantConstName.get(typeName)}${derived ? `, ${derived}` : ""}`;
+    // Block enforcement rides the union meta: the declared type's own block
+    // plus each variant's derivation methods from it. The element's block
+    // comes from the field/root meta at parse time.
+    const unionMeta: string[] = [];
+    const typeBlock = parseBlockTokens(complexType.block).filter((t) => t !== "substitution");
+    if (typeBlock.length > 0) {
+      unionMeta.push(`block: ${JSON.stringify(typeBlock)}`);
+    }
+    const derivations = Object.fromEntries(
+      variants
+        .slice(1)
+        .map((variant) => [variant, derivationMethods(variant, typeName, ir)] as const)
+        .filter((entry): entry is readonly [QName, string[]] => entry[1] !== undefined),
+    );
+    if (Object.keys(derivations).length > 0) {
+      unionMeta.push(`derivations: ${JSON.stringify(derivations)}`);
+    }
+    const unionExpr = `z.discriminatedUnion("xsiType", [${options}], { unionFallback: true })`;
     schemaLines.push(
-      `const ${unionConstName.get(typeName)} = z.discriminatedUnion("xsiType", [${options}], { unionFallback: true });`,
+      unionMeta.length > 0
+        ? `const ${unionConstName.get(typeName)} = ${unionExpr}.register(xmlRegistry, { ${unionMeta.join(", ")} });`
+        : `const ${unionConstName.get(typeName)} = ${unionExpr};`,
     );
   }
 
@@ -2710,6 +3026,11 @@ export const irToZod = (
     }
     if (moduleHasIdentity) {
       rootMeta.push("hasIdentity: true");
+    }
+    const rootBlock = parseBlockTokens(rootDef.block);
+    if (rootBlock.length > 0) {
+      rootMeta.push(`block: ${JSON.stringify(rootBlock)}`);
+      rootMeta.push(...xsiBlockMetaParts(rootDef.typeName, rootBlock, ir));
     }
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
     if (rootSt) {
