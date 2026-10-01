@@ -307,9 +307,11 @@ const resolveListItemType = (typeName: QName, ir: XsdIr, seen?: Set<string>): QN
 
 // Structured-mode values are objects on the output side, but the wire form
 // (and hand-built input) is the lexical string. The schema accepts both: a
-// custom branch passes structured objects through unchanged, the string
-// branch keeps lexical validation and the transform. serializeXml validates
-// its input through the schema, so parseXml's output must re-validate.
+// custom branch admits structured objects, re-checking them against the
+// lexical grammar the serializer writes; the string branch keeps lexical
+// validation and the transform. serializeXml validates its input through the
+// schema, so parseXml's output must re-validate — and whatever serializeXml
+// emits must re-parse.
 const XSD_STRUCTURED_REQUIRED_FIELDS: ReadonlyMap<string, string[]> = new Map([
   ["date", ["year", "month", "day"]],
   ["dateTime", ["year", "month", "day", "hour", "minute", "second"]],
@@ -336,6 +338,7 @@ interface DatatypeEmitCtx {
 const structuredValueGuard = (
   structInfo: StructuredDatatypeInfo,
   datatypeCtx: DatatypeEmitCtx | undefined,
+  validator: string,
 ): string => {
   const fields = XSD_STRUCTURED_REQUIRED_FIELDS.get(structInfo.name) ?? [];
   const check = [
@@ -343,11 +346,18 @@ const structuredValueGuard = (
     `v !== null`,
     ...fields.map((f) => `"${f}" in v && typeof v.${f} === "number"`),
   ].join(" && ");
-  if (datatypeCtx === undefined) {
-    return `z.custom((v) => ${check})`;
+  if (datatypeCtx !== undefined) {
+    datatypeCtx.usedTypes.add(structInfo.tsType);
   }
-  datatypeCtx.usedTypes.add(structInfo.tsType);
-  return `z.custom<${structInfo.tsType}>((v) => ${check})`;
+  const shape =
+    datatypeCtx === undefined
+      ? `z.custom((v) => ${check})`
+      : `z.custom<${structInfo.tsType}>((v) => ${check})`;
+  // The shape check only admits an object with numeric fields; the lexical
+  // grammar is then re-applied to exactly what the serializer emits (writeFn),
+  // so a hand-built structured value can never produce XML that parseXml
+  // rejects on the way back in.
+  return `${shape}.refine((v) => ${validator}(${structInfo.writeFn}(v)), { message: 'invalid xs:${structInfo.name} lexical' })`;
 };
 
 // Codegen context for primitive emission: the schema sets consulted while
@@ -425,7 +435,8 @@ const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
     const structuredInfo = structured ? structuredType(parts.local) : undefined;
     if (structuredInfo) {
       usedHelpers.add(structuredInfo.parseFn);
-      return `z.union([${structuredValueGuard(structuredInfo, datatypeCtx)}, ${base}.transform(${structuredInfo.parseFn})])`;
+      usedHelpers.add(structuredInfo.writeFn);
+      return `z.union([${structuredValueGuard(structuredInfo, datatypeCtx, validator)}, ${base}.transform(${structuredInfo.parseFn})])`;
     }
     return base;
   }

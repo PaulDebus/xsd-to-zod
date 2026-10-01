@@ -1,10 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
-import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
+import { expectTscPasses, importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 // serializeXml takes the schema's input type: it validates before walking, so
 // zod-level attribute defaults apply and invalid data fails early. Generated
@@ -132,26 +131,7 @@ const partial: OrderTypeIn = { item: "x", quantity: 1 };
 serializeXml(orderSchema, partial);
 `,
       );
-      const tsc = path.resolve("node_modules/.bin/tsc");
-      const result = spawnSync(
-        tsc,
-        [
-          "--noEmit",
-          "--ignoreConfig",
-          "--strict",
-          "--skipLibCheck",
-          "--target",
-          "es2022",
-          "--module",
-          "nodenext",
-          "--moduleResolution",
-          "nodenext",
-          consumerFile,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expectTscPasses([consumerFile]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

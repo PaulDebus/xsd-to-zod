@@ -123,7 +123,7 @@ export class DocumentOrderTracker {
    * serializeXml passes mode "copy": the caller's data keeps its recording,
    * so serializing the same parsed tree twice replays the order both times.
    */
-  transfer(walked: unknown, parsed: unknown, mode: TransferMode = "move"): void {
+  transfer(walked: unknown, parsed: unknown, mode: TransferMode): void {
     if (
       walked === null ||
       parsed === null ||

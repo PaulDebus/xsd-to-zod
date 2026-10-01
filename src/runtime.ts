@@ -763,9 +763,11 @@ const recordLexical = (
 
 // zod's safeParse rebuilds the data tree, so entries keyed by the walked
 // objects would be unreachable from the validated result. The two trees are
-// structurally isomorphic — re-key by position.
+// structurally isomorphic — re-key the recording onto its counterpart. Any
+// side-channel payload rides through unchanged: the stores differ only in
+// what they hold under each container.
 const transferRecord = <V>(
-  store: WeakMap<object, Map<string, V>>,
+  store: WeakMap<object, V>,
   walked: object,
   parsed: object,
   mode: TransferMode,
@@ -805,13 +807,7 @@ const transferLexicals = (walked: unknown, parsed: unknown, mode: TransferMode =
   transferRecord(nilAttributeStore, walked, parsed, mode);
   transferRecord(qnameNsStore, walked, parsed, mode);
   documentOrderTracker.transfer(walked, parsed, mode);
-  const xsiCapture = xsiCaptureStore.get(walked);
-  if (xsiCapture !== undefined) {
-    if (mode === "move") {
-      xsiCaptureStore.delete(walked);
-    }
-    xsiCaptureStore.set(parsed, xsiCapture);
-  }
+  transferRecord(xsiCaptureStore, walked, parsed, mode);
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
       const n = Math.min(walked.length, parsed.length);
