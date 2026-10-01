@@ -7,7 +7,7 @@ import { discoverCuratedCases } from "./helpers.js";
 
 // Smoke test: generated .zod.ts output must typecheck under the project's strict
 // settings for every curated fixture. Catches codegen bugs that produce invalid
-// TypeScript (#70 class) which runtime tests only see as dynamic import failures.
+// TypeScript which runtime tests only see as dynamic import failures.
 // All files are checked in a single tsc invocation — one process for the whole
 // corpus keeps this fast, and tsc's output names the offending file on failure.
 // Files live in the gitignored .xsd-to-zod-tests dotdir so the `xsd-to-zod` import in

@@ -6,7 +6,7 @@ import { irToZod, parseXsd } from "../src/index.js";
 import { withTempDirAsync } from "./helpers.js";
 
 // Static types must survive codegen: z.infer<typeof XSchema> yields the TS
-// type of the XSD complex type, not any (#146). The old
+// type of the XSD complex type, not any. The old
 // `schemas: Record<string, z.ZodTypeAny>` registry erased every per-schema
 // generic. Asserted by typechecking a consumer file against the generated
 // module with tsc — @ts-expect-error lines fail the run if the inferred type
@@ -65,7 +65,7 @@ const badScores: Person = { name: 'x', scores: ['a'], nickname: null, '@id': 'x'
 export { person, manager, status, scores, missing, badStatus, badScores };
 `;
 
-describe("generated schemas preserve static types (#146)", () => {
+describe("generated schemas preserve static types", () => {
   it("z.infer yields the XSD complex type, enforced by tsc", async () => {
     // Under the package-root dotdir so the generated module's bare
     // 'xsd-to-zod' self-reference resolves (it does not from os.tmpdir()).

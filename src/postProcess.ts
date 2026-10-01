@@ -57,7 +57,7 @@ const runTool = (binName: string, args: string[], cwd: string): boolean => {
 };
 
 // ESLint v9 only honours flat config; legacy .eslintrc* files are ignored and
-// eslint still exits non-zero, so they must not count as "has config" (#74).
+// eslint still exits non-zero, so they must not count as "has config".
 const CONFIG_FILES: Record<"biome" | "prettier" | "eslint", string[]> = {
   biome: ["biome.json", "biome.jsonc"],
   prettier: [
@@ -136,7 +136,7 @@ export const runPostGenerationFormatting = (
 
   // ESLint v9 exits non-zero without a config file — only run it when one
   // exists, so a config-less project doesn't crash the CLI after the output
-  // files were already written (#74).
+  // files were already written.
   if (hasConfig(cwd, "eslint")) {
     return tryFormatter("eslint", () => runTool("eslint", ["--fix", ...generatedFiles], cwd));
   }

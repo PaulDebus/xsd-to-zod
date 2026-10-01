@@ -12,6 +12,13 @@ import type { XmlFieldMeta } from "./xmlMeta.js";
 export type ClaimedOccurrence = { rawKey: string; rawValue: unknown; index: number };
 /** One element child in document order: result key + index within that key's value array. */
 export type DocumentOrderEntry = [key: string, index: number];
+
+/**
+ * How a parse-time side channel moves onto the validated tree. `move`
+ * re-keys the recording (the walked tree is transient parse scaffolding);
+ * `copy` duplicates it (the caller's tree stays usable for re-serialization).
+ */
+export type TransferMode = "move" | "copy";
 /** One element field's occurrences claimed from the raw node. */
 export type ElementRead = { key: string; isArray: boolean; claimed: ClaimedOccurrence[] };
 
@@ -113,10 +120,10 @@ export class DocumentOrderTracker {
    * validated trees are structurally isomorphic). The recording is
    * index-based, so it transfers verbatim: zod's rebuild preserves array
    * positions (added defaults are caught by usable's staleness check).
-   * serializeXml passes move=false: the caller's data keeps its recording, so
-   * serializing the same parsed tree twice replays the order both times.
+   * serializeXml passes mode "copy": the caller's data keeps its recording,
+   * so serializing the same parsed tree twice replays the order both times.
    */
-  transfer(walked: unknown, parsed: unknown, move = true): void {
+  transfer(walked: unknown, parsed: unknown, mode: TransferMode = "move"): void {
     if (
       walked === null ||
       parsed === null ||
@@ -127,7 +134,7 @@ export class DocumentOrderTracker {
     }
     const order = this.retainedStore.get(walked);
     if (order !== undefined) {
-      if (move) {
+      if (mode === "move") {
         this.retainedStore.delete(walked);
       }
       this.retainedStore.set(parsed, order);

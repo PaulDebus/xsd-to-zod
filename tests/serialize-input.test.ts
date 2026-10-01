@@ -39,18 +39,18 @@ describe("serializeXml validates its input", () => {
     const orderSchema = mod["orderSchema"] as z.ZodType;
     // The defaulted @currency and the fixed @version are omitted by the
     // caller; validation fills them.
-    const serialized = serializeXml(orderSchema, { item: "x", quantity: 1n });
+    const serialized = serializeXml(orderSchema, { item: "x", quantity: 1 });
     expect(serialized).toContain("<ns0:item>x</ns0:item>");
     expect(serialized).toContain("<ns0:quantity>1</ns0:quantity>");
     // Round-trip restores the full value.
     expect(parseXml(orderSchema, serialized)).toEqual({
       item: "x",
-      quantity: 1n,
+      quantity: 1,
       "@currency": "EUR",
       "@version": "1.0",
     });
     // A non-default value is emitted.
-    expect(serializeXml(orderSchema, { item: "x", quantity: 2n, "@currency": "USD" })).toContain(
+    expect(serializeXml(orderSchema, { item: "x", quantity: 2, "@currency": "USD" })).toContain(
       'currency="USD"',
     );
   });
@@ -58,10 +58,20 @@ describe("serializeXml validates its input", () => {
   it("fails early with a ZodError on invalid data", async () => {
     const mod = await generate(DEFAULTS_XSD);
     const orderSchema = mod["orderSchema"] as z.ZodType;
-    expect(() => serializeXml(orderSchema, { quantity: 1n })).toThrow(z.ZodError);
-    expect(() => serializeXml(orderSchema, { item: "x", quantity: 1n, "@version": "2.0" })).toThrow(
+    expect(() => serializeXml(orderSchema, { quantity: 1 })).toThrow(z.ZodError);
+    expect(() => serializeXml(orderSchema, { item: "x", quantity: 1, "@version": "2.0" })).toThrow(
       z.ZodError,
     );
+  });
+
+  it("still requires a defaulted element when it is absent", async () => {
+    // Element defaults stay registry-only (applied to present-but-empty
+    // elements at parse); only attributes get a zod .default(). A required
+    // defaulted element that is absent entirely fails validation instead of
+    // being back-filled.
+    const mod = await generate(DEFAULTS_XSD);
+    const orderSchema = mod["orderSchema"] as z.ZodType;
+    expect(() => serializeXml(orderSchema, { item: "x" })).toThrow(z.ZodError);
   });
 
   it("does not consume the caller's parse-time recordings", async () => {
@@ -75,6 +85,26 @@ describe("serializeXml validates its input", () => {
     // tree, not just the first.
     expect(serializeXml(orderSchema, parsed)).toContain(">03</ns0:quantity>");
     expect(serializeXml(orderSchema, parsed)).toContain(">03</ns0:quantity>");
+  });
+
+  it("keeps per-tree fidelity when two parsed trees share one schema", async () => {
+    // Side channels live on the data trees (revalidated against the value on
+    // read); serializing a second document through the same root schema must
+    // not disturb the first tree's retained lexicals.
+    const mod = await generate(DEFAULTS_XSD);
+    const orderSchema = mod["orderSchema"] as z.ZodType;
+    const first = parseXml(
+      orderSchema,
+      '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+    );
+    const second = parseXml(
+      orderSchema,
+      '<ns0:order xmlns:ns0="urn:defaults"><ns0:item>y</ns0:item><ns0:quantity>7</ns0:quantity></ns0:order>',
+    );
+    expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
+    expect(serializeXml(orderSchema, second)).toContain(">7</ns0:quantity>");
+    expect(serializeXml(orderSchema, second)).not.toContain(">03</ns0:quantity>");
+    expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
   });
 
   it("generated modules export input types that admit partial construction", async () => {
@@ -98,7 +128,7 @@ describe("serializeXml validates its input", () => {
 import { orderSchema } from "./schema.zod.js";
 import type { OrderTypeIn } from "./schema.zod.js";
 
-const partial: OrderTypeIn = { item: "x", quantity: 1n };
+const partial: OrderTypeIn = { item: "x", quantity: 1 };
 serializeXml(orderSchema, partial);
 `,
       );

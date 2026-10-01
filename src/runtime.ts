@@ -13,6 +13,7 @@ import {
   documentOrderTracker,
   type ElementRead,
   OrderTrackingCompactBuilder,
+  type TransferMode,
 } from "./documentOrder.js";
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
@@ -54,7 +55,7 @@ class AttributeWhitespaceNormalizer extends BaseValueParser {
 
 const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
 
-// Works around a declaration bug in @nodable/compact-builder@2.0.0 (#86):
+// Works around a declaration bug in @nodable/compact-builder@2.0.0:
 // CompactBuilder.addElement is declared as addElement(tag, matcher) while the
 // implementation — like BaseOutputBuilder.addElement — is addElement(tag),
 // which makes CompactBuilderFactory structurally incompatible with
@@ -64,7 +65,7 @@ const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
 class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
   // Entity decoding is left to the parser; number/boolean coercion is disabled
   // so that every value arrives as a raw lexical and coerceLexical stays the
-  // single coercion point for elements and attributes (#65).
+  // single coercion point for elements and attributes.
   private readonly inner = new CompactBuilderFactory({
     tags: { valueParsers: ["entity"] },
     attributes: { valueParsers: [attributeWhitespaceNormalizer, "entity"] },
@@ -100,7 +101,7 @@ const parser = new XMLParser({
   skip: { attributes: false, whitespaceText: false },
   attributes: { prefix: "@_" },
   // Keep CDATA under its own key: merged text passes through the entity value
-  // parser, which would corrupt literal entity text inside CDATA sections (#64).
+  // parser, which would corrupt literal entity text inside CDATA sections.
   nameFor: { cdata: "#cdata" },
   OutputBuilder: createOutputBuilder(),
 });
@@ -351,7 +352,7 @@ const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
     return checkDef.check === "number_format" && INT_FORMATS.has(checkDef.format ?? "");
   });
 
-// XSD float/double special lexicals → JS values (#116).
+// XSD float/double special lexicals → JS values.
 const FLOAT_SPECIALS: Record<string, number> = {
   INF: Infinity,
   "-INF": -Infinity,
@@ -360,7 +361,7 @@ const FLOAT_SPECIALS: Record<string, number> = {
 
 const coerceNumberValue = (trimmed: string): number => {
   // The specials are valid xs:float/xs:double lexicals; the generated schemas
-  // for those types accept them via an explicit union (#116). For plain
+  // for those types accept them via an explicit union. For plain
   // numeric types the schema validation rejects the non-finite result, which
   // keeps decimal & co. rejecting "INF" coherently.
   const special = FLOAT_SPECIALS[trimmed];
@@ -379,7 +380,9 @@ const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
     if (!INTEGER_LEXICAL.test(trimmed)) {
       throw new Error(`Invalid xs:int lexical: ${JSON.stringify(trimmed)}`);
     }
-    return Number(trimmed);
+    const value = Number(trimmed);
+    // The integer value space has no -0 (bigint coercion yields 0n too).
+    return value === 0 ? 0 : value;
   }
   return coerceNumberValue(trimmed);
 };
@@ -449,7 +452,7 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
         try {
           const result = coerceLexical(raw, option);
           // A NaN produced for anything but the "NaN" lexical means the
-          // numeric option was the wrong branch — try the next one (#116).
+          // numeric option was the wrong branch — try the next one.
           if (typeof result === "number" && Number.isNaN(result) && String(raw).trim() !== "NaN") {
             continue;
           }
@@ -765,11 +768,11 @@ const transferRecord = <V>(
   store: WeakMap<object, Map<string, V>>,
   walked: object,
   parsed: object,
-  move: boolean,
+  mode: TransferMode,
 ): void => {
   const record = store.get(walked);
   if (record !== undefined) {
-    if (move) {
+    if (mode === "move") {
       store.delete(walked);
     }
     store.set(parsed, record);
@@ -784,9 +787,10 @@ const occurrenceAt = <V>(
   key: string,
   index: number,
 ): V | undefined => store.get(obj)?.get(key)?.[index];
-// move=false (serializeXml) copies: the caller's data keeps its side channels,
-// so repeated serialization of one parsed tree keeps full fidelity.
-const transferLexicals = (walked: unknown, parsed: unknown, move = true): void => {
+// mode "copy" (serializeXml) duplicates the side channels onto the validated
+// tree: the caller's data keeps its recordings, so repeated serialization of
+// one parsed tree keeps full fidelity.
+const transferLexicals = (walked: unknown, parsed: unknown, mode: TransferMode = "move"): void => {
   if (
     walked === null ||
     parsed === null ||
@@ -795,15 +799,15 @@ const transferLexicals = (walked: unknown, parsed: unknown, move = true): void =
   ) {
     return;
   }
-  transferRecord(lexicalStore, walked, parsed, move);
-  transferRecord(substQNameStore, walked, parsed, move);
-  transferRecord(openXsiTypeStore, walked, parsed, move);
-  transferRecord(nilAttributeStore, walked, parsed, move);
-  transferRecord(qnameNsStore, walked, parsed, move);
-  documentOrderTracker.transfer(walked, parsed, move);
+  transferRecord(lexicalStore, walked, parsed, mode);
+  transferRecord(substQNameStore, walked, parsed, mode);
+  transferRecord(openXsiTypeStore, walked, parsed, mode);
+  transferRecord(nilAttributeStore, walked, parsed, mode);
+  transferRecord(qnameNsStore, walked, parsed, mode);
+  documentOrderTracker.transfer(walked, parsed, mode);
   const xsiCapture = xsiCaptureStore.get(walked);
   if (xsiCapture !== undefined) {
-    if (move) {
+    if (mode === "move") {
       xsiCaptureStore.delete(walked);
     }
     xsiCaptureStore.set(parsed, xsiCapture);
@@ -812,13 +816,13 @@ const transferLexicals = (walked: unknown, parsed: unknown, move = true): void =
     if (Array.isArray(walked) && Array.isArray(parsed)) {
       const n = Math.min(walked.length, parsed.length);
       for (let i = 0; i < n; i++) {
-        transferLexicals(walked[i], parsed[i], move);
+        transferLexicals(walked[i], parsed[i], mode);
       }
     }
     return;
   }
   for (const [key, value] of Object.entries(walked)) {
-    transferLexicals(value, (parsed as Record<string, unknown>)[key], move);
+    transferLexicals(value, (parsed as Record<string, unknown>)[key], mode);
   }
 };
 
@@ -1156,7 +1160,7 @@ const extractRoot = (
   }
   if (Array.isArray(entry[1])) {
     // A repeated root tag parses to an array — treating its first item as the
-    // root would silently drop siblings (#67).
+    // root would silently drop siblings.
     throw new Error(
       `XML payload contains ${entry[1].length} '${expectedQName}' root elements; expected exactly one`,
     );
@@ -1190,7 +1194,7 @@ const readObject = (
       .map((f) => f.qname),
   );
   // Null prototype: an XSD element named __proto__ must become an own property,
-  // not a silent prototype mutation (#84).
+  // not a silent prototype mutation.
   const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const fieldList = Object.values(fields);
   const hasTextField = fieldList.some((f) => f.kind === "text");
@@ -1354,7 +1358,7 @@ const rawChildClarkKey = (
 // Shared walk over a parsed node's content entries, into the normalized open
 // shape: character data and xmlns declarations are skipped, attributes resolve
 // to '@'-prefixed clark keys, elements to clark keys with the namespace
-// resolved per item (repeated siblings may redeclare prefixes, #67), and
+// resolved per item (repeated siblings may redeclare prefixes), and
 // repeated child keys accumulate into arrays. Returns whether anything was
 // written.
 const walkChildren = (
@@ -1825,7 +1829,7 @@ const readField = (
     };
   }
   // Absent element: no default/fixed substitution — XSD applies those to
-  // present-but-empty elements, not absent ones (#66).
+  // present-but-empty elements, not absent ones.
   return { present: false, value: undefined };
 };
 
@@ -2130,7 +2134,7 @@ const serializePrimitive = (value: unknown): string => {
     return value ? "true" : "false";
   }
   if (typeof value === "number") {
-    // XSD lexicals for the float/double specials (#116).
+    // XSD lexicals for the float/double specials.
     if (Number.isNaN(value)) {
       return "NaN";
     }
@@ -2140,7 +2144,7 @@ const serializePrimitive = (value: unknown): string => {
     if (value === -Infinity) {
       return "-INF";
     }
-    // String(-0) is "0" — keep the sign so the round-trip preserves -0 (#117).
+    // String(-0) is "0" — keep the sign so the round-trip preserves -0.
     if (Object.is(value, -0)) {
       return "-0";
     }
@@ -2542,7 +2546,7 @@ const writeObjectFields = (
       continue;
     }
     // Elements are always written when present in the data — even when equal
-    // to their default/fixed, which are parse-time concerns only (#66).
+    // to their default/fixed, which are parse-time concerns only.
     const field = analyzeField(fieldSchema);
     const values = field.isArray ? (Array.isArray(value) ? value : [value]) : [value];
     for (let i = 0; i < values.length; i++) {
@@ -3489,18 +3493,19 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
   warnOnGeneratorMismatch(meta);
-  // zod rebuilds the tree during validation — re-key the parse-time side
+  // zod rebuilds the tree during validation — duplicate the parse-time side
   // channels (retained lexicals, xsi:type captures, document order) onto the
-  // validated tree, exactly as safeParseXml does.
+  // validated tree, exactly as safeParseXml does. Mode "copy" leaves the
+  // caller's tree intact so it can be serialized again. No rootLexicals
+  // refresh is needed here: root entries are keyed by schema and every read
+  // revalidates the retained lexical against the value being serialized
+  // (storedLexicalFor), so one document's recording can never attach to
+  // another's.
   const result = schema.safeParse(data);
   if (!result.success) {
     throw result.error;
   }
-  transferLexicals(data, result.data, false);
-  const rootEntry = rootLexicals.get(schema);
-  if (rootEntry !== undefined) {
-    rootEntry.data = result.data;
-  }
+  transferLexicals(data, result.data, "copy");
   const value: z.output<S> = result.data;
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
@@ -3516,6 +3521,9 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
   let body = "";
   let attributes: string[] = [];
   let usesXsi = false;
+  // Narrowed once: both object branches below only run for non-array object
+  // values (see the xsiUnion/hasObjectShape guards).
+  const valueRecord = value as Record<string, unknown>;
   if (value === null || value === undefined) {
     usesXsi = true;
   } else if (meta.open) {
@@ -3524,15 +3532,10 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
     usesXsi = inner.usesXsi;
     body = inner.body;
   } else if (xsiUnion !== undefined) {
-    const { option, xsiTypeAttr } = xsiTypeVariantFor(
-      xsiUnion,
-      value as Record<string, unknown>,
-      ctx,
-    );
+    const { option, xsiTypeAttr } = xsiTypeVariantFor(xsiUnion, valueRecord, ctx);
     // Unknown-xsi:type capture at the root: re-attach the original xsi:type.
-    const typeAttr =
-      xsiTypeAttr ?? xsiTypeAttrFor(xsiCaptureStore.get(value as Record<string, unknown>), ctx);
-    const inner = writeObjectFields(option, value as Record<string, unknown>, ctx);
+    const typeAttr = xsiTypeAttr ?? xsiTypeAttrFor(xsiCaptureStore.get(valueRecord), ctx);
+    const inner = writeObjectFields(option, valueRecord, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi || typeAttr !== undefined;
     body = inner.elements.join("");
@@ -3540,7 +3543,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
       attributes.push(typeAttr);
     }
   } else if (hasObjectShape(typeSchema)) {
-    const inner = writeObjectFields(typeSchema, value as Record<string, unknown>, ctx);
+    const inner = writeObjectFields(typeSchema, valueRecord, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");

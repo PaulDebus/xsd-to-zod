@@ -11,7 +11,7 @@ const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 // reason. Keyed by `<testGroup>/<instanceTest>` name.
 const KNOWN_FAILURES = new Map<string, string>([]);
 
-// Test groups are discovered from the .testSet metadata (#108), not hardcoded
+// Test groups are discovered from the .testSet metadata, not hardcoded
 // directories. Test names carry the group's XSD spec anchors.
 describe("W3C smoke round-trip", () => {
   if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
@@ -69,7 +69,7 @@ describe("upstream parse benchmark", () => {
 
     expect(allXsdFiles.length).toBeGreaterThan(0);
 
-    // NOTE: duration check removed — see issue #19.
+    // NOTE: duration is not checked here.
     // We only assert that all upstream XSDs parse without error.
     // If parse time becomes a concern, add a proper benchmark script.
     await parseXsd(allXsdFiles);

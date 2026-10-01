@@ -65,7 +65,7 @@ describe("readXmlFile", () => {
     });
   });
 
-  it("decodes UTF-16LE with BOM and rewrites the declaration (#81)", () => {
+  it("decodes UTF-16LE with BOM and rewrites the declaration", () => {
     const body = `<?xml version="1.0" encoding="UTF-16"?>\n<menù/>`;
     const xml = Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode(body, "utf16-le")]);
     withTempFile("utf16le.xml", xml, (filePath) => {
@@ -74,7 +74,7 @@ describe("readXmlFile", () => {
     });
   });
 
-  it("decodes UTF-16BE with BOM (#81)", () => {
+  it("decodes UTF-16BE with BOM", () => {
     const body = `<?xml version="1.0" encoding="UTF-16"?>\n<root>menù</root>`;
     const xml = Buffer.concat([Buffer.from([0xfe, 0xff]), iconv.encode(body, "utf16-be")]);
     withTempFile("utf16be.xml", xml, (filePath) => {
@@ -84,7 +84,7 @@ describe("readXmlFile", () => {
     });
   });
 
-  it('sniffs UTF-16LE without a BOM from the leading "<\\0" (#81)', () => {
+  it('sniffs UTF-16LE without a BOM from the leading "<\\0"', () => {
     const body = `<root>menù</root>`;
     withTempFile("utf16-nobom.xml", iconv.encode(body, "utf16-le"), (filePath) => {
       expect(readXmlFile(filePath)).toBe(body);

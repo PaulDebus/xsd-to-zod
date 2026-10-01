@@ -1,4 +1,4 @@
-// Known failures for the full-corpus suite (#108 Phase 4), keyed by
+// Known failures for the full-corpus suite, keyed by
 // `<testSet-relative-path>/<testGroup>/<instanceTest>`. Entries run as
 // `it.fails` — a fix that makes a case pass turns the suite red; remove the
 // entry in the same PR. Generated from full corpus runs, then hand-maintained.

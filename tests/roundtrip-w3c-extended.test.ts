@@ -8,8 +8,8 @@ import { W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
 // Targeted selection of sun/ms test sets exercising supported features
-// (complexType, simpleType, elements, attributes, groups) — Phase 1b of #108,
-// extended in Phase 2 with the ms schema-composition/annotation sets and a
+// (complexType, simpleType, elements, attributes, groups),
+// extended with the ms schema-composition/annotation sets and a
 // nist datatype pilot (group-filtered: the nist testSet is one giant file).
 // The IdConstrDefs/Wildcard/IdentityConstraint/Notation sets are covered by
 // the full-corpus suite instead (tests/corpus/, runs on main).
@@ -58,7 +58,7 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
   const keyOf = (testSet: string, name: string): string =>
     `${path.basename(testSet).replace(/\.testSet$|_w3c\.xml$/, "")}/${name}`;
 
-  // Spec-section conformance report (#108): XSD spec anchor → case counts.
+  // Spec-section conformance report: XSD spec anchor → case counts.
   // Written to the gitignored test-artifacts dir; CI can pick it up from there.
   {
     const byAnchor = new Map<string, { total: number; knownFailures: number }>();

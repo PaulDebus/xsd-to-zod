@@ -7,7 +7,7 @@ import { discoverValidCases, parseSuiteIndex, type W3cCase } from "./w3cDriver.j
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
-// Full XSD 1.0 corpus (#108 Phase 4): every testSet in suite.xml except the
+// Full XSD 1.0 corpus: every testSet in suite.xml except the
 // XSD 1.1 contributions (saxon/ibm/oracle — licensing and 1.1 features) and
 // common/introspection (round-trips the suite's own multi-MB metadata files —
 // minutes per case for no instance-conformance value).
@@ -30,6 +30,10 @@ export const corpusKeyOf = (testSet: string, name: string): string =>
 // as it.fails, so conformance fixes turn the suite red until the pin is
 // removed — same mechanics as the selection suite. The stale-key guard only
 // checks entries belonging to this slice's testSets (the pin file is shared).
+// The corpus measures value-space conformance, so it generates in the exact
+// integer mapping (integers: bigint); the default number mapping's
+// divergences are pinned in the PR-level selection suite instead — hundreds
+// of NIST boundary cases exceed ±2^53 by design there.
 export const registerCorpusTests = (label: string, testSetFiles: string[]): void => {
   const cases = discoverCorpusCases(testSetFiles);
   const slicePrefixes = testSetFiles.map((f) => `${path.relative(W3C_DIR, f)}/`);
@@ -49,11 +53,11 @@ export const registerCorpusTests = (label: string, testSetFiles: string[]): void
     const reason = W3C_CORPUS_KNOWN_FAILURES.get(key);
     if (reason) {
       it.fails(`${title} — KNOWN FAILURE: ${reason}`, async () => {
-        await runRoundTrip(c.xsdFiles, c.xmlFile);
+        await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, { integers: "bigint" });
       }, 30_000);
     } else {
       it(title, async () => {
-        await runRoundTrip(c.xsdFiles, c.xmlFile);
+        await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, { integers: "bigint" });
       }, 30_000);
     }
   }

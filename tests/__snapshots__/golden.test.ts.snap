@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`golden generated output (#84) > matches the golden output for annotations/documentation 1`] = `
+exports[`golden generated output > matches the golden output for annotations/documentation 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry, xsdFractionDigits } from 'xsd-to-zod';
@@ -23,7 +23,7 @@ export const invoiceSchema = z.lazy(() => InvoiceTypeSchema).describe("Root invo
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for basic/attributes 1`] = `
+exports[`golden generated output > matches the golden output for basic/attributes 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -33,7 +33,7 @@ export const generatedBy = "xsd-to-zod@<version>";
 export interface ProductType {
   "@id": string;
   "@color"?: string | undefined;
-  "@size"?: bigint | undefined;
+  "@size"?: number | undefined;
 }
 export type ProductTypeIn = z.input<typeof ProductTypeSchema>;
 export interface AddressType {
@@ -51,7 +51,7 @@ export interface MessageType {
 }
 export type MessageTypeIn = z.input<typeof MessageTypeSchema>;
 const MyStringSchema = z.string().register(xmlRegistry, { qname: "{urn:curated}MyString" });
-const ProductTypeSchema = z.lazy(() => z.object({"@id": z.string(), "@color": z.string().optional(), "@size": z.bigint().optional()})).register(xmlRegistry, { qname: "{urn:curated}ProductType", fields: { "@id": { kind: "attribute", qname: "{}id" }, "@color": { kind: "attribute", qname: "{}color" }, "@size": { kind: "attribute", qname: "{}size" } } });
+const ProductTypeSchema = z.lazy(() => z.object({"@id": z.string(), "@color": z.string().optional(), "@size": z.number().int().optional()})).register(xmlRegistry, { qname: "{urn:curated}ProductType", fields: { "@id": { kind: "attribute", qname: "{}id" }, "@color": { kind: "attribute", qname: "{}color" }, "@size": { kind: "attribute", qname: "{}size" } } });
 const AddressTypeSchema = z.lazy(() => z.object({"street": z.string(), "city": z.string(), "zip": z.string()})).register(xmlRegistry, { qname: "{urn:curated}AddressType", fields: { "street": { kind: "element", qname: "{urn:curated}street" }, "city": { kind: "element", qname: "{urn:curated}city" }, "zip": { kind: "element", qname: "{urn:curated}zip" } } });
 const GreetingTypeSchema = z.lazy(() => z.object({"_text": z.string()})).register(xmlRegistry, { qname: "{urn:curated}GreetingType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" } } });
 const MessageTypeSchema = z.lazy(() => z.object({"_text": MyStringSchema})).register(xmlRegistry, { qname: "{urn:curated}MessageType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" } } });
@@ -63,7 +63,7 @@ export const messageSchema = z.lazy(() => MessageTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for cardinality/min-occurs-zero 1`] = `
+exports[`golden generated output > matches the golden output for cardinality/min-occurs-zero 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -72,28 +72,28 @@ export const generatedBy = "xsd-to-zod@<version>";
 
 export interface ConfigType {
   "host": string;
-  "port"?: bigint[] | undefined;
-  "timeout"?: bigint | undefined;
+  "port"?: number[] | undefined;
+  "timeout"?: number | undefined;
 }
 export type ConfigTypeIn = z.input<typeof ConfigTypeSchema>;
 export interface OptionalType {
   "name": string;
   "nickname"?: string | undefined;
-  "age"?: bigint | undefined;
+  "age"?: number | undefined;
 }
 export type OptionalTypeIn = z.input<typeof OptionalTypeSchema>;
 export interface RequiredType {
   "mustExist": string;
-  "alsoRequired": bigint;
+  "alsoRequired": number;
 }
 export type RequiredTypeIn = z.input<typeof RequiredTypeSchema>;
 export interface TagListType {
   "tag": string[];
 }
 export type TagListTypeIn = z.input<typeof TagListTypeSchema>;
-const ConfigTypeSchema = z.lazy(() => z.object({"host": z.string(), "port": z.array(z.bigint()).optional(), "timeout": z.bigint().optional()})).register(xmlRegistry, { qname: "{urn:curated}ConfigType", fields: { "host": { kind: "element", qname: "{urn:curated}host" }, "port": { kind: "element", qname: "{urn:curated}port" }, "timeout": { kind: "element", qname: "{urn:curated}timeout" } } });
-const OptionalTypeSchema = z.lazy(() => z.object({"name": z.string(), "nickname": z.string().optional(), "age": z.bigint().optional()})).register(xmlRegistry, { qname: "{urn:curated}OptionalType", fields: { "name": { kind: "element", qname: "{urn:curated}name" }, "nickname": { kind: "element", qname: "{urn:curated}nickname" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
-const RequiredTypeSchema = z.lazy(() => z.object({"mustExist": z.string(), "alsoRequired": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}RequiredType", fields: { "mustExist": { kind: "element", qname: "{urn:curated}mustExist" }, "alsoRequired": { kind: "element", qname: "{urn:curated}alsoRequired" } } });
+const ConfigTypeSchema = z.lazy(() => z.object({"host": z.string(), "port": z.array(z.number().int()).optional(), "timeout": z.number().int().optional()})).register(xmlRegistry, { qname: "{urn:curated}ConfigType", fields: { "host": { kind: "element", qname: "{urn:curated}host" }, "port": { kind: "element", qname: "{urn:curated}port" }, "timeout": { kind: "element", qname: "{urn:curated}timeout" } } });
+const OptionalTypeSchema = z.lazy(() => z.object({"name": z.string(), "nickname": z.string().optional(), "age": z.number().int().optional()})).register(xmlRegistry, { qname: "{urn:curated}OptionalType", fields: { "name": { kind: "element", qname: "{urn:curated}name" }, "nickname": { kind: "element", qname: "{urn:curated}nickname" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
+const RequiredTypeSchema = z.lazy(() => z.object({"mustExist": z.string(), "alsoRequired": z.number().int()})).register(xmlRegistry, { qname: "{urn:curated}RequiredType", fields: { "mustExist": { kind: "element", qname: "{urn:curated}mustExist" }, "alsoRequired": { kind: "element", qname: "{urn:curated}alsoRequired" } } });
 const TagListTypeSchema = z.lazy(() => z.object({"tag": z.array(z.string()).min(1)})).register(xmlRegistry, { qname: "{urn:curated}TagListType", fields: { "tag": { kind: "element", qname: "{urn:curated}tag" } } });
 export const configSchema = z.lazy(() => ConfigTypeSchema).register(xmlRegistry, { root: "{urn:curated}config", generatedBy });
 export const optionalExampleSchema = z.lazy(() => OptionalTypeSchema).register(xmlRegistry, { root: "{urn:curated}optionalExample", generatedBy });
@@ -102,7 +102,7 @@ export const tagListSchema = z.lazy(() => TagListTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for chameleon/rootA 1`] = `
+exports[`golden generated output > matches the golden output for chameleon/rootA 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -129,7 +129,7 @@ export const rootBSchema = z.lazy(() => TSchema3).register(xmlRegistry, { root: 
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for content-models/all 1`] = `
+exports[`golden generated output > matches the golden output for content-models/all 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 // Only partially preserved: mixed content (1) — mixed-content text is concatenated into "_text"; its interleaving with child elements is lost on round-trip.
 import { z } from 'zod';
@@ -167,7 +167,7 @@ export interface ParagraphType {
 export type ParagraphTypeIn = z.input<typeof ParagraphTypeSchema>;
 export interface LineItemType {
   "productId": string;
-  "quantity": bigint;
+  "quantity": number;
 }
 export type LineItemTypeIn = z.input<typeof LineItemTypeSchema>;
 export interface OrderType {
@@ -178,7 +178,7 @@ export type OrderTypeIn = z.input<typeof OrderTypeSchema>;
 export interface PersonType {
   "firstName": string;
   "lastName": string;
-  "age": bigint;
+  "age": number;
 }
 export type PersonTypeIn = z.input<typeof PersonTypeSchema>;
 const OptionalBagFields: Record<string, XmlFieldMeta> = { "A": { kind: "element", qname: "{urn:curated}A" }, "B": { kind: "element", qname: "{urn:curated}B" } };
@@ -187,9 +187,9 @@ const BagTypeSchema = z.lazy(() => z.object({"A": z.array(z.string()).optional()
 const AllTypeSchema = z.lazy(() => z.object({"a": z.string(), "b": z.string(), "c": z.string()})).register(xmlRegistry, { qname: "{urn:curated}AllType", fields: { "a": { kind: "element", qname: "{urn:curated}a" }, "b": { kind: "element", qname: "{urn:curated}b" }, "c": { kind: "element", qname: "{urn:curated}c" } } });
 const ContactTypeSchema = z.lazy(() => z.object({"email": z.string().optional(), "phone": z.string().optional()})).register(xmlRegistry, { qname: "{urn:curated}ContactType", fields: { "email": { kind: "element", qname: "{urn:curated}email" }, "phone": { kind: "element", qname: "{urn:curated}phone" } }, choices: {"0":{"required":true,"repeated":false,"branches":[{"id":"0.0","keys":[{"key":"email","required":true}]},{"id":"0.1","keys":[{"key":"phone","required":true}]}],"message":"choice requires exactly one of: email, phone","enforce":true}} });
 const ParagraphTypeSchema = z.lazy(() => z.object({"_text": z.string().optional(), "bold": z.array(z.string()).optional(), "italic": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}ParagraphType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" }, "bold": { kind: "element", qname: "{urn:curated}bold" }, "italic": { kind: "element", qname: "{urn:curated}italic" } } });
-const LineItemTypeSchema = z.lazy(() => z.object({"productId": z.string(), "quantity": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}LineItemType", fields: { "productId": { kind: "element", qname: "{urn:curated}productId" }, "quantity": { kind: "element", qname: "{urn:curated}quantity" } } });
+const LineItemTypeSchema = z.lazy(() => z.object({"productId": z.string(), "quantity": z.number().int()})).register(xmlRegistry, { qname: "{urn:curated}LineItemType", fields: { "productId": { kind: "element", qname: "{urn:curated}productId" }, "quantity": { kind: "element", qname: "{urn:curated}quantity" } } });
 const OrderTypeSchema = z.lazy(() => z.object({"orderId": z.string(), "lineItem": z.array(LineItemTypeSchema).min(1)})).register(xmlRegistry, { qname: "{urn:curated}OrderType", fields: { "orderId": { kind: "element", qname: "{urn:curated}orderId" }, "lineItem": { kind: "element", qname: "{urn:curated}lineItem" } } });
-const PersonTypeSchema = z.lazy(() => z.object({"firstName": z.string(), "lastName": z.string(), "age": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}PersonType", fields: { "firstName": { kind: "element", qname: "{urn:curated}firstName" }, "lastName": { kind: "element", qname: "{urn:curated}lastName" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
+const PersonTypeSchema = z.lazy(() => z.object({"firstName": z.string(), "lastName": z.string(), "age": z.number().int()})).register(xmlRegistry, { qname: "{urn:curated}PersonType", fields: { "firstName": { kind: "element", qname: "{urn:curated}firstName" }, "lastName": { kind: "element", qname: "{urn:curated}lastName" }, "age": { kind: "element", qname: "{urn:curated}age" } } });
 export const allExampleSchema = z.lazy(() => AllTypeSchema).register(xmlRegistry, { root: "{urn:curated}allExample", generatedBy });
 export const OptionalBagSchema = z.lazy(() => OptionalBagTypeSchema).register(xmlRegistry, { root: "{urn:curated}OptionalBag", generatedBy });
 export const BagSchema = z.lazy(() => BagTypeSchema).register(xmlRegistry, { root: "{urn:curated}Bag", generatedBy });
@@ -200,7 +200,7 @@ export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry,
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for cyclic/cyclic 1`] = `
+exports[`golden generated output > matches the golden output for cyclic/cyclic 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -211,7 +211,7 @@ export interface PersonType {
   "name": string;
   "manager"?: PersonType | undefined;
 }
-export type PersonTypeIn = z.input<typeof PersonTypeSchema>;
+// No PersonTypeIn alias: PersonTypeSchema keeps an explicit z.ZodType annotation to break circular inference, so z.input would degrade to unknown.
 export interface TeamType {
   "lead": PersonType;
   "members"?: PersonType[] | undefined;
@@ -224,7 +224,7 @@ export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { r
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for defaults/defaults 1`] = `
+exports[`golden generated output > matches the golden output for defaults/defaults 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -233,17 +233,17 @@ export const generatedBy = "xsd-to-zod@<version>";
 
 export interface OrderType {
   "item": string;
-  "quantity": bigint;
+  "quantity": number;
   "@currency": string;
   "@version"?: "1.0" | undefined;
 }
 export type OrderTypeIn = z.input<typeof OrderTypeSchema>;
-const OrderTypeSchema = z.lazy(() => z.object({"item": z.string(), "quantity": z.bigint(), "@currency": z.string().optional().default("EUR"), "@version": z.literal("1.0").optional()})).register(xmlRegistry, { qname: "{urn:defaults}OrderType", fields: { "item": { kind: "element", qname: "{urn:defaults}item" }, "quantity": { kind: "element", qname: "{urn:defaults}quantity", defaultValue: 1n, defaultLexical: "1" }, "@currency": { kind: "attribute", qname: "{}currency" }, "@version": { kind: "attribute", qname: "{}version", fixedLexical: "1.0" } } });
+const OrderTypeSchema = z.lazy(() => z.object({"item": z.string(), "quantity": z.number().int(), "@currency": z.string().optional().default("EUR"), "@version": z.literal("1.0").optional()})).register(xmlRegistry, { qname: "{urn:defaults}OrderType", fields: { "item": { kind: "element", qname: "{urn:defaults}item" }, "quantity": { kind: "element", qname: "{urn:defaults}quantity", defaultValue: 1, defaultLexical: "1" }, "@currency": { kind: "attribute", qname: "{}currency" }, "@version": { kind: "attribute", qname: "{}version", fixedLexical: "1.0" } } });
 export const orderSchema = z.lazy(() => OrderTypeSchema).register(xmlRegistry, { root: "{urn:defaults}order", generatedBy });
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for entities/cdata 1`] = `
+exports[`golden generated output > matches the golden output for entities/cdata 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -261,7 +261,7 @@ export const docSchema = z.lazy(() => DocTypeSchema).register(xmlRegistry, { roo
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for imports/chained-imports 1`] = `
+exports[`golden generated output > matches the golden output for imports/chained-imports 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -280,7 +280,7 @@ export interface AType {
 export type ATypeIn = z.input<typeof ATypeSchema>;
 export interface ImportExampleType {
   "mainData": string;
-  "libData": bigint;
+  "libData": number;
 }
 export type ImportExampleTypeIn = z.input<typeof ImportExampleTypeSchema>;
 export interface IncludeExampleType {
@@ -290,18 +290,18 @@ export interface IncludeExampleType {
 export type IncludeExampleTypeIn = z.input<typeof IncludeExampleTypeSchema>;
 const CTypeSchema = z.lazy(() => z.object({"_text": z.string(), "@lang": z.string().optional()})).register(xmlRegistry, { qname: "{urn:level-c}CType", fields: { "_text": { kind: "text", qname: "{urn:level-c}_text" }, "@lang": { kind: "attribute", qname: "{}lang" } } });
 const ATypeSchema = z.lazy(() => z.object({"aField": z.string(), "bField": CTypeSchema})).register(xmlRegistry, { qname: "{urn:level-a}AType", fields: { "aField": { kind: "element", qname: "{urn:level-a}aField" }, "bField": { kind: "element", qname: "{urn:level-b}bField" } } });
-const ImportExampleTypeSchema = z.lazy(() => z.object({"mainData": z.string(), "libData": z.bigint()})).register(xmlRegistry, { qname: "{urn:main}ImportExampleType", fields: { "mainData": { kind: "element", qname: "{urn:main}mainData" }, "libData": { kind: "element", qname: "{urn:library}libData" } } });
+const ImportExampleTypeSchema = z.lazy(() => z.object({"mainData": z.string(), "libData": z.number().int()})).register(xmlRegistry, { qname: "{urn:main}ImportExampleType", fields: { "mainData": { kind: "element", qname: "{urn:main}mainData" }, "libData": { kind: "element", qname: "{urn:library}libData" } } });
 const IncludeExampleTypeSchema = z.lazy(() => z.object({"own": z.string(), "shared": z.string()})).register(xmlRegistry, { qname: "{urn:curated}IncludeExampleType", fields: { "own": { kind: "element", qname: "{urn:curated}own" }, "shared": { kind: "element", qname: "{urn:curated}shared" } } });
 export const bFieldSchema = z.lazy(() => CTypeSchema).register(xmlRegistry, { root: "{urn:level-b}bField", generatedBy });
 export const chainedExampleSchema = z.lazy(() => ATypeSchema).register(xmlRegistry, { root: "{urn:level-a}chainedExample", generatedBy });
-export const libDataSchema = z.lazy(() => z.bigint()).register(xmlRegistry, { root: "{urn:library}libData", generatedBy });
+export const libDataSchema = z.lazy(() => z.number().int()).register(xmlRegistry, { root: "{urn:library}libData", generatedBy });
 export const importExampleSchema = z.lazy(() => ImportExampleTypeSchema).register(xmlRegistry, { root: "{urn:main}importExample", generatedBy });
 export const sharedSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:curated}shared", generatedBy });
 export const includeExampleSchema = z.lazy(() => IncludeExampleTypeSchema).register(xmlRegistry, { root: "{urn:curated}includeExample", generatedBy });
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for namespaces/multi-ns 1`] = `
+exports[`golden generated output > matches the golden output for namespaces/multi-ns 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -315,17 +315,17 @@ export interface MultiNsType {
 export type MultiNsTypeIn = z.input<typeof MultiNsTypeSchema>;
 export interface QualifiedType {
   "foo": string;
-  "bar": bigint;
+  "bar": number;
 }
 export type QualifiedTypeIn = z.input<typeof QualifiedTypeSchema>;
 export interface UnqualifiedType {
   "data": string;
-  "value": bigint;
+  "value": number;
 }
 export type UnqualifiedTypeIn = z.input<typeof UnqualifiedTypeSchema>;
 const MultiNsTypeSchema = z.lazy(() => z.object({"title": z.string(), "extData": z.string()})).register(xmlRegistry, { qname: "{urn:main}MultiNsType", fields: { "title": { kind: "element", qname: "{urn:main}title" }, "extData": { kind: "element", qname: "{urn:extension}extData" } } });
-const QualifiedTypeSchema = z.lazy(() => z.object({"foo": z.string(), "bar": z.bigint()})).register(xmlRegistry, { qname: "{urn:qualified}QualifiedType", fields: { "foo": { kind: "element", qname: "{urn:qualified}foo" }, "bar": { kind: "element", qname: "{urn:qualified}bar" } } });
-const UnqualifiedTypeSchema = z.lazy(() => z.object({"data": z.string(), "value": z.bigint()})).register(xmlRegistry, { qname: "{urn:unqualified}UnqualifiedType", fields: { "data": { kind: "element", qname: "{}data" }, "value": { kind: "element", qname: "{}value" } } });
+const QualifiedTypeSchema = z.lazy(() => z.object({"foo": z.string(), "bar": z.number().int()})).register(xmlRegistry, { qname: "{urn:qualified}QualifiedType", fields: { "foo": { kind: "element", qname: "{urn:qualified}foo" }, "bar": { kind: "element", qname: "{urn:qualified}bar" } } });
+const UnqualifiedTypeSchema = z.lazy(() => z.object({"data": z.string(), "value": z.number().int()})).register(xmlRegistry, { qname: "{urn:unqualified}UnqualifiedType", fields: { "data": { kind: "element", qname: "{}data" }, "value": { kind: "element", qname: "{}value" } } });
 export const extDataSchema = z.lazy(() => z.string()).register(xmlRegistry, { root: "{urn:extension}extData", generatedBy });
 export const multiNsExampleSchema = z.lazy(() => MultiNsTypeSchema).register(xmlRegistry, { root: "{urn:main}multiNsExample", generatedBy });
 export const qualifiedExampleSchema = z.lazy(() => QualifiedTypeSchema).register(xmlRegistry, { root: "{urn:qualified}qualifiedExample", generatedBy });
@@ -333,7 +333,7 @@ export const unqualifiedExampleSchema = z.lazy(() => UnqualifiedTypeSchema).regi
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for substitution-groups/substitution-groups 1`] = `
+exports[`golden generated output > matches the golden output for substitution-groups/substitution-groups 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -383,7 +383,7 @@ export const LibrarySchema = z.lazy(() => LibraryTypeSchema).register(xmlRegistr
 "
 `;
 
-exports[`golden generated output (#84) > matches the golden output for types/boolean 1`] = `
+exports[`golden generated output > matches the golden output for types/boolean 1`] = `
 "// AUTO-GENERATED — DO NOT EDIT
 import { z } from 'zod';
 import { xmlRegistry } from 'xsd-to-zod';
@@ -401,8 +401,8 @@ export interface MeasurementType {
 }
 export type MeasurementTypeIn = z.input<typeof MeasurementTypeSchema>;
 export interface CountType {
-  "count": bigint;
-  "total": bigint;
+  "count": number;
+  "total": number;
 }
 export type CountTypeIn = z.input<typeof CountTypeSchema>;
 export interface AttrListContainer {
@@ -410,7 +410,7 @@ export interface AttrListContainer {
 }
 export type AttrListContainerIn = z.input<typeof AttrListContainerSchema>;
 export interface InlineListContainer {
-  "numbers": bigint[];
+  "numbers": number[];
 }
 export type InlineListContainerIn = z.input<typeof InlineListContainerSchema>;
 export interface ListContainer {
@@ -422,7 +422,7 @@ export interface StringWrapperType {
 }
 export type StringWrapperTypeIn = z.input<typeof StringWrapperTypeSchema>;
 export interface InlineUnionContainer {
-  "val": bigint | string;
+  "val": number | string;
 }
 export type InlineUnionContainerIn = z.input<typeof InlineUnionContainerSchema>;
 export interface UnionContainer {
@@ -430,16 +430,16 @@ export interface UnionContainer {
 }
 export type UnionContainerIn = z.input<typeof UnionContainerSchema>;
 const AttrTokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()))).register(xmlRegistry, { qname: "{urn:curated}AttrTokenList" });
-const InlineIntList_itemTypeSchema = z.bigint().register(xmlRegistry, { qname: "{urn:curated}InlineIntList_itemType" });
+const InlineIntList_itemTypeSchema = z.number().int().register(xmlRegistry, { qname: "{urn:curated}InlineIntList_itemType" });
 const InlineIntListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(InlineIntList_itemTypeSchema)).register(xmlRegistry, { qname: "{urn:curated}InlineIntList" });
 const TokenListSchema = z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, z.string()))).register(xmlRegistry, { qname: "{urn:curated}TokenList" });
-const InlineIntOrString_member0Schema = z.bigint().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member0" });
+const InlineIntOrString_member0Schema = z.number().int().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member0" });
 const InlineIntOrString_member1Schema = z.string().register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString_member1" });
 const InlineIntOrStringSchema = z.union([InlineIntOrString_member0Schema, InlineIntOrString_member1Schema]).register(xmlRegistry, { qname: "{urn:curated}InlineIntOrString" });
 const IntOrStringSchema = z.union([z.number().int().min(-2147483648).max(2147483647), z.string()]).register(xmlRegistry, { qname: "{urn:curated}IntOrString" });
 const FlagsTypeSchema = z.lazy(() => z.object({"active": z.boolean(), "verified": z.boolean()})).register(xmlRegistry, { qname: "{urn:curated}FlagsType", fields: { "active": { kind: "element", qname: "{urn:curated}active" }, "verified": { kind: "element", qname: "{urn:curated}verified" } } });
 const MeasurementTypeSchema = z.lazy(() => z.object({"value": z.number(), "precision": z.number()})).register(xmlRegistry, { qname: "{urn:curated}MeasurementType", fields: { "value": { kind: "element", qname: "{urn:curated}value" }, "precision": { kind: "element", qname: "{urn:curated}precision" } } });
-const CountTypeSchema = z.lazy(() => z.object({"count": z.bigint(), "total": z.bigint()})).register(xmlRegistry, { qname: "{urn:curated}CountType", fields: { "count": { kind: "element", qname: "{urn:curated}count" }, "total": { kind: "element", qname: "{urn:curated}total" } } });
+const CountTypeSchema = z.lazy(() => z.object({"count": z.number().int(), "total": z.number().int()})).register(xmlRegistry, { qname: "{urn:curated}CountType", fields: { "count": { kind: "element", qname: "{urn:curated}count" }, "total": { kind: "element", qname: "{urn:curated}total" } } });
 const AttrListContainerSchema = z.lazy(() => z.object({"@tags": AttrTokenListSchema})).register(xmlRegistry, { qname: "{urn:curated}AttrListContainer", fields: { "@tags": { kind: "attribute", qname: "{}tags" } } });
 const InlineListContainerSchema = z.lazy(() => z.object({"numbers": InlineIntListSchema})).register(xmlRegistry, { qname: "{urn:curated}InlineListContainer", fields: { "numbers": { kind: "element", qname: "{urn:curated}numbers" } } });
 const ListContainerSchema = z.lazy(() => z.object({"items": TokenListSchema})).register(xmlRegistry, { qname: "{urn:curated}ListContainer", fields: { "items": { kind: "element", qname: "{urn:curated}items" } } });

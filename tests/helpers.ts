@@ -13,10 +13,11 @@ import {
   serializeXml,
   xmlRegistry,
 } from "../src/index.js";
+import type { IrToZodOptions } from "../src/irToZod.js";
 import { decodeTagNameCharRefs } from "../src/runtime.js";
 import type { SimpleTypeDef } from "../src/types.js";
 
-// Narrow a SimpleTypeDef to its restriction variant in tests (#84).
+// Narrow a SimpleTypeDef to its restriction variant in tests.
 export const asRestriction = (
   type: SimpleTypeDef,
 ): Extract<SimpleTypeDef, { kind: "restriction" }> => {
@@ -103,9 +104,12 @@ export async function importGeneratedSchemas(
   }
 }
 
-// parseXsd → irToZod → importGeneratedSchemas in one call (#84).
-export const generateAndImport = async (xsdFiles: string[]): Promise<Record<string, unknown>> =>
-  importGeneratedSchemas(irToZod(await parseXsd(xsdFiles)).schemas);
+// parseXsd → irToZod → importGeneratedSchemas in one call.
+export const generateAndImport = async (
+  xsdFiles: string[],
+  opts?: IrToZodOptions,
+): Promise<Record<string, unknown>> =>
+  importGeneratedSchemas(irToZod(await parseXsd(xsdFiles), opts).schemas);
 
 const stripProlog = (xml: string): string =>
   xml
@@ -228,7 +232,7 @@ export async function validateXmlAgainstSchemas(
   const { namespace: rootNamespace } = extractRootInfo(xml);
 
   // libxml2 cannot load schemas with a relative targetNamespace, so there is
-  // nothing to validate against; the zod-tier round-trip still ran (#108).
+  // nothing to validate against; the zod-tier round-trip still ran.
   if (rootNamespace !== "" && !isAbsoluteUri(rootNamespace)) {
     return;
   }
@@ -261,7 +265,7 @@ export async function validateXmlAgainstSchemas(
   }
 
   // Only XSDs whose targetNamespace matches the serialized root are relevant;
-  // validating against an arbitrary unrelated schema proves nothing (#83).
+  // validating against an arbitrary unrelated schema proves nothing.
   const matching = candidates.filter((c) => c.targetNamespace === rootNamespace);
   const pool = matching.length > 0 ? matching : candidates;
 
@@ -383,8 +387,9 @@ export async function runRoundTrip(
   xsdFiles: string[],
   xmlFile: string,
   expected?: unknown,
+  opts?: IrToZodOptions,
 ): Promise<void> {
-  const { schemas } = irToZod(await parseXsd(xsdFiles));
+  const { schemas } = irToZod(await parseXsd(xsdFiles), opts);
   const xml = readXmlFile(xmlFile);
   const mod = await importGeneratedSchemas(schemas);
   const rootSchema = findRootSchema(mod, xml);

@@ -5,7 +5,7 @@ import type { z } from "zod";
 import { irToZod, parseXml, parseXsd, Xsd2ZodError } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
-// Targeted regression tests for the issue-#84 codegen fixes.
+// Targeted regression tests for codegen fixes.
 const NUM_ENUM_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:num-enum" xmlns:t="urn:num-enum" elementFormDefault="qualified">
   <xs:simpleType name="Ratio">
@@ -35,7 +35,7 @@ const COLLISION_XSD = `<?xml version="1.0"?>
   <xs:element name="dup" type="t:Dup"/>
 </xs:schema>`;
 
-describe("enum facet coercion (#84)", () => {
+describe("enum facet coercion", () => {
   it("emits numeric enum lexicals coerced to numbers", async () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
@@ -51,7 +51,7 @@ describe("enum facet coercion (#84)", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, NUM_ENUM_XSD);
       const { schemas } = irToZod(await parseXsd([file]));
-      expect(schemas).toContain(".refine((val) => [1n, 2n].includes(val)");
+      expect(schemas).toContain(".refine((val) => [1, 2].includes(val)");
     });
   });
 
@@ -67,7 +67,7 @@ describe("enum facet coercion (#84)", () => {
   });
 });
 
-describe("type name collision (#84)", () => {
+describe("type name collision", () => {
   it("throws an Xsd2ZodError when a simpleType and complexType share a qname", async () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");

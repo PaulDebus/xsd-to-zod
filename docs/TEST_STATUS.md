@@ -125,7 +125,7 @@ Features tested include:
 Corpus cases that fail the round-trip are pinned as `it.fails` with a
 categorized reason: the case keeps running, and a fix that makes it pass
 turns the suite red until the pin is removed in the same PR. Two pin files:
-`tests/w3cKnownFailures.ts` (sun/ms selection, 15 pins) and
+`tests/w3cKnownFailures.ts` (sun/ms selection, 33 pins) and
 `tests/w3cCorpusKnownFailures.ts` (full corpus, 20 pins). #122 tracks the
 buckets with per-case triage notes; their dispositions:
 
@@ -148,6 +148,11 @@ xsi:type preservation on open content. What remains is entirely won't-fix:
 - **`noRootDeclaration` (6 + 6)** — type-library schemas with no global
   element matching the instance root (instance validity rides xsi:type root
   assessment); the generated artifact has no root schema to parse with.
+- **`beyondSafeInteger` (18 selection + 0 corpus)** — the instance carries
+  integers beyond ±2⁵³; the default number mapping rejects out-of-safe-range
+  lexicals rather than rounding them. The full corpus generates in the exact
+  mapping (`integers: "bigint"`), so the bucket exists only in the selection
+  suite, which exercises the default.
 
 ## Definition of done
 

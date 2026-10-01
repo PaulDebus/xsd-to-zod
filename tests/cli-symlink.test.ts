@@ -14,7 +14,7 @@ const XSD = `<?xml version="1.0"?>
 </xs:schema>`;
 
 // Windows needs elevated privileges for symlinks; CI runs on Linux.
-describe.skipIf(process.platform === "win32")("CLI e2e through the npm bin symlink (#80)", () => {
+describe.skipIf(process.platform === "win32")("CLI e2e through the npm bin symlink", () => {
   beforeAll(() => {
     execFileSync("npm", ["run", "build"], {
       cwd: repoRoot,
