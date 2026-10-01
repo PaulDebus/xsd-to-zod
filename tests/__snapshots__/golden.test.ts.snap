@@ -373,7 +373,7 @@ const MagazineTypeSchema = z.lazy(() => MagazineTypeObjectSchema).register(xmlRe
 const BookTypeVariantSchema = BookTypeObjectSchema.extend({ "xsiType": z.literal("{urn:substitution-groups}BookType") }).register(xmlRegistry, BookTypeMeta);
 const MagazineTypeVariantSchema = MagazineTypeObjectSchema.extend({ "xsiType": z.literal("{urn:substitution-groups}MagazineType") }).register(xmlRegistry, MagazineTypeMeta);
 const PublicationTypeDeclaredVariantSchema = PublicationTypeObjectSchema.extend({ "xsiType": z.literal("{urn:substitution-groups}PublicationType").optional() }).register(xmlRegistry, PublicationTypeMeta);
-const PublicationTypeVariantsSchema = z.discriminatedUnion("xsiType", [PublicationTypeDeclaredVariantSchema, BookTypeVariantSchema, MagazineTypeVariantSchema], { unionFallback: true });
+const PublicationTypeVariantsSchema = z.discriminatedUnion("xsiType", [PublicationTypeDeclaredVariantSchema, BookTypeVariantSchema, MagazineTypeVariantSchema], { unionFallback: true }).register(xmlRegistry, { derivations: {"{urn:substitution-groups}BookType":["extension"],"{urn:substitution-groups}MagazineType":["extension"]} });
 export const PublicationSchema = z.lazy(() => PublicationTypeVariantsSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Publication", generatedBy });
 export const BookSchema = z.lazy(() => BookTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Book", generatedBy });
 export const MagazineSchema = z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { root: "{urn:substitution-groups}Magazine", generatedBy });

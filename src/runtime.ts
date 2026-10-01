@@ -980,6 +980,42 @@ const readXsiTypeAttr = (
   return namespace === undefined ? undefined : `{${namespace}}${local}`;
 };
 
+// xsi:type validity on simple-typed read paths (cvc-elt): the xsi:type must
+// be the declared type or validly derived from it, and no derivation step
+// may use a method the element/type declaration blocks. Unknown xsi:types
+// (not known to the module) stay lenient — they may come from schemas the
+// generator never saw.
+const checkXsiTypeValidity = (
+  xsiType: QName,
+  meta: {
+    declaredType?: QName;
+    derivations?: Record<QName, string[]>;
+    ancestors?: QName[];
+    knownTypes?: QName[];
+    block?: string[];
+  },
+): void => {
+  if (meta.declaredType === undefined || xsiType === meta.declaredType) {
+    return;
+  }
+  const methods = meta.derivations?.[xsiType];
+  if (methods !== undefined) {
+    const blocked = new Set(meta.block ?? []);
+    const hit = methods.find((method) => blocked.has(method));
+    if (hit !== undefined) {
+      throw new Error(
+        `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
+      );
+    }
+    return;
+  }
+  if (meta.ancestors?.includes(xsiType) === true || meta.knownTypes?.includes(xsiType) === true) {
+    throw new Error(
+      `xsi:type "${xsiType}" is not derived from the declared type "${meta.declaredType}"`,
+    );
+  }
+};
+
 // Read one occurrence of a polymorphic slot: dispatch on xsi:type to the
 // matching variant schema (options[0] is the declared type). An absent or
 // declared-type xsi:type reads as the declared type; the discriminant is
@@ -991,6 +1027,8 @@ const readXsiTypeOccurrence = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
   walk?: WalkCtx,
+  unionSchema?: AnySchema,
+  elementBlock?: string[],
 ): Record<string, unknown> => {
   const options = unionDef.options as readonly AnySchema[];
   const declared = options[0];
@@ -998,6 +1036,24 @@ const readXsiTypeOccurrence = (
     throw new Error("xsi:type union without a declared-type option");
   }
   const xsiType = readXsiTypeAttr(node, namespaceContext);
+  // block enforcement: the element declaration's block plus the declared
+  // type's own block forbid xsi:type derivations by the blocked method.
+  if (xsiType !== undefined && unionSchema !== undefined) {
+    const unionMeta = findMeta(
+      unionSchema,
+      (m) => m.derivations !== undefined || m.block !== undefined,
+    );
+    const methods = unionMeta?.derivations?.[xsiType];
+    if (methods !== undefined) {
+      const blocked = new Set([...(unionMeta?.block ?? []), ...(elementBlock ?? [])]);
+      const hit = methods.find((method) => blocked.has(method));
+      if (hit !== undefined) {
+        throw new Error(
+          `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
+        );
+      }
+    }
+  }
   const derived =
     xsiType === undefined
       ? undefined
@@ -1578,7 +1634,22 @@ const readOccurrence = (
     }
     const xsiUnion = xsiTypeUnionDef(field.itemSchema);
     if (xsiUnion !== undefined) {
-      return { value: readXsiTypeOccurrence(xsiUnion, childNode, childContext, walk) };
+      return {
+        value: readXsiTypeOccurrence(
+          xsiUnion,
+          childNode,
+          childContext,
+          walk,
+          field.itemSchema,
+          fieldMeta.block,
+        ),
+      };
+    }
+    if (fieldMeta.declaredType !== undefined) {
+      const xsiType = readXsiTypeAttr(childNode, childContext);
+      if (xsiType !== undefined) {
+        checkXsiTypeValidity(xsiType, fieldMeta);
+      }
     }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
@@ -1753,6 +1824,30 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
+  // block enforcement on substitution-group members: the head element's block
+  // rejects member replacements outright ("substitution"), and members whose
+  // type derives from the head's type by a method blocked on the head element
+  // or the head's type (substBlock) are rejected either way.
+  if (fieldMeta.block !== undefined || fieldMeta.substBlock !== undefined) {
+    const elementBlocked = new Set(fieldMeta.block ?? []);
+    const typeBlocked = new Set(fieldMeta.substBlock ?? []);
+    for (const entry of matched) {
+      if (entry.qname === fieldMeta.qname) {
+        continue;
+      }
+      if (elementBlocked.has("substitution")) {
+        throw new Error(
+          `element "${entry.qname}" substitutes for "${fieldMeta.qname}", which its block forbids`,
+        );
+      }
+      const hit = fieldMeta.substMethods?.[entry.qname]?.find((method) => typeBlocked.has(method));
+      if (hit !== undefined) {
+        throw new Error(
+          `element "${entry.qname}" derives by ${hit} from the type of "${fieldMeta.qname}", which its block forbids`,
+        );
+      }
+    }
+  }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
   // claimed the earlier ones); only that occurrence is read — the content of
   // overflow occurrences is not the field's to validate.
@@ -1877,7 +1972,20 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   const typeSchema = peelOnce(schema);
   const xsiUnion = xsiTypeUnionDef(typeSchema);
   if (xsiUnion !== undefined) {
-    return readXsiTypeOccurrence(xsiUnion, rootNode, namespaceContext, walk);
+    return readXsiTypeOccurrence(
+      xsiUnion,
+      rootNode,
+      namespaceContext,
+      walk,
+      typeSchema,
+      meta.block,
+    );
+  }
+  if (meta.declaredType !== undefined) {
+    const xsiType = readXsiTypeAttr(rootNode, namespaceContext);
+    if (xsiType !== undefined) {
+      checkXsiTypeValidity(xsiType, meta);
+    }
   }
   if (hasObjectShape(typeSchema)) {
     return readObject(typeSchema, rootNode, namespaceContext, false, walk);
