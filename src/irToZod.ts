@@ -917,6 +917,67 @@ const mergeLexicalFacets = (
   return merged;
 };
 
+// Optional group particles (sequence/all/group-ref with minOccurs=0) are
+// optional as a UNIT: an occurrence is all-or-nothing, so a partial match —
+// one member of the group present, its required sibling missing — must fail.
+// The check reads the parsed object: some alternative of the unit's
+// requirement must be satisfied, and every present member must belong to a
+// unit that can be satisfied. Members also declared outside every unit
+// explain themselves and are exempt. Emitted as a superRefine on the object
+// schema; the payload is JS-safe so --js output stays plain JavaScript.
+const optionalUnitsCheck = (complexType: ComplexTypeDef, js: boolean): string => {
+  const units = Object.entries(complexType.optionalUnits ?? {});
+  if (units.length === 0) {
+    return "";
+  }
+  const fields = dedupeEmissionFields(complexType);
+  const keyByQname = new Map<QName, string[]>();
+  for (const field of fields) {
+    const keys = keyByQname.get(field.qname) ?? [];
+    const key = toFieldKey(field);
+    if (!keys.includes(key)) {
+      keys.push(key);
+    }
+    keyByQname.set(field.qname, keys);
+  }
+  const exempt = new Set(fields.filter((f) => f.optionalUnits === undefined).map((f) => f.qname));
+  const checked = units
+    .map(([_id, unit]) => ({
+      members: unit.members.filter((m) => !exempt.has(m)).sort(),
+      alternatives: unit.alternatives.map((alt) => [...alt].sort()),
+    }))
+    .filter((unit) => unit.members.length > 0);
+  if (checked.length === 0) {
+    return "";
+  }
+  const referenced = [
+    ...new Set(checked.flatMap((unit) => [...unit.members, ...unit.alternatives.flat()])),
+  ].sort();
+  const keysLiteral = JSON.stringify(
+    Object.fromEntries(referenced.map((q) => [q, keyByQname.get(q) ?? []])),
+  );
+  const presentFn = js
+    ? `const present = (k) => { const v = val[k]; ` +
+      `return v !== undefined && (!Array.isArray(v) || v.length > 0); };`
+    : `const present = (k: string): boolean => { ` +
+      `const v = (val as Record<string, unknown>)[k]; ` +
+      `return v !== undefined && (!Array.isArray(v) || v.length > 0); };`;
+  const seenFn = js
+    ? `const seen = (q) => (keys[q] ?? []).some(present);`
+    : `const seen = (q: string): boolean => (keys[q] ?? []).some(present);`;
+  return (
+    `.superRefine((val, ctx) => { ${presentFn} const keys = ${keysLiteral}; ${seenFn} ` +
+    `const units = ${JSON.stringify(checked)}; const covered = new Set(); ` +
+    `for (const unit of units) { ` +
+    `if (unit.alternatives.some((alt) => alt.every(seen))) { ` +
+    `for (const m of unit.members) { covered.add(m); } } } ` +
+    `for (const m of new Set(units.flatMap((unit) => unit.members))) { ` +
+    `if (covered.has(m) || !seen(m)) { continue; } ` +
+    `ctx.addIssue({ code: "custom", message: "content of an optional model group is incomplete: " + ` +
+    `JSON.stringify(m) + " cannot appear without the rest of its group" }); } })`
+  );
+};
+
 // Emit simple types in dependency order — a restriction/list/union can
 // reference a user-defined type declared later in the XSD, and the generated
 // module evaluates these assignments eagerly.
@@ -2711,7 +2772,7 @@ export const irToZod = (
     const objectCtor =
       complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object";
     schemaLines.push(
-      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}});`,
+      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}})${optionalUnitsCheck(complexType, opts?.js === true)};`,
     );
   }
 
@@ -2759,7 +2820,7 @@ export const irToZod = (
       withNamingComment(
         complexType.name,
         `const ${constName.get(complexType.name)}${annotation} = ${registered(
-          `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}}))`,
+          `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${optionalUnitsCheck(complexType, opts?.js === true)})`,
           complexType.description,
           `{ ${metaBodyFor(complexType.name)} }`,
         )};`,
