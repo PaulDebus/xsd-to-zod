@@ -84,6 +84,38 @@ const UNBOUNDED = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
+// Same-name element on both sides of a wildcard (the W3C addB135 e3 shape):
+// each side keeps one occurrence and the wildcard owns the middle one, so
+// three occurrences stay valid.
+const ELEMENT_AROUND_WILDCARD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="element1" type="xs:string"/>
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="element1"/>
+        <xs:any namespace="##any" processContents="strict"/>
+        <xs:element ref="element1"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
+// A repeated wildcard behind the element (the W3C addB135 e5 shape): the
+// wildcard absorbs several overflow occurrences.
+const REPEATED_WILDCARD_AFTER = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="element1" type="xs:string"/>
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="element1"/>
+        <xs:any namespace="##any" processContents="strict" maxOccurs="3"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
 describe("scalar element occurrences", () => {
   it("accepts one occurrence of a maxOccurs=1 element", async () => {
     const xml = "<root><e>a</e></root>";
@@ -127,5 +159,23 @@ describe("scalar element occurrences", () => {
     const xml = "<root><e>a</e><e>b</e></root>";
     const mod = await schemasFor(UNBOUNDED);
     expect(safeParseXml(rootFor(mod, xml), xml).success).toBe(true);
+  });
+
+  it("accepts three occurrences split across a wildcard", async () => {
+    const xml = "<root><element1>a</element1><element1>b</element1><element1>c</element1></root>";
+    const mod = await schemasFor(ELEMENT_AROUND_WILDCARD);
+    const root = rootFor(mod, xml);
+    const parsed = parseXml(root, xml);
+    expect(safeParseXml(root, xml).success).toBe(true);
+    expect(parseXml(root, serializeXml(root, parsed))).toEqual(parsed);
+  });
+
+  it("accepts several overflows behind a repeated wildcard", async () => {
+    const xml = "<root><element1>a</element1><element1>b</element1><element1>c</element1></root>";
+    const mod = await schemasFor(REPEATED_WILDCARD_AFTER);
+    const root = rootFor(mod, xml);
+    const parsed = parseXml(root, xml);
+    expect(safeParseXml(root, xml).success).toBe(true);
+    expect(parseXml(root, serializeXml(root, parsed))).toEqual(parsed);
   });
 });

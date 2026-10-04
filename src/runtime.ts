@@ -1231,32 +1231,17 @@ const readObject = (
     // but the last (from-end), a following one takes everything but the first
     // (the sweep's seen-count). Overflow is then the wildcard's, not a
     // duplicate — see sweepWildcards.
-    const wildcardClaimsOverflow =
-      fieldQnames.length > 0 &&
-      anyWildcards.some((w) =>
-        fieldQnames.some((q) =>
-          wildcardAllows(
-            w.namespaceConstraint ?? "##any",
-            targetNamespace,
-            splitClark(q).namespace,
-          ),
-        ),
+    const admitsField = (w: XmlFieldMeta): boolean =>
+      fieldQnames.some((q) =>
+        wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
       );
+    const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
       wildcardClaimsOverflow &&
       anyWildcards.some(
-        (w) =>
-          w.position !== undefined &&
-          w.position <= elementOrdinal &&
-          fieldQnames.some((q) =>
-            wildcardAllows(
-              w.namespaceConstraint ?? "##any",
-              targetNamespace,
-              splitClark(q).namespace,
-            ),
-          ),
+        (w) => w.position !== undefined && w.position <= elementOrdinal && admitsField(w),
       );
     if (fieldMeta.kind === "element") {
       elementOrdinal++;
