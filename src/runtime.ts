@@ -13,13 +13,14 @@ import {
   documentOrderTracker,
   type ElementRead,
   OrderTrackingCompactBuilder,
+  type TransferMode,
 } from "./documentOrder.js";
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
-import { xsdDecimalCompare } from "./xsdChecks.js";
+import { countLexicalFractionDigits, xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
   writeXsdDatatype,
@@ -623,6 +624,12 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
       throw new Error(`Invalid lexical ${JSON.stringify(raw)}: not one of the allowed values`);
     }
   }
+  if (
+    facets.fractionDigits !== undefined &&
+    countLexicalFractionDigits(lexical) > facets.fractionDigits
+  ) {
+    throw new Error(`Invalid lexical ${JSON.stringify(raw)}: too many fraction digits`);
+  }
   const orderChecks: [string | undefined, (cmp: number) => boolean][] = [
     [facets.minInclusive, (cmp) => cmp >= 0],
     [facets.maxInclusive, (cmp) => cmp <= 0],
@@ -762,15 +769,20 @@ const recordLexical = (
 
 // zod's safeParse rebuilds the data tree, so entries keyed by the walked
 // objects would be unreachable from the validated result. The two trees are
-// structurally isomorphic — re-key by position.
+// structurally isomorphic — re-key the recording onto its counterpart. Any
+// side-channel payload rides through unchanged: the stores differ only in
+// what they hold under each container.
 const transferRecord = <V>(
-  store: WeakMap<object, Map<string, V>>,
+  store: WeakMap<object, V>,
   walked: object,
   parsed: object,
+  mode: TransferMode,
 ): void => {
   const record = store.get(walked);
   if (record !== undefined) {
-    store.delete(walked);
+    if (mode === "move") {
+      store.delete(walked);
+    }
     store.set(parsed, record);
   }
 };
@@ -783,7 +795,10 @@ const occurrenceAt = <V>(
   key: string,
   index: number,
 ): V | undefined => store.get(obj)?.get(key)?.[index];
-const transferLexicals = (walked: unknown, parsed: unknown): void => {
+// mode "copy" (serializeXml) duplicates the side channels onto the validated
+// tree: the caller's data keeps its recordings, so repeated serialization of
+// one parsed tree keeps full fidelity.
+const transferLexicals = (walked: unknown, parsed: unknown, mode: TransferMode = "move"): void => {
   if (
     walked === null ||
     parsed === null ||
@@ -792,28 +807,24 @@ const transferLexicals = (walked: unknown, parsed: unknown): void => {
   ) {
     return;
   }
-  transferRecord(lexicalStore, walked, parsed);
-  transferRecord(substQNameStore, walked, parsed);
-  transferRecord(openXsiTypeStore, walked, parsed);
-  transferRecord(nilAttributeStore, walked, parsed);
-  transferRecord(qnameNsStore, walked, parsed);
-  documentOrderTracker.transfer(walked, parsed);
-  const xsiCapture = xsiCaptureStore.get(walked);
-  if (xsiCapture !== undefined) {
-    xsiCaptureStore.delete(walked);
-    xsiCaptureStore.set(parsed, xsiCapture);
-  }
+  transferRecord(lexicalStore, walked, parsed, mode);
+  transferRecord(substQNameStore, walked, parsed, mode);
+  transferRecord(openXsiTypeStore, walked, parsed, mode);
+  transferRecord(nilAttributeStore, walked, parsed, mode);
+  transferRecord(qnameNsStore, walked, parsed, mode);
+  documentOrderTracker.transfer(walked, parsed, mode);
+  transferRecord(xsiCaptureStore, walked, parsed, mode);
   if (Array.isArray(walked) || Array.isArray(parsed)) {
     if (Array.isArray(walked) && Array.isArray(parsed)) {
       const n = Math.min(walked.length, parsed.length);
       for (let i = 0; i < n; i++) {
-        transferLexicals(walked[i], parsed[i]);
+        transferLexicals(walked[i], parsed[i], mode);
       }
     }
     return;
   }
   for (const [key, value] of Object.entries(walked)) {
-    transferLexicals(value, (parsed as Record<string, unknown>)[key]);
+    transferLexicals(value, (parsed as Record<string, unknown>)[key], mode);
   }
 };
 
@@ -835,6 +846,80 @@ const storedLexicalFor = (
   } catch {
     return undefined;
   }
+};
+
+// Fixed constraints compare in the VALUE space (cvc-elt): the declared fixed
+// lexical is coerced through the same branch-agreed path as the instance
+// lexical, so a union member mismatch ("2" the int vs "false" the boolean)
+// rejects even when naively coerced JS values would coincidentally compare
+// equal. Structured values compare canonical lexicals (item-wise for lists).
+const fixedValueSatisfied = (
+  value: unknown,
+  meta: { fixedLexical?: string; fixedValue?: unknown; datatype?: XsdDatatypeName },
+  itemSchema: AnySchema,
+): boolean => {
+  const lexical =
+    meta.fixedLexical ?? (typeof meta.fixedValue === "string" ? meta.fixedValue : undefined);
+  if (lexical === undefined) {
+    return true;
+  }
+  const datatype = meta.datatype;
+  if (datatype !== undefined) {
+    try {
+      // coerceLexical returns the pre-transform lexical for structured pipes,
+      // so strings go through the normalizing parser first.
+      const canonical = (v: unknown) =>
+        writeXsdDatatype(
+          datatype,
+          typeof v === "string" ? parseXsdDatatype(datatype, v) : (v as XsdStructuredValue),
+        );
+      const fixedItems =
+        lexical.trim() === ""
+          ? []
+          : lexical
+              .trim()
+              .split(/\s+/)
+              .map((token) => writeXsdDatatype(datatype, parseXsdDatatype(datatype, token)));
+      const values = Array.isArray(value) ? value : [value];
+      return (
+        values.length === fixedItems.length &&
+        values.every((item, i) => canonical(item) === fixedItems[i])
+      );
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const whiteSpace = findFacetsMeta(itemSchema)?.whiteSpace;
+    return valuesEqual(
+      coerceLexical(applyWhiteSpace(lexical, whiteSpace), itemSchema, true),
+      value,
+    );
+  } catch {
+    return false;
+  }
+};
+
+// Field-level fixed enforcement for values the schema does not constrain:
+// union-typed fixeds carry no z.literal (the member type accepting the
+// declared lexical decides the value — only the runtime's branch-agreed
+// coercion knows it), so the check rides the meta.
+const coerceFieldLexical = (
+  raw: unknown,
+  field: FieldAnalysis,
+  fieldMeta: XmlFieldMeta,
+): unknown => {
+  const value = coerceLexical(raw, field.itemSchema);
+  if (
+    !field.hasFixed &&
+    (fieldMeta.fixedLexical !== undefined || typeof fieldMeta.fixedValue === "string") &&
+    !fixedValueSatisfied(value, fieldMeta, field.itemSchema)
+  ) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(raw)}: value does not match the fixed value ${JSON.stringify(fieldMeta.fixedLexical ?? fieldMeta.fixedValue)}`,
+    );
+  }
+  return value;
 };
 
 // Serialize a leaf, preferring the lexical retained at parse time.
@@ -1275,20 +1360,24 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
+    const fieldQnames =
+      fieldMeta.kind === "element" ? [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])] : [];
+    // A wildcard whose namespace constraint admits this element can claim the
+    // occurrences the field does not keep: a preceding one takes everything
+    // but the last (from-end), a following one takes everything but the first
+    // (the sweep's seen-count). Overflow is then the wildcard's, not a
+    // duplicate — see sweepWildcards.
+    const admitsField = (w: XmlFieldMeta): boolean =>
+      fieldQnames.some((q) =>
+        wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
+      );
+    const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
+      wildcardClaimsOverflow &&
       anyWildcards.some(
-        (w) =>
-          w.position !== undefined &&
-          w.position <= elementOrdinal &&
-          [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])].some((q) =>
-            wildcardAllows(
-              w.namespaceConstraint ?? "##any",
-              targetNamespace,
-              splitClark(q).namespace,
-            ),
-          ),
+        (w) => w.position !== undefined && w.position <= elementOrdinal && admitsField(w),
       );
     if (fieldMeta.kind === "element") {
       elementOrdinal++;
@@ -1307,6 +1396,7 @@ const readObject = (
         exactElementQNames,
         childWalk(walk, key),
         claimFromEnd,
+        wildcardClaimsOverflow,
       );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1544,6 +1634,17 @@ const sweepWildcards = (
   });
 };
 
+// Union(-list)-typed fixed (no z.literal, no fixedValue meta): the value is
+// the branch-agreed coercion of the declared lexical — only the runtime's
+// coercion knows which member type accepts each token.
+const substituteFixedLexical = (
+  field: FieldAnalysis,
+  fixedLexical: string,
+): { value: unknown; lexical: string } => ({
+  value: coerceLexical(fixedLexical, field.itemSchema),
+  lexical: fixedLexical,
+});
+
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
@@ -1573,6 +1674,9 @@ const substituteEmpty = (
   }
   if (fieldMeta.fixedValue !== undefined) {
     return substituted(fieldMeta.fixedValue);
+  }
+  if (fieldMeta.fixedLexical !== undefined) {
+    return { substituted: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
   }
   if (fieldMeta.defaultValue !== undefined) {
     return substituted(fieldMeta.defaultValue);
@@ -1679,7 +1783,7 @@ const readOccurrence = (
       value:
         text === undefined && hasElementChildren(childNode)
           ? undefined
-          : coerceLexical(text ?? "", field.itemSchema),
+          : coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? undefined : String(text),
       qnameNs:
         fieldMeta.qnameValue && text !== undefined && text !== ""
@@ -1723,7 +1827,7 @@ const readOccurrence = (
     };
   }
   return {
-    value: coerceLexical(entry, field.itemSchema),
+    value: coerceFieldLexical(entry, field, fieldMeta),
     lexical: String(entry),
     qnameNs:
       fieldMeta.qnameValue && entry !== ""
@@ -1758,6 +1862,7 @@ const readField = (
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
   claimFromEnd = false,
+  wildcardClaimsOverflow = false,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1773,9 +1878,13 @@ const readField = (
       if (field.hasFixed) {
         return { present: true, value: field.fixedValue, lexical };
       }
-      // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+      // List and structured date/time fixed (no z.literal — the meta carries
+      // the value; see fixedValueMetaParts).
       if (fieldMeta.fixedValue !== undefined) {
         return { present: true, value: fieldMeta.fixedValue, lexical };
+      }
+      if (fieldMeta.fixedLexical !== undefined) {
+        return { present: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
@@ -1790,7 +1899,7 @@ const readField = (
     }
     return {
       present: true,
-      value: coerceLexical(raw, field.itemSchema),
+      value: coerceFieldLexical(raw, field, fieldMeta),
       lexical: String(raw),
       qnameNs: fieldMeta.qnameValue ? qnameBindingsOf(String(raw), namespaceContext) : undefined,
     };
@@ -1808,7 +1917,7 @@ const readField = (
     // for string-allowing types, and numeric coercion of '' still rejects.
     return {
       present: true,
-      value: coerceLexical(text ?? "", field.itemSchema),
+      value: coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? "" : String(text),
     };
   }
@@ -1842,6 +1951,15 @@ const readField = (
         );
       }
     }
+  }
+  // A scalar element (maxOccurs=1) occurs at most once. Extra occurrences are
+  // a duplicate error unless a wildcard in the same content model claims them
+  // — a preceding wildcard owns everything but the last, a following one
+  // everything but the first (see readObject / sweepWildcards).
+  if (!field.isArray && matched.length > 1 && !wildcardClaimsOverflow) {
+    throw new Error(
+      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most 1`,
+    );
   }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
   // claimed the earlier ones); only that occurrence is read — the content of
@@ -1989,6 +2107,15 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
+    if (meta.fixedLexical !== undefined && meta.fixedValue === undefined) {
+      // Union(-list)-typed fixed: the meta carries no coerced value (a
+      // first-member coercion would be wrong — see fixedValueMetaParts), so
+      // substitute the branch-agreed coercion of the declared lexical, as
+      // the field paths do.
+      const substituted = coerceLexical(meta.fixedLexical, typeSchema);
+      rootLexicals.set(schema, { data: substituted, lexical: meta.fixedLexical });
+      return substituted;
+    }
     const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
@@ -2006,6 +2133,13 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
     text === undefined && hasElementChildren(rootNode)
       ? undefined
       : coerceLexical(text ?? "", typeSchema);
+  // Simple-typed roots carry no z.literal for their fixed constraint, so the
+  // value-space check rides the meta (union member agreement included).
+  if (value !== undefined && !fixedValueSatisfied(value, meta, typeSchema)) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(text)}: value does not match the fixed value ${JSON.stringify(meta.fixedLexical ?? meta.fixedValue)}`,
+    );
+  }
   if (text !== undefined) {
     rootLexicals.set(schema, {
       data: value,
@@ -3581,13 +3715,31 @@ export const parseXml = <S extends z.ZodType>(
   return result.data;
 };
 
-/** Serialize data back to XML against the same generated root schema. */
-export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>): string => {
+/**
+ * Serialize data to XML against a generated root schema. Accepts the schema's
+ * input type: the data is validated through the schema first, so defaults
+ * apply and invalid data fails with a ZodError before anything is emitted.
+ */
+export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): string => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
   warnOnGeneratorMismatch(meta);
+  // zod rebuilds the tree during validation — duplicate the parse-time side
+  // channels (retained lexicals, xsi:type captures, document order) onto the
+  // validated tree, exactly as safeParseXml does. Mode "copy" leaves the
+  // caller's tree intact so it can be serialized again. No rootLexicals
+  // refresh is needed here: root entries are keyed by schema and every read
+  // revalidates the retained lexical against the value being serialized
+  // (storedLexicalFor), so one document's recording can never attach to
+  // another's.
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    throw result.error;
+  }
+  transferLexicals(data, result.data, "copy");
+  const value: z.output<S> = result.data;
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
@@ -3596,29 +3748,27 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
 
   const typeSchema = peelOnce(schema);
   const xsiUnion =
-    data !== null && data !== undefined && typeof data === "object" && !Array.isArray(data)
+    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value)
       ? xsiTypeUnionDef(typeSchema)
       : undefined;
   let body = "";
   let attributes: string[] = [];
   let usesXsi = false;
-  if (data === null || data === undefined) {
+  // Narrowed once: both object branches below only run for non-array object
+  // values (see the xsiUnion/hasObjectShape guards).
+  const valueRecord = value as Record<string, unknown>;
+  if (value === null || value === undefined) {
     usesXsi = true;
   } else if (meta.open) {
-    const inner = openSerialize(data, ctx);
+    const inner = openSerialize(value, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.body;
   } else if (xsiUnion !== undefined) {
-    const { option, xsiTypeAttr } = xsiTypeVariantFor(
-      xsiUnion,
-      data as Record<string, unknown>,
-      ctx,
-    );
+    const { option, xsiTypeAttr } = xsiTypeVariantFor(xsiUnion, valueRecord, ctx);
     // Unknown-xsi:type capture at the root: re-attach the original xsi:type.
-    const typeAttr =
-      xsiTypeAttr ?? xsiTypeAttrFor(xsiCaptureStore.get(data as Record<string, unknown>), ctx);
-    const inner = writeObjectFields(option, data as Record<string, unknown>, ctx);
+    const typeAttr = xsiTypeAttr ?? xsiTypeAttrFor(xsiCaptureStore.get(valueRecord), ctx);
+    const inner = writeObjectFields(option, valueRecord, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi || typeAttr !== undefined;
     body = inner.elements.join("");
@@ -3626,7 +3776,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
       attributes.push(typeAttr);
     }
   } else if (hasObjectShape(typeSchema)) {
-    const inner = writeObjectFields(typeSchema, data as Record<string, unknown>, ctx);
+    const inner = writeObjectFields(typeSchema, valueRecord, ctx);
     attributes = inner.attributes;
     usesXsi = inner.usesXsi;
     body = inner.elements.join("");
@@ -3638,26 +3788,26 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
     // guard — the refine already enforced the constraint; anything else
     // falls back to the canonical form.
     const rootFixed =
-      storedLexicalFor(meta.fixedLexical, data, typeSchema) ??
-      storedLexicalFor(entry?.lexical, data, typeSchema) ??
+      storedLexicalFor(meta.fixedLexical, value, typeSchema) ??
+      storedLexicalFor(entry?.lexical, value, typeSchema) ??
       (meta.datatype === undefined ? undefined : meta.fixedLexical);
-    body = rootFixed === undefined ? serializeLeaf(typeSchema, data) : escapeXml(rootFixed);
+    body = rootFixed === undefined ? serializeLeaf(typeSchema, value) : escapeXml(rootFixed);
     if (meta.qnameValue) {
       body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
     }
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);
-    const stored = storedLexicalFor(entry?.lexical, data, typeSchema);
-    body = stored === undefined ? serializeLeaf(typeSchema, data) : escapeXml(stored);
+    const stored = storedLexicalFor(entry?.lexical, value, typeSchema);
+    body = stored === undefined ? serializeLeaf(typeSchema, value) : escapeXml(stored);
     if (meta.qnameValue && stored !== undefined) {
       body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
     }
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
     const rootDatatype = meta.datatype;
-    body = Array.isArray(data)
-      ? data.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
-      : serializeDatatypeValue(rootDatatype, data);
+    body = Array.isArray(value)
+      ? value.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
+      : serializeDatatypeValue(rootDatatype, value);
   }
 
   const nsDecls: string[] = [];
@@ -3685,7 +3835,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.output<S>):
   }
 
   const attrs = [...nsDecls, ...attributes].join(" ");
-  if (data === null || data === undefined) {
+  if (value === null || value === undefined) {
     const nilAttrs = [...nsDecls, 'xsi:nil="true"'].join(" ");
     return `<${rootTag} ${nilAttrs}/>`;
   }

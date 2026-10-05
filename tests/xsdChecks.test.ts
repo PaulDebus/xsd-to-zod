@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   countFractionDigits,
+  countLexicalFractionDigits,
   countTotalDigits,
   xsdDecimalCompare,
   xsdFractionDigits,
@@ -56,6 +57,22 @@ describe("xsdTotalDigits / xsdFractionDigits refinements", () => {
     expect(xsdTotalDigits(1)(Infinity)).toBe(true);
     expect(xsdTotalDigits(1)(NaN)).toBe(true);
     expect(xsdFractionDigits(0)(-Infinity)).toBe(true);
+  });
+});
+
+describe("countLexicalFractionDigits", () => {
+  it.each([
+    ["100", 0],
+    ["+1.0", 0],
+    ["1.100", 1],
+    ["1.19", 2],
+    [".5", 1],
+    ["-0.0700", 2],
+    ["12345678912345678.9", 1],
+    ["12345.6789123456789", 13],
+    ["1e5", 0],
+  ])("countLexicalFractionDigits(%s) === %s", (lexical, expected) => {
+    expect(countLexicalFractionDigits(lexical)).toBe(expected);
   });
 });
 

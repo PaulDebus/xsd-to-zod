@@ -274,6 +274,8 @@ const result = safeParseXml(orderSchema, xmlString);     // { success, data | er
 const xml = serializeXml(orderSchema, order);
 ```
 
+`serializeXml` takes the schema's *input* type: it validates through the schema before walking, so XSD attribute defaults apply and invalid data fails early with a `ZodError`. Generated modules export an input alias per complex type (`OrderTypeIn = z.input<typeof OrderTypeSchema>`) next to the output interface, so hand-building data typechecks with defaulted fields left out. (Recursive types keep an explicit const annotation to break circular inference; no `*In` alias is emitted for them — `z.input` of an annotated schema degrades to `unknown`.)
+
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
 Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced by default: violations fail parsing with a `ZodError` naming the constraint, value, and data path. To parse documents whose referential integrity is knowingly broken (partial exports, data being repaired) while keeping all other validation, use `parseXml(schema, xml, { identityConstraints: false })`.

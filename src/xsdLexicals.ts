@@ -10,8 +10,8 @@
 // Vacuous-by-spec types are deliberately absent: xs:normalizedString
 // (whiteSpace=replace) and xs:token (collapse) accept every string after facet
 // application, and xs:anyURI accepts every string after the XSD escaping
-// procedure — there is nothing a lexical check could reject. QName/NOTATION
-// need schema context and are separate work.
+// procedure — there is nothing a lexical check could reject. NOTATION needs
+// schema context and is separate work.
 
 // Exported for xsdDateTime.ts, whose structured parsers collapse first too.
 export const collapseWhiteSpace = (value: string): string =>
@@ -149,6 +149,21 @@ const NCNAME_RE = new RegExp(
 export const xsdName = match(NAME_RE);
 export const xsdNCName = match(NCNAME_RE);
 export const xsdNMTOKEN = match(NMTOKEN_RE);
+
+// QName lexical (Namespaces in XML): at most one colon, prefix and local part
+// both NCNames. Whether the prefix is BOUND needs instance context and is not
+// checked here, but the prefix 'xmlns' can never be bound (it is reserved), so
+// lexicals using it are rejected outright.
+const QNAME_RE = new RegExp(
+  `^(?:[${NCNAME_START_CHAR}][${NCNAME_START_CHAR}${NAME_CHAR_EXTRA}]*:)?` +
+    `[${NCNAME_START_CHAR}][${NCNAME_START_CHAR}${NAME_CHAR_EXTRA}]*$`,
+  "u",
+);
+
+export const xsdQName = (value: string): boolean => {
+  const collapsed = collapseWhiteSpace(value);
+  return QNAME_RE.test(collapsed) && !collapsed.startsWith("xmlns:");
+};
 
 // XSD list types (NMTOKENS, IDREFS, ENTITIES): whitespace-separated items,
 // validated after the fixed whiteSpace=collapse.
