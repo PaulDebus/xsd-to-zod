@@ -1230,20 +1230,24 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
+    const fieldQnames =
+      fieldMeta.kind === "element" ? [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])] : [];
+    // A wildcard whose namespace constraint admits this element can claim the
+    // occurrences the field does not keep: a preceding one takes everything
+    // but the last (from-end), a following one takes everything but the first
+    // (the sweep's seen-count). Overflow is then the wildcard's, not a
+    // duplicate — see sweepWildcards.
+    const admitsField = (w: XmlFieldMeta): boolean =>
+      fieldQnames.some((q) =>
+        wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
+      );
+    const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
+      wildcardClaimsOverflow &&
       anyWildcards.some(
-        (w) =>
-          w.position !== undefined &&
-          w.position <= elementOrdinal &&
-          [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])].some((q) =>
-            wildcardAllows(
-              w.namespaceConstraint ?? "##any",
-              targetNamespace,
-              splitClark(q).namespace,
-            ),
-          ),
+        (w) => w.position !== undefined && w.position <= elementOrdinal && admitsField(w),
       );
     if (fieldMeta.kind === "element") {
       elementOrdinal++;
@@ -1262,6 +1266,7 @@ const readObject = (
         exactElementQNames,
         childWalk(walk, key),
         claimFromEnd,
+        wildcardClaimsOverflow,
       );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1698,6 +1703,7 @@ const readField = (
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
   claimFromEnd = false,
+  wildcardClaimsOverflow = false,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1759,6 +1765,15 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
+  // A scalar element (maxOccurs=1) occurs at most once. Extra occurrences are
+  // a duplicate error unless a wildcard in the same content model claims them
+  // — a preceding wildcard owns everything but the last, a following one
+  // everything but the first (see readObject / sweepWildcards).
+  if (!field.isArray && matched.length > 1 && !wildcardClaimsOverflow) {
+    throw new Error(
+      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most 1`,
+    );
+  }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
   // claimed the earlier ones); only that occurrence is read — the content of
   // overflow occurrences is not the field's to validate.
