@@ -848,6 +848,80 @@ const storedLexicalFor = (
   }
 };
 
+// Fixed constraints compare in the VALUE space (cvc-elt): the declared fixed
+// lexical is coerced through the same branch-agreed path as the instance
+// lexical, so a union member mismatch ("2" the int vs "false" the boolean)
+// rejects even when naively coerced JS values would coincidentally compare
+// equal. Structured values compare canonical lexicals (item-wise for lists).
+const fixedValueSatisfied = (
+  value: unknown,
+  meta: { fixedLexical?: string; fixedValue?: unknown; datatype?: XsdDatatypeName },
+  itemSchema: AnySchema,
+): boolean => {
+  const lexical =
+    meta.fixedLexical ?? (typeof meta.fixedValue === "string" ? meta.fixedValue : undefined);
+  if (lexical === undefined) {
+    return true;
+  }
+  const datatype = meta.datatype;
+  if (datatype !== undefined) {
+    try {
+      // coerceLexical returns the pre-transform lexical for structured pipes,
+      // so strings go through the normalizing parser first.
+      const canonical = (v: unknown) =>
+        writeXsdDatatype(
+          datatype,
+          typeof v === "string" ? parseXsdDatatype(datatype, v) : (v as XsdStructuredValue),
+        );
+      const fixedItems =
+        lexical.trim() === ""
+          ? []
+          : lexical
+              .trim()
+              .split(/\s+/)
+              .map((token) => writeXsdDatatype(datatype, parseXsdDatatype(datatype, token)));
+      const values = Array.isArray(value) ? value : [value];
+      return (
+        values.length === fixedItems.length &&
+        values.every((item, i) => canonical(item) === fixedItems[i])
+      );
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const whiteSpace = findFacetsMeta(itemSchema)?.whiteSpace;
+    return valuesEqual(
+      coerceLexical(applyWhiteSpace(lexical, whiteSpace), itemSchema, true),
+      value,
+    );
+  } catch {
+    return false;
+  }
+};
+
+// Field-level fixed enforcement for values the schema does not constrain:
+// union-typed fixeds carry no z.literal (the member type accepting the
+// declared lexical decides the value — only the runtime's branch-agreed
+// coercion knows it), so the check rides the meta.
+const coerceFieldLexical = (
+  raw: unknown,
+  field: FieldAnalysis,
+  fieldMeta: XmlFieldMeta,
+): unknown => {
+  const value = coerceLexical(raw, field.itemSchema);
+  if (
+    !field.hasFixed &&
+    (fieldMeta.fixedLexical !== undefined || typeof fieldMeta.fixedValue === "string") &&
+    !fixedValueSatisfied(value, fieldMeta, field.itemSchema)
+  ) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(raw)}: value does not match the fixed value ${JSON.stringify(fieldMeta.fixedLexical ?? fieldMeta.fixedValue)}`,
+    );
+  }
+  return value;
+};
+
 // Serialize a leaf, preferring the lexical retained at parse time.
 const serializeStoredLeaf = (
   fieldMeta: XmlFieldMeta,
@@ -1504,6 +1578,17 @@ const sweepWildcards = (
   });
 };
 
+// Union(-list)-typed fixed (no z.literal, no fixedValue meta): the value is
+// the branch-agreed coercion of the declared lexical — only the runtime's
+// coercion knows which member type accepts each token.
+const substituteFixedLexical = (
+  field: FieldAnalysis,
+  fixedLexical: string,
+): { value: unknown; lexical: string } => ({
+  value: coerceLexical(fixedLexical, field.itemSchema),
+  lexical: fixedLexical,
+});
+
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
@@ -1533,6 +1618,9 @@ const substituteEmpty = (
   }
   if (fieldMeta.fixedValue !== undefined) {
     return substituted(fieldMeta.fixedValue);
+  }
+  if (fieldMeta.fixedLexical !== undefined) {
+    return { substituted: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
   }
   if (fieldMeta.defaultValue !== undefined) {
     return substituted(fieldMeta.defaultValue);
@@ -1624,7 +1712,7 @@ const readOccurrence = (
       value:
         text === undefined && hasElementChildren(childNode)
           ? undefined
-          : coerceLexical(text ?? "", field.itemSchema),
+          : coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? undefined : String(text),
       qnameNs:
         fieldMeta.qnameValue && text !== undefined && text !== ""
@@ -1668,7 +1756,7 @@ const readOccurrence = (
     };
   }
   return {
-    value: coerceLexical(entry, field.itemSchema),
+    value: coerceFieldLexical(entry, field, fieldMeta),
     lexical: String(entry),
     qnameNs:
       fieldMeta.qnameValue && entry !== ""
@@ -1719,9 +1807,13 @@ const readField = (
       if (field.hasFixed) {
         return { present: true, value: field.fixedValue, lexical };
       }
-      // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+      // List and structured date/time fixed (no z.literal — the meta carries
+      // the value; see fixedValueMetaParts).
       if (fieldMeta.fixedValue !== undefined) {
         return { present: true, value: fieldMeta.fixedValue, lexical };
+      }
+      if (fieldMeta.fixedLexical !== undefined) {
+        return { present: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
@@ -1736,7 +1828,7 @@ const readField = (
     }
     return {
       present: true,
-      value: coerceLexical(raw, field.itemSchema),
+      value: coerceFieldLexical(raw, field, fieldMeta),
       lexical: String(raw),
       qnameNs: fieldMeta.qnameValue ? qnameBindingsOf(String(raw), namespaceContext) : undefined,
     };
@@ -1754,7 +1846,7 @@ const readField = (
     // for string-allowing types, and numeric coercion of '' still rejects.
     return {
       present: true,
-      value: coerceLexical(text ?? "", field.itemSchema),
+      value: coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? "" : String(text),
     };
   }
@@ -1907,6 +1999,15 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
+    if (meta.fixedLexical !== undefined && meta.fixedValue === undefined) {
+      // Union(-list)-typed fixed: the meta carries no coerced value (a
+      // first-member coercion would be wrong — see fixedValueMetaParts), so
+      // substitute the branch-agreed coercion of the declared lexical, as
+      // the field paths do.
+      const substituted = coerceLexical(meta.fixedLexical, typeSchema);
+      rootLexicals.set(schema, { data: substituted, lexical: meta.fixedLexical });
+      return substituted;
+    }
     const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
@@ -1924,6 +2025,13 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
     text === undefined && hasElementChildren(rootNode)
       ? undefined
       : coerceLexical(text ?? "", typeSchema);
+  // Simple-typed roots carry no z.literal for their fixed constraint, so the
+  // value-space check rides the meta (union member agreement included).
+  if (value !== undefined && !fixedValueSatisfied(value, meta, typeSchema)) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(text)}: value does not match the fixed value ${JSON.stringify(meta.fixedLexical ?? meta.fixedValue)}`,
+    );
+  }
   if (text !== undefined) {
     rootLexicals.set(schema, {
       data: value,
