@@ -1340,6 +1340,8 @@ const isQNameTyped = (typeName: QName, ir: XsdIr, seen?: Set<string>): boolean =
 // List-aware fixed-value meta emission shared by fields and roots: a list
 // lexical is whitespace-separated items, so the meta carries a typed array
 // (or the raw lexical for structured items) instead of a scalar literal.
+// Union(-list) fixeds carry only the lexical: a value coerced under the
+// first member type would be wrong, so the runtime coerces branch-agreed.
 // Roots additionally carry the coerced scalar for plain types and the fixed
 // lexical in every mode — their schema never encodes the fixed constraint
 // (no z.literal / refine), so the runtime reads it from the meta alone.
@@ -1354,18 +1356,23 @@ const fixedValueMetaParts = (
   const parts: string[] = [];
   const listItemType = resolveListItemType(typeName, ir);
   if (listItemType !== undefined) {
-    // List-typed fixed values ride a refine, not a z.literal, so the
-    // runtime cannot read the fixed value from the schema def; substitute
-    // the typed array from the meta on absence (attributes) /
-    // present-but-empty (elements). An empty fixed lexical is an empty
-    // list: the raw "" would split into [""] and fail item validation.
     const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
     if (itemSt) {
       // Structured items transform from the lexical, so the meta carries
       // the raw lexical for the schema's preprocess to split and parse.
       const trimmed = fixedValue.trim();
       parts.push(`fixedValue: ${trimmed === "" ? "[]" : JSON.stringify(fixedValue)}`);
+    } else if (resolvesToUnion(listItemType, ir)) {
+      // List-of-union fixed: a per-token kind from the first member type
+      // would coerce under the wrong member ("2 3" → booleans). The
+      // runtime substitutes the branch-agreed coercion of the fixedLexical
+      // meta instead, and enforces present content from it.
     } else {
+      // List-typed fixed values ride a refine, not a z.literal, so the
+      // runtime cannot read the fixed value from the schema def; substitute
+      // the typed array from the meta on absence (attributes) /
+      // present-but-empty (elements). An empty fixed lexical is an empty
+      // list: the raw "" would split into [""] and fail item validation.
       parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue, integers)}`);
     }
   } else if (structured && structuredTypeOfTypeName(typeName, ir)) {
@@ -1374,12 +1381,19 @@ const fixedValueMetaParts = (
     // runtime substitutes the lexical from here (validation transforms it).
     parts.push(`fixedValue: ${JSON.stringify(fixedValue)}`);
   } else if (root) {
-    // Plain-typed roots: the schema is the bare type, so the runtime needs
-    // the coerced value in the meta (fields read it from z.literal).
-    const kind = resolvePrimitiveKind(typeName, ir, integers);
-    parts.push(
-      `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
-    );
+    if (resolvesToUnion(typeName, ir)) {
+      // Union-typed root fixed: no coerced scalar — resolvePrimitiveKind
+      // would pick the first member type ("2" → boolean false). The
+      // runtime substitutes the branch-agreed coercion of the fixedLexical
+      // meta, as it does for union fields.
+    } else {
+      // Plain-typed roots: the schema is the bare type, so the runtime needs
+      // the coerced value in the meta (fields read it from z.literal).
+      const kind = resolvePrimitiveKind(typeName, ir, integers);
+      parts.push(
+        `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
+      );
+    }
   }
   if (!structured || root) {
     // The serializer re-emits the declared fixed lexical (see XmlFieldMeta).

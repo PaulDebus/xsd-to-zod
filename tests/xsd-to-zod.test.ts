@@ -1101,6 +1101,9 @@ describe("xsd-to-zod v1 pipeline", () => {
         // coercion knows it. The constraint rides the fixedLexical meta.
         expect(generated.schemas).not.toContain("z.literal");
         expect(generated.schemas).toContain('fixedLexical: "2"');
+        // No coerced fixedValue either: the first member type (boolean)
+        // would claim "2".
+        expect(generated.schemas).not.toContain("fixedValue:");
 
         const mod = await importGeneratedSchemas(generated.schemas);
         const rootSchema = mod["rootSchema"] as z.ZodType;
@@ -1110,6 +1113,10 @@ describe("xsd-to-zod v1 pipeline", () => {
         // so it is not value-space equal to the int 2.
         expect(() => parseXml(rootSchema, "<root>false</root>")).toThrow(/fixed value/);
         expect(() => parseXml(rootSchema, "<root>3</root>")).toThrow(/fixed value/);
+        // An empty root substitutes the fixed value branch-agreed: the int 2,
+        // not false (the boolean coercion the first member type would give).
+        expect(parseXml(rootSchema, "<root/>")).toBe(2);
+        expect(serializeXml(rootSchema, parseXml(rootSchema, "<root/>"))).toBe("<root>2</root>");
       });
     });
 

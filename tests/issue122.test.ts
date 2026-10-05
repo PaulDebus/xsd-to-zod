@@ -145,6 +145,34 @@ const ELEMENT_LIST_FIXED_XSD = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
+const LIST_OF_UNION_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="dims" minOccurs="0" fixed="2 3">
+          <xs:simpleType>
+            <xs:list>
+              <xs:simpleType>
+                <xs:union memberTypes="xs:boolean xs:int" />
+              </xs:simpleType>
+            </xs:list>
+          </xs:simpleType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="dims" use="optional" fixed="2 3">
+        <xs:simpleType>
+          <xs:list>
+            <xs:simpleType>
+              <xs:union memberTypes="xs:boolean xs:int" />
+            </xs:simpleType>
+          </xs:list>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
 const generate = async (xsd: string): Promise<z.ZodType> => {
   let schema: z.ZodType | undefined;
   await withTempDirAsync(async (dir) => {
@@ -280,6 +308,50 @@ describe("xs:list attribute fixed values", () => {
     expect(parseXml(schema, "<root><dims/></root>")).toEqual({ dims: [1, 2] });
     expect(parseXml(schema, "<root><dims>1 2</dims></root>")).toEqual({ dims: [1, 2] });
     expect(() => parseXml(schema, "<root><dims>3 4</dims></root>")).toThrow();
+  });
+});
+
+describe("xs:list-of-union fixed values", () => {
+  it("emits only the fixedLexical meta, not a first-member typed array", async () => {
+    let schemas = "";
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, LIST_OF_UNION_FIXED_XSD);
+      schemas = irToZod(await parseXsd([file])).schemas;
+    });
+    expect(schemas).toContain('fixedLexical: "2 3"');
+    // No z.literal and no first-member (boolean) coercion of the tokens.
+    expect(schemas).not.toContain("z.literal");
+    expect(schemas).not.toContain("fixedValue:");
+  });
+
+  it("accepts the fixed list value as a typed array and rejects others", async () => {
+    const schema = await generate(LIST_OF_UNION_FIXED_XSD);
+    // "2" is not a boolean lexical, so both tokens coerce as ints — branch
+    // agreement, not the first member type (boolean).
+    expect(parseXml(schema, '<root dims="2 3"/>')).toEqual({ "@dims": [2, 3] });
+    expect(parseXml(schema, "<root><dims>2 3</dims></root>")).toEqual({
+      "@dims": [2, 3],
+      dims: [2, 3],
+    });
+    expect(() => parseXml(schema, '<root dims="1 0"/>')).toThrow(/fixed value/);
+    expect(() => parseXml(schema, "<root><dims>1 0</dims></root>")).toThrow(/fixed value/);
+  });
+
+  it("substitutes the fixed list value branch-agreed when the attribute is absent", async () => {
+    const schema = await generate(LIST_OF_UNION_FIXED_XSD);
+    const parsed = parseXml(schema, "<root/>");
+    expect(parsed).toEqual({ "@dims": [2, 3] });
+    const serialized = serializeXml(schema, parsed);
+    expect(serialized).toContain('dims="2 3"');
+    expect(parseXml(schema, serialized)).toEqual(parsed);
+  });
+
+  it("substitutes the fixed list value branch-agreed on a present-but-empty element", async () => {
+    const schema = await generate(LIST_OF_UNION_FIXED_XSD);
+    const parsed = parseXml(schema, "<root><dims/></root>");
+    expect(parsed).toEqual({ "@dims": [2, 3], dims: [2, 3] });
+    expect(serializeXml(schema, parsed)).toContain("<dims>2 3</dims>");
   });
 });
 

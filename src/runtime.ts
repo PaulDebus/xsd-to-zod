@@ -1578,6 +1578,17 @@ const sweepWildcards = (
   });
 };
 
+// Union(-list)-typed fixed (no z.literal, no fixedValue meta): the value is
+// the branch-agreed coercion of the declared lexical — only the runtime's
+// coercion knows which member type accepts each token.
+const substituteFixedLexical = (
+  field: FieldAnalysis,
+  fixedLexical: string,
+): { value: unknown; lexical: string } => ({
+  value: coerceLexical(fixedLexical, field.itemSchema),
+  lexical: fixedLexical,
+});
+
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
@@ -1609,13 +1620,7 @@ const substituteEmpty = (
     return substituted(fieldMeta.fixedValue);
   }
   if (fieldMeta.fixedLexical !== undefined) {
-    // Union-typed fixed (no z.literal, no fixedValue meta): substitute the
-    // branch-agreed coercion of the declared lexical.
-    return {
-      substituted: true,
-      value: coerceLexical(fieldMeta.fixedLexical, field.itemSchema),
-      lexical: fieldMeta.fixedLexical,
-    };
+    return { substituted: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
   }
   if (fieldMeta.defaultValue !== undefined) {
     return substituted(fieldMeta.defaultValue);
@@ -1802,18 +1807,13 @@ const readField = (
       if (field.hasFixed) {
         return { present: true, value: field.fixedValue, lexical };
       }
-      // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+      // List and structured date/time fixed (no z.literal — the meta carries
+      // the value; see fixedValueMetaParts).
       if (fieldMeta.fixedValue !== undefined) {
         return { present: true, value: fieldMeta.fixedValue, lexical };
       }
       if (fieldMeta.fixedLexical !== undefined) {
-        // Union-typed fixed (no z.literal, no fixedValue meta): substitute
-        // the branch-agreed coercion of the declared lexical.
-        return {
-          present: true,
-          value: coerceLexical(fieldMeta.fixedLexical, field.itemSchema),
-          lexical: fieldMeta.fixedLexical,
-        };
+        return { present: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
@@ -1999,6 +1999,15 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
+    if (meta.fixedLexical !== undefined && meta.fixedValue === undefined) {
+      // Union(-list)-typed fixed: the meta carries no coerced value (a
+      // first-member coercion would be wrong — see fixedValueMetaParts), so
+      // substitute the branch-agreed coercion of the declared lexical, as
+      // the field paths do.
+      const substituted = coerceLexical(meta.fixedLexical, typeSchema);
+      rootLexicals.set(schema, { data: substituted, lexical: meta.fixedLexical });
+      return substituted;
+    }
     const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
