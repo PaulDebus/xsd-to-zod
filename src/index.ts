@@ -114,6 +114,7 @@ export {
   xsdNCNames,
   xsdNMTOKEN,
   xsdNMTOKENS,
+  xsdQName,
   xsdTime,
 } from "./xsdLexicals.js";
 export { xsdPattern } from "./xsdPattern.js";

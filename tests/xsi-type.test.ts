@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { z } from "zod";
+import { z } from "zod";
 import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
@@ -363,17 +363,19 @@ describe("xsi:type polymorphism — unknown xsi:type capture (open world)", () =
     expect(serializeXml(kennelSchema, parseXml(kennelSchema, serialized))).toBe(serialized);
   });
 
-  it("survives mutation: extras append after the declared content, xsi:type is kept", async () => {
+  it("survives mutation: extras and xsi:type re-attach; invalid data fails early", async () => {
     const mod = await moduleFor(ZOO_XSD);
     const petSchema = mod["petSchema"] as z.ZodType;
     const parsed = parseXml(petSchema, CAT_XML) as Record<string, unknown>;
-    // Mutate the parsed value so the recorded order no longer matches.
+    // A value-level mutation keeps the data valid: the capture re-attaches.
     parsed["name"] = "Changed";
-    delete parsed["name"];
-    const serialized = serializeXml(petSchema, parsed as never);
+    const serialized = serializeXml(petSchema, parsed);
     expect(serialized).toContain('xsi:type="ns0:Cat"');
     expect(serialized).toContain(">tabby<");
     expect(serialized).toContain('kind="ball"');
+    // serializeXml validates first — dropping a required element fails early.
+    delete parsed["name"];
+    expect(() => serializeXml(petSchema, parsed)).toThrow(z.ZodError);
   });
 
   it("keeps only the xsi:type when the declared variant has a wildcard (extras ride the open shape)", async () => {

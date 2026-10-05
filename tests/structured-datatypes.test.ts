@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { z } from "zod";
+import { ZodError, type z } from "zod";
 import { irToZod, parseXml, parseXsd, serializeXml, xmlRegistry } from "../src/index.js";
 import {
   parseXsdDate,
@@ -394,11 +394,13 @@ describe("datatypes: structured runtime round-trip", () => {
     });
   });
 
-  it("passes plain strings through the serializer unchanged", async () => {
+  it("accepts hand-built lexicals and structured values, serializing canonically", async () => {
     await withXsd(ALL_TYPES_XSD, async (file) => {
       const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
       const mod = await importGeneratedSchemas(schemas);
       const schema = mod["eventSchema"] as z.ZodType;
+      // Both input forms validate: the lexical string (canonicalized through
+      // the value space) and the structured object (passed through).
       const data = {
         date: "2002-10-10+05:00",
         at: "24:00:00",
@@ -410,11 +412,47 @@ describe("datatypes: structured runtime round-trip", () => {
         span: "P1Y",
       };
       const serialized = serializeXml(schema, data);
-      expect(serialized).toContain("<date>2002-10-10+05:00</date>");
-      expect(serialized).toContain("<at>24:00:00</at>");
+      expect(serialized).toContain("<date>2002-10-09Z</date>");
+      expect(serialized).toContain("<at>00:00:00</at>");
       expect(serialized).toContain("<yearMonth>2002-10</yearMonth>");
       expect(serialized).toContain("<span>P1Y</span>");
       expect(serialized).toContain("<year>2002</year>");
+      // An invalid lexical now fails at serialize time instead of passing
+      // through unchecked.
+      expect(() => serializeXml(schema, { ...data, date: "2002-13-40" })).toThrow();
+    });
+  });
+
+  it("rejects structured values that would serialize to an invalid lexical", async () => {
+    await withXsd(ALL_TYPES_XSD, async (file) => {
+      const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
+      const mod = await importGeneratedSchemas(schemas);
+      const schema = mod["eventSchema"] as z.ZodType;
+      const base = {
+        date: { year: 2002, month: 10, day: 10 },
+        at: { hour: 12, minute: 0, second: 0 },
+        year: { year: 2002 },
+        yearMonth: { year: 2002, month: 10 },
+        month: { month: 5 },
+        monthDay: { month: 2, day: 29 },
+        day: { day: 31 },
+        span: { sign: 1, years: 1 },
+      };
+      // The lexical grammar is re-applied to the string the writer would
+      // emit, so nothing that serializes can fail to re-parse — and an
+      // out-of-range structured value fails before any XML is produced.
+      expect(() =>
+        serializeXml(schema, { ...base, date: { year: 2002, month: 13, day: 40 } }),
+      ).toThrow(ZodError);
+      expect(() =>
+        serializeXml(schema, { ...base, date: { year: 2002, month: 2, day: 29 } }),
+      ).toThrow(ZodError);
+      expect(() => serializeXml(schema, { ...base, year: { year: 0 } })).toThrow(ZodError);
+      expect(() => serializeXml(schema, { ...base, monthDay: { month: 13, day: 1 } })).toThrow(
+        ZodError,
+      );
+      // A well-formed structured value still serializes and round-trips.
+      expect(parseXml(schema, serializeXml(schema, base))).toEqual(base);
     });
   });
 

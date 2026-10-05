@@ -941,13 +941,14 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits fractionDigits refine + decimal-exact min for Price", async () => {
+    it("emits fractionDigits + decimal-exact min for Price as runtime facet meta", async () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         // Decimal order facets compare the original lexicals exactly in the
-        // runtime (facet meta) — the schema keeps the value-space checks.
+        // runtime (facet meta); fractionDigits counts the lexical too — the
+        // coerced double loses digits beyond its precision.
         expect(generated.schemas).toContain(
-          'const PriceSchema = z.clone(z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" })).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0","whiteSpace":"collapse"} });',
+          'const PriceSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0","fractionDigits":2,"whiteSpace":"collapse"} });',
         );
       });
     });
@@ -955,10 +956,11 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("imports the digit-check helpers from xsd-to-zod when digit facets are used", async () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
-        // Decimal order facets moved to the runtime's facet meta; the
-        // digit facets ride the xsdTotalDigits/xsdFractionDigits helpers.
+        // Decimal order facets and decimal fractionDigits moved to the
+        // runtime's facet meta; the remaining digit facets ride the
+        // xsdTotalDigits helper.
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits, xsdPattern } from 'xsd-to-zod';",
+          "import { xmlRegistry, xsdTotalDigits, xsdPattern } from 'xsd-to-zod';",
         );
       });
     });
@@ -1180,7 +1182,6 @@ describe("xsd-to-zod v1 pipeline", () => {
         ["pattern", "country", "12", "must match pattern"],
         ["enumeration", "status", "bogus", "Invalid option: expected one of"],
         ["minInclusive", "qty", "0", "Too small: expected number to be >=1"],
-        ["fractionDigits", "price", "19.999", "expected at most 2 fraction digits"],
         ["totalDigits", "big", "123456", "expected at most 5 total digits"],
         ["minLength", "name", "A", "Too small: expected string to have >=2 characters"],
       ])("rejects values violating %s facet", (_facet, field, value, message) => {
@@ -1192,6 +1193,17 @@ describe("xsd-to-zod v1 pipeline", () => {
         }
         expect(caught).toBeInstanceOf(z.ZodError);
         expect((caught as Error).message).toContain(message);
+      });
+
+      // fractionDigits on decimal is counted on the original lexical (the
+      // coerced double loses digits), so the runtime's lexical-facet check
+      // rejects before schema validation — a plain Error, like the decimal
+      // order facets.
+      it("rejects values violating fractionDigits facet", () => {
+        expect(() => parseXml(facetsSchema, facetXml("price", "19.999"))).toThrow(
+          'Invalid lexical "19.999": too many fraction digits',
+        );
+        expect(() => parseXml(facetsSchema, facetXml("price", "19.990"))).not.toThrow();
       });
     });
   });
@@ -1222,12 +1234,19 @@ describe("xsd-to-zod v1 pipeline", () => {
       const ir = await parseXsd([xsdFile]);
       const { schemas } = irToZod(ir);
 
+      // Only types on an inference cycle keep the explicit annotation; the
+      // rest infer freely so their input type stays precise. The annotated
+      // type gets no In alias — z.input of z.ZodType<Output> degrades to
+      // unknown, so emitting one would lie about the shape.
       expect(schemas).toContain(
         "const PersonTypeSchema: z.ZodType<PersonType> = z.lazy(() => z.object({",
       );
+      expect(schemas).toContain("const TeamTypeSchema = z.lazy(() => z.object({");
+      expect(schemas).not.toContain("export type PersonTypeIn");
       expect(schemas).toContain(
-        "const TeamTypeSchema: z.ZodType<TeamType> = z.lazy(() => z.object({",
+        "// No PersonTypeIn alias: PersonTypeSchema keeps an explicit z.ZodType annotation",
       );
+      expect(schemas).toContain("export type TeamTypeIn = z.input<typeof TeamTypeSchema>;");
       expect(schemas).toContain(
         'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person", generatedBy });',
       );

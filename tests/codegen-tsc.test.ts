@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
-import { discoverCuratedCases } from "./helpers.js";
+import { discoverCuratedCases, expectTscPasses } from "./helpers.js";
 
 // Smoke test: generated .zod.ts output must typecheck under the project's strict
 // settings for every curated fixture. Catches codegen bugs that produce invalid
@@ -31,28 +30,7 @@ describe("generated code typechecks", () => {
           files.push(file);
         }
 
-        const tsc = path.resolve("node_modules/.bin/tsc");
-        const result = spawnSync(
-          tsc,
-          [
-            "--noEmit",
-            "--ignoreConfig",
-            "--strict",
-            "--skipLibCheck",
-            "--target",
-            "es2022",
-            "--module",
-            "nodenext",
-            "--moduleResolution",
-            "nodenext",
-            ...extraFlags,
-            ...files,
-          ],
-          { encoding: "utf8" },
-        );
-
-        expect(result.error).toBeUndefined();
-        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expectTscPasses(files, extraFlags);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }

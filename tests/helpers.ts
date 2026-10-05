@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +78,31 @@ export const withTempDirAsync = async (
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+};
+
+// The strict flag set every consumer-style tsc smoke check in this suite
+// uses, so the three of them cannot drift. Extra flags and files append.
+const TSC_BASE_FLAGS = [
+  "--noEmit",
+  "--ignoreConfig",
+  "--strict",
+  "--skipLibCheck",
+  "--target",
+  "es2022",
+  "--module",
+  "nodenext",
+  "--moduleResolution",
+  "nodenext",
+];
+
+export const expectTscPasses = (files: string[], extraFlags: string[] = []): void => {
+  const result = spawnSync(
+    path.resolve("node_modules/.bin/tsc"),
+    [...TSC_BASE_FLAGS, ...extraFlags, ...files],
+    { encoding: "utf8" },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(0);
 };
 
 // Dynamically import a generated .zod.ts module. Written in a dotdir at the

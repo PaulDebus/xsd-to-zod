@@ -62,10 +62,11 @@ const structuredLiteral = (name: XsdDatatypeName, raw: string): string =>
   JSON.stringify(parseXsdDatatype(name, raw));
 
 // Builtins whose lexical space the zod tier can check (xsdLexicals.ts has the
-// validators): builtin local name → exported validator function. QName,
-// NOTATION, anyURI, normalizedString and token are absent on purpose — see
+// validators): builtin local name → exported validator function. NOTATION,
+// anyURI, normalizedString and token are absent on purpose — see
 // xsdLexicals.ts for why their lexical check is impossible or vacuous.
 export const XSD_LEXICAL_VALIDATORS: ReadonlyMap<string, string> = new Map([
+  ["QName", "xsdQName"],
   ["date", "xsdDate"],
   ["dateTime", "xsdDateTime"],
   ["time", "xsdTime"],
@@ -325,14 +326,75 @@ const resolvesToUnion = (typeName: QName, ir: XsdIr, seen?: Set<string>): boolea
   return simple.kind === "restriction" ? resolvesToUnion(simple.baseType, ir, next) : false;
 };
 
-const primitiveToZod = (
-  typeName: QName,
-  definedTypes: Set<string>,
-  constName: ReadonlyMap<QName, string>,
-  usedHelpers: Set<string>,
-  structured: boolean,
-  integers: IntegersMode,
+// Structured-mode values are objects on the output side, but the wire form
+// (and hand-built input) is the lexical string. The schema accepts both: a
+// custom branch admits structured objects, re-checking them against the
+// lexical grammar the serializer writes; the string branch keeps lexical
+// validation and the transform. serializeXml validates its input through the
+// schema, so parseXml's output must re-validate — and whatever serializeXml
+// emits must re-parse.
+const XSD_STRUCTURED_REQUIRED_FIELDS: ReadonlyMap<string, string[]> = new Map([
+  ["date", ["year", "month", "day"]],
+  ["dateTime", ["year", "month", "day", "hour", "minute", "second"]],
+  ["time", ["hour", "minute", "second"]],
+  ["gYear", ["year"]],
+  ["gYearMonth", ["year", "month"]],
+  ["gMonth", ["month"]],
+  ["gMonthDay", ["month", "day"]],
+  ["gDay", ["day"]],
+  ["duration", ["sign"]],
+]);
+
+interface StructuredDatatypeInfo {
+  parseFn: string;
+  writeFn: string;
+  tsType: string;
+  name: XsdDatatypeName;
+}
+
+interface DatatypeEmitCtx {
+  usedTypes: Set<string>;
+}
+
+const structuredValueGuard = (
+  structInfo: StructuredDatatypeInfo,
+  datatypeCtx: DatatypeEmitCtx | undefined,
+  validator: string,
 ): string => {
+  const fields = XSD_STRUCTURED_REQUIRED_FIELDS.get(structInfo.name) ?? [];
+  const check = [
+    `typeof v === "object"`,
+    `v !== null`,
+    ...fields.map((f) => `"${f}" in v && typeof v.${f} === "number"`),
+  ].join(" && ");
+  if (datatypeCtx !== undefined) {
+    datatypeCtx.usedTypes.add(structInfo.tsType);
+  }
+  const shape =
+    datatypeCtx === undefined
+      ? `z.custom((v) => ${check})`
+      : `z.custom<${structInfo.tsType}>((v) => ${check})`;
+  // The shape check only admits an object with numeric fields; the lexical
+  // grammar is then re-applied to exactly what the serializer emits (writeFn),
+  // so a hand-built structured value can never produce XML that parseXml
+  // rejects on the way back in.
+  return `${shape}.refine((v) => ${validator}(${structInfo.writeFn}(v)), { message: 'invalid xs:${structInfo.name} lexical' })`;
+};
+
+// Codegen context for primitive emission: the schema sets consulted while
+// emitting plus the per-run output-shape options. One value travels to every
+// call site instead of a positional clump that grows with each new option.
+interface PrimitiveEmitCtx {
+  definedTypes: Set<string>;
+  constName: ReadonlyMap<QName, string>;
+  usedHelpers: Set<string>;
+  structured: boolean;
+  integers: IntegersMode;
+  datatypeCtx: DatatypeEmitCtx | undefined;
+}
+
+const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
+  const { definedTypes, constName, usedHelpers, structured, integers, datatypeCtx } = ctx;
   const parts = trySplitClark(typeName);
   if (!parts) {
     return "z.unknown()";
@@ -394,7 +456,8 @@ const primitiveToZod = (
     const structuredInfo = structured ? structuredType(parts.local) : undefined;
     if (structuredInfo) {
       usedHelpers.add(structuredInfo.parseFn);
-      return `${base}.transform(${structuredInfo.parseFn})`;
+      usedHelpers.add(structuredInfo.writeFn);
+      return `z.union([${structuredValueGuard(structuredInfo, datatypeCtx, validator)}, ${base}.transform(${structuredInfo.parseFn})])`;
     }
     return base;
   }
@@ -757,6 +820,11 @@ const withFacets = (
         case "fractionDigits":
           if (kind === "bigint") {
             result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
+          } else if (builtinLocal === "decimal" && kind === "number") {
+            // The coerced double loses digits beyond its precision, so the
+            // count must happen on the original lexical (same reason as the
+            // decimal order facets) — enforced by the runtime.
+            lexical.fractionDigits = facet.value;
           } else {
             usage.fractionDigits = true;
             result += `.refine(xsdFractionDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} fraction digits`)} })`;
@@ -871,6 +939,16 @@ const mergeLexicalFacets = (
   const maxExclusive = tighter(base.maxExclusive, own.maxExclusive, false);
   if (maxExclusive !== undefined) {
     merged.maxExclusive = maxExclusive;
+  }
+  // fractionDigits only narrows down a derivation chain.
+  const fractionDigits =
+    base.fractionDigits === undefined
+      ? own.fractionDigits
+      : own.fractionDigits === undefined
+        ? base.fractionDigits
+        : Math.min(base.fractionDigits, own.fractionDigits);
+  if (fractionDigits !== undefined) {
+    merged.fractionDigits = fractionDigits;
   }
   return merged;
 };
@@ -2024,7 +2102,7 @@ export const irToZod = (
   const usage: FacetUsage = { totalDigits: false, fractionDigits: false };
   const usedHelpers = new Set<string>();
   const usedTypes = new Set<string>();
-  const dt = structured && !opts?.js ? { usedTypes } : undefined;
+  const datatypeCtx = structured && !opts?.js ? { usedTypes } : undefined;
   // Merged lexical facets per emitted simple type (derivation-chain complete).
   const lexicalFacetsByType = new Map<QName, XmlLexicalFacets>();
 
@@ -2071,6 +2149,17 @@ export const irToZod = (
   };
   const constName = new Map<QName, string>();
   const ifaceName = new Map<QName, string>();
+  // Built once the naming maps exist; every primitiveToZod call site shares
+  // it. The sets inside stay live references, so later registrations are
+  // visible to subsequent emissions.
+  const primitiveCtx: PrimitiveEmitCtx = {
+    definedTypes,
+    constName,
+    usedHelpers,
+    structured,
+    integers,
+    datatypeCtx,
+  };
   const sortedSimpleTypes = sortSimpleTypes(ir);
 
   // A global element lends its inline anonymous type the bare element
@@ -2441,14 +2530,7 @@ export const irToZod = (
         ? `z.lazy(() => ${union})`
         : `z.lazy((): z.ZodType<${tsVariantUnionType(field.typeName)}> => ${union})`;
     }
-    const headExpr = primitiveToZod(
-      field.typeName,
-      definedTypes,
-      constName,
-      usedHelpers,
-      structured,
-      integers,
-    );
+    const headExpr = primitiveToZod(field.typeName, primitiveCtx);
     const eagerHeadExpr =
       eager && ir.complexTypes[field.typeName] !== undefined && definedTypes.has(field.typeName)
         ? `z.lazy(() => ${headExpr})`
@@ -2460,12 +2542,7 @@ export const irToZod = (
     const option = (expr: string, qname: QName): string =>
       `z.lazy(() => ${expr}).register(xmlRegistry, { substElement: ${JSON.stringify(qname)} })`;
     const options = [
-      ...substMembers.map((m) =>
-        option(
-          primitiveToZod(m.typeName, definedTypes, constName, usedHelpers, structured, integers),
-          m.name,
-        ),
-      ),
+      ...substMembers.map((m) => option(primitiveToZod(m.typeName, primitiveCtx), m.name)),
       option(headExpr, field.qname),
     ];
     return `z.union([${options.join(", ")}])`;
@@ -2494,8 +2571,85 @@ export const irToZod = (
       .join(", ");
   };
 
+  // Inference dependency graph between complex-type consts: an edge A → B
+  // means A's emitted expression references B's schema const with no explicit
+  // type annotation in between (direct reference or unannotated z.lazy), so
+  // TS must infer B before A. Types on a cycle keep the z.ZodType<Interface>
+  // annotation — it breaks the circular inference. Every other const infers
+  // freely, keeping its z.input precise (defaults, optionals).
+  const recursiveTypes = new Set<QName>();
+  {
+    const typeRefDeps = (typeName: QName): QName[] =>
+      ir.complexTypes[typeName] !== undefined && definedTypes.has(typeName) ? [typeName] : [];
+    const directDeps = (name: QName): Set<QName> => {
+      const out = new Set<QName>();
+      const seen = new Set<string>();
+      // The main const of a family member lazily references its eager object
+      // const; non-family consts inline their (non-eager) props. Polymorphic
+      // slots reference the variant-union const, which reaches every variant's
+      // eager object const; in eager context those slots carry an explicit
+      // return-type annotation — an inference boundary, so no edge.
+      const addFields = (typeName: QName, eager: boolean): void => {
+        if (seen.has(`${typeName} ${eager}`)) {
+          return;
+        }
+        seen.add(`${typeName} ${eager}`);
+        const def = ir.complexTypes[typeName];
+        if (def === undefined) {
+          return;
+        }
+        for (const field of dedupeEmissionFields(def)) {
+          const variants = polymorphicVariants(field);
+          if (variants !== undefined) {
+            if (!eager) {
+              for (const variant of variants) {
+                addFields(variant, true);
+              }
+            }
+            continue;
+          }
+          for (const dep of typeRefDeps(field.typeName)) {
+            out.add(dep);
+          }
+          for (const member of membersByHead.get(field.qname) ?? []) {
+            for (const dep of typeRefDeps(member.typeName)) {
+              out.add(dep);
+            }
+          }
+        }
+      };
+      addFields(name, familyTypes.has(name));
+      return out;
+    };
+    const depsByType = new Map<QName, Set<QName>>();
+    for (const complexType of Object.values(ir.complexTypes)) {
+      depsByType.set(complexType.name, directDeps(complexType.name));
+    }
+    for (const name of depsByType.keys()) {
+      const stack = [...(depsByType.get(name) ?? [])];
+      const reached = new Set<QName>();
+      while (stack.length > 0) {
+        const current = stack.pop() as QName;
+        if (current === name) {
+          recursiveTypes.add(name);
+          break;
+        }
+        if (reached.has(current)) {
+          continue;
+        }
+        reached.add(current);
+        stack.push(...(depsByType.get(current) ?? []));
+      }
+    }
+  }
+
   // Interfaces first: exported so consumers can name the inferred types, and
   // the const annotations below refer to them. js mode has no type level.
+  // Each interface is paired with an input alias for hand-building data:
+  // the In shape makes defaulted/optional fields optional at construction.
+  // Recursive types keep their const annotation (circular inference), which
+  // erases the input side — no alias is emitted for them rather than one
+  // that degrades to unknown.
   if (!opts?.js) {
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
@@ -2507,7 +2661,7 @@ export const irToZod = (
             ir,
             ifaceName,
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-            dt,
+            datatypeCtx,
             integers,
             membersByHead,
             (f) =>
@@ -2520,11 +2674,19 @@ export const irToZod = (
           ? "\n  [key: string]: unknown;"
           : "";
       const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
+      const iface = ifaceName.get(complexType.name);
+      // Recursive consts keep the explicit z.ZodType annotation, which pins
+      // z.input to unknown — emitting an In alias would lie about the shape,
+      // so the alias is omitted with the reason recorded in the artifact.
+      const inputAlias = recursiveTypes.has(complexType.name)
+        ? `// No ${iface}In alias: ${iface}Schema keeps an explicit z.ZodType annotation to break circular inference, so z.input would degrade to unknown.`
+        : `export type ${alloc(`${iface}In`)} = z.input<typeof ${constName.get(complexType.name)}>;`;
       schemaLines.push(
         withNamingComment(
           complexType.name,
-          `${jsDoc}export interface ${ifaceName.get(complexType.name)} {\n${props}${indexSignature}\n}`,
+          `${jsDoc}export interface ${iface} {\n${props}${indexSignature}\n}`,
         ),
+        inputAlias,
       );
     }
   }
@@ -2533,19 +2695,10 @@ export const irToZod = (
     claimTypeName(simpleType.name);
     let expr: string;
     if (simpleType.kind === "list") {
-      const itemExpr = primitiveToZod(
-        simpleType.itemType,
-        definedTypes,
-        constName,
-        usedHelpers,
-        structured,
-        integers,
-      );
+      const itemExpr = primitiveToZod(simpleType.itemType, primitiveCtx);
       expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
-      const memberExprs = simpleType.memberTypes.map((mt) =>
-        primitiveToZod(mt, definedTypes, constName, usedHelpers, structured, integers),
-      );
+      const memberExprs = simpleType.memberTypes.map((mt) => primitiveToZod(mt, primitiveCtx));
       // Distinct member types can emit identical expressions (two
       // string-derived types both become z.string()) — z.union([A, A]) is A.
       const uniqueExprs = [...new Set(memberExprs)];
@@ -2554,14 +2707,7 @@ export const irToZod = (
           ? (uniqueExprs[0] ?? "z.unknown()")
           : `z.union([${uniqueExprs.join(", ")}])`;
     } else {
-      const baseExpr = primitiveToZod(
-        simpleType.baseType,
-        definedTypes,
-        constName,
-        usedHelpers,
-        structured,
-        integers,
-      );
+      const baseExpr = primitiveToZod(simpleType.baseType, primitiveCtx);
       const lexical: XmlLexicalFacets = {};
       expr = simpleType.facets
         ? withFacets(
@@ -2619,7 +2765,10 @@ export const irToZod = (
 
   for (const complexType of Object.values(ir.complexTypes)) {
     schemaLines.push(...hoistedLinesFor(complexType.name));
-    const annotation = opts?.js ? "" : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
+    const annotation =
+      opts?.js || !recursiveTypes.has(complexType.name)
+        ? ""
+        : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
     if (familyTypes.has(complexType.name)) {
       // Family member: the object shape lives in its own const (shared with
       // the xsiType variant below); the named const stays a lazy wrapper.
@@ -2722,14 +2871,7 @@ export const irToZod = (
     // root whose type is polymorphic wraps the xsi:type variant union.
     const rootTypeExpr =
       variantSets.get(rootDef.typeName) === undefined
-        ? primitiveToZod(
-            rootDef.typeName,
-            definedTypes,
-            constName,
-            usedHelpers,
-            structured,
-            integers,
-          )
+        ? primitiveToZod(rootDef.typeName, primitiveCtx)
         : (unionConstName.get(rootDef.typeName) ?? "z.unknown()");
     const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;

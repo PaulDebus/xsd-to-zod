@@ -12,6 +12,9 @@ export type XmlLexicalFacets = {
   maxInclusive?: string;
   minExclusive?: string;
   maxExclusive?: string;
+  /** fractionDigits on decimal-derived types, counted on the lexical (the
+      coerced double loses digits beyond its precision). */
+  fractionDigits?: number;
   datatype?: XsdDatatypeName;
 };
 
