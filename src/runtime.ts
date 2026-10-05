@@ -1060,6 +1060,22 @@ const readXsiTypeAttr = (
   return namespace === undefined ? undefined : `{${namespace}}${local}`;
 };
 
+// The blocked-derivation check shared by both xsi:type block paths: if any
+// of the type's derivation methods is blocked, the cvc-elt block rule forbids
+// the xsi:type.
+const throwIfBlockedXsiType = (
+  xsiType: QName,
+  methods: string[],
+  blocked: ReadonlySet<string>,
+): void => {
+  const hit = methods.find((method) => blocked.has(method));
+  if (hit !== undefined) {
+    throw new Error(
+      `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
+    );
+  }
+};
+
 // xsi:type validity on simple-typed read paths (cvc-elt): the xsi:type must
 // be the declared type or validly derived from it, and no derivation step
 // may use a method the element/type declaration blocks. Unknown xsi:types
@@ -1080,13 +1096,7 @@ const checkXsiTypeValidity = (
   }
   const methods = meta.derivations?.[xsiType];
   if (methods !== undefined) {
-    const blocked = new Set(meta.block ?? []);
-    const hit = methods.find((method) => blocked.has(method));
-    if (hit !== undefined) {
-      throw new Error(
-        `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
-      );
-    }
+    throwIfBlockedXsiType(xsiType, methods, new Set(meta.block ?? []));
     return;
   }
   if (meta.ancestors?.includes(xsiType) === true || meta.knownTypes?.includes(xsiType) === true) {
@@ -1125,13 +1135,11 @@ const readXsiTypeOccurrence = (
     );
     const methods = unionMeta?.derivations?.[xsiType];
     if (methods !== undefined) {
-      const blocked = new Set([...(unionMeta?.block ?? []), ...(elementBlock ?? [])]);
-      const hit = methods.find((method) => blocked.has(method));
-      if (hit !== undefined) {
-        throw new Error(
-          `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
-        );
-      }
+      throwIfBlockedXsiType(
+        xsiType,
+        methods,
+        new Set([...(unionMeta?.block ?? []), ...(elementBlock ?? [])]),
+      );
     }
   }
   const derived =

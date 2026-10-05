@@ -1898,6 +1898,16 @@ const XSD_BUILTIN_QNAMES: QName[] = [
   ].map((local): QName => `{${XSD_NS}}${local}`),
 ];
 
+// Parent of a builtin type in the XSD hierarchy: NMTOKENS/IDREFS/ENTITIES are
+// lists of anySimpleType; every other builtin restricts its tabled parent
+// (defaulting to anySimpleType).
+const builtinDerivationParent = (local: string): QName => {
+  if (local === "NMTOKENS" || local === "IDREFS" || local === "ENTITIES") {
+    return ANY_SIMPLE_TYPE;
+  }
+  return `{${XSD_NS}}${XSD_BUILTIN_PARENT.get(local) ?? "anySimpleType"}`;
+};
+
 // One derivation step upward from a type: the method and the base's qname.
 // Complex types without an explicit base restrict anyType; list/union types
 // derive from anySimpleType by list/union (methods block never covers).
@@ -1930,13 +1940,8 @@ const derivationStep = (
   }
   const parts = trySplitClark(typeName);
   if (parts?.ns === XSD_NS) {
-    if (parts.local === "NMTOKENS" || parts.local === "IDREFS" || parts.local === "ENTITIES") {
-      return { method: "list", next: ANY_SIMPLE_TYPE };
-    }
-    return {
-      method: "restriction",
-      next: `{${XSD_NS}}${XSD_BUILTIN_PARENT.get(parts.local) ?? "anySimpleType"}`,
-    };
+    const isList = parts.local === "NMTOKENS" || parts.local === "IDREFS" || parts.local === "ENTITIES";
+    return { method: isList ? "list" : "restriction", next: builtinDerivationParent(parts.local) };
   }
   return undefined;
 };
@@ -2026,12 +2031,7 @@ const derivedSimpleAndComplex = (typeName: QName, ir: XsdIr): Record<QName, stri
       continue;
     }
     const local = clarkToLocal(qname);
-    if (local === "NMTOKENS" || local === "IDREFS" || local === "ENTITIES") {
-      addEdge(qname, ANY_SIMPLE_TYPE);
-    } else {
-      const parent = XSD_BUILTIN_PARENT.get(local);
-      addEdge(qname, parent === undefined ? ANY_SIMPLE_TYPE : `{${XSD_NS}}${parent}`);
-    }
+    addEdge(qname, builtinDerivationParent(local));
   }
   const result: Record<QName, string[]> = {};
   const seen = new Set<QName>([typeName]);
