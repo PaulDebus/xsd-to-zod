@@ -2380,8 +2380,15 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
       if (isMixedComplexType(override.node)) {
         prependMixedTextField(fields, override.targetNs);
       }
+      const original = state.complexTypes[override.qname];
+      // Redefine fallback: an override without its own block keeps the
+      // original type's block on every branch (xs:redefine amends the
+      // original declaration rather than replacing it wholesale).
+      const effectiveBlock =
+        override.node["@_block"] === undefined
+          ? original?.block
+          : String(override.node["@_block"]);
       if (baseType === override.qname && derivationKind === "extension") {
-        const original = state.complexTypes[override.qname];
         if (original) {
           const mergedChoiceGroups = {
             ...original.choiceGroups,
@@ -2398,12 +2405,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("baseType", original.baseType),
             ...optProp("restrictionBase", original.restrictionBase),
             ...(abstract || original.abstract === true ? { abstract: true } : {}),
-            ...optProp(
-              "block",
-              override.node["@_block"] === undefined
-                ? original.block
-                : String(override.node["@_block"]),
-            ),
+            ...optProp("block", effectiveBlock),
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...choiceGuardsMeta(mergedChoiceGuards),
@@ -2415,10 +2417,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             fields,
             ...optProp("baseType", effectiveBaseType),
             ...(abstract ? { abstract: true } : {}),
-            ...optProp(
-              "block",
-              override.node["@_block"] ? String(override.node["@_block"]) : undefined,
-            ),
+            ...optProp("block", effectiveBlock),
             ...optProp("description", description),
             ...choiceGroupMeta,
             ...choiceGuardMeta,
@@ -2431,10 +2430,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           fields,
           ...optProp("baseType", effectiveBaseType),
           ...(abstract ? { abstract: true } : {}),
-          ...optProp(
-            "block",
-            override.node["@_block"] ? String(override.node["@_block"]) : undefined,
-          ),
+          ...optProp("block", effectiveBlock),
           ...optProp("description", description),
           ...choiceGroupMeta,
           ...choiceGuardMeta,
