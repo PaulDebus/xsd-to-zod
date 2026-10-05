@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { irToZod, parseXsd } from "../src/index.js";
-import { withTempDirAsync } from "./helpers.js";
+import { expectTscPasses, withTempDirAsync } from "./helpers.js";
 
 // Static types must survive codegen: z.infer<typeof XSchema> yields the TS
 // type of the XSD complex type, not any. The old
@@ -78,26 +77,7 @@ describe("generated schemas preserve static types", () => {
       fs.writeFileSync(path.join(dir, "schema.zod.ts"), irToZod(await parseXsd([xsdFile])).schemas);
       fs.writeFileSync(path.join(dir, "consumer.ts"), CONSUMER);
 
-      const tsc = path.resolve("node_modules/.bin/tsc");
-      const result = spawnSync(
-        tsc,
-        [
-          "--noEmit",
-          "--ignoreConfig",
-          "--strict",
-          "--skipLibCheck",
-          "--target",
-          "es2022",
-          "--module",
-          "nodenext",
-          "--moduleResolution",
-          "nodenext",
-          path.join(dir, "consumer.ts"),
-        ],
-        { encoding: "utf8" },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expectTscPasses([path.join(dir, "consumer.ts")]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

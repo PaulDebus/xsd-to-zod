@@ -39,7 +39,8 @@ describe("anonymous type naming", () => {
   </xs:element>
 </xs:schema>`);
     expect(schemas).toContain("export interface Library {");
-    expect(schemas).toContain("const LibraryTypeSchema: z.ZodType<Library>");
+    expect(schemas).toContain("export type LibraryIn = z.input<typeof LibraryTypeSchema>;");
+    expect(schemas).toContain("const LibraryTypeSchema = z.lazy(() => z.object({");
     expect(schemas).toContain("export const LibrarySchema = z.lazy(() => LibraryTypeSchema)");
     expect(schemas).not.toMatch(/(interface|const) anonymous_/);
     expect(warnings).toEqual([]);
