@@ -941,13 +941,14 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
-    it("emits fractionDigits refine + decimal-exact min for Price", async () => {
+    it("emits fractionDigits + decimal-exact min for Price as runtime facet meta", async () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         // Decimal order facets compare the original lexicals exactly in the
-        // runtime (facet meta) — the schema keeps the value-space checks.
+        // runtime (facet meta); fractionDigits counts the lexical too — the
+        // coerced double loses digits beyond its precision.
         expect(generated.schemas).toContain(
-          'const PriceSchema = z.clone(z.number().refine(xsdFractionDigits(2), { message: "expected at most 2 fraction digits" })).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0","whiteSpace":"collapse"} });',
+          'const PriceSchema = z.clone(z.number()).register(xmlRegistry, { qname: "{urn:facets}Price", facets: {"minInclusive":"0","fractionDigits":2,"whiteSpace":"collapse"} });',
         );
       });
     });
@@ -955,10 +956,11 @@ describe("xsd-to-zod v1 pipeline", () => {
     it("imports the digit-check helpers from xsd-to-zod when digit facets are used", async () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
-        // Decimal order facets moved to the runtime's facet meta; the
-        // digit facets ride the xsdTotalDigits/xsdFractionDigits helpers.
+        // Decimal order facets and decimal fractionDigits moved to the
+        // runtime's facet meta; the remaining digit facets ride the
+        // xsdTotalDigits helper.
         expect(generated.schemas).toContain(
-          "import { xmlRegistry, xsdTotalDigits, xsdFractionDigits, xsdPattern } from 'xsd-to-zod';",
+          "import { xmlRegistry, xsdTotalDigits, xsdPattern } from 'xsd-to-zod';",
         );
       });
     });
@@ -1081,6 +1083,43 @@ describe("xsd-to-zod v1 pipeline", () => {
       });
     });
 
+    it("compares union-typed fixed values in value space (member-type agreement)", async () => {
+      const UNION_FIXED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root" fixed="2">
+    <xs:simpleType>
+      <xs:union memberTypes="xs:boolean xs:int xs:string"/>
+    </xs:simpleType>
+  </xs:element>
+</xs:schema>`;
+      await withTempDirAsync(async (dir) => {
+        const file = path.join(dir, "schema.xsd");
+        fs.writeFileSync(file, UNION_FIXED_XSD);
+        const generated = irToZod(await parseXsd([file]));
+        // No z.literal: the member type accepting the fixed lexical ("2" →
+        // xs:int) decides the value — only the runtime's branch-agreed
+        // coercion knows it. The constraint rides the fixedLexical meta.
+        expect(generated.schemas).not.toContain("z.literal");
+        expect(generated.schemas).toContain('fixedLexical: "2"');
+        // No coerced fixedValue either: the first member type (boolean)
+        // would claim "2".
+        expect(generated.schemas).not.toContain("fixedValue:");
+
+        const mod = await importGeneratedSchemas(generated.schemas);
+        const rootSchema = mod["rootSchema"] as z.ZodType;
+        // "2" validates as the int 2 — the fixed value's own member.
+        expect(parseXml(rootSchema, "<root>2</root>")).toBe(2);
+        // "false" validates as the boolean false — a different member type,
+        // so it is not value-space equal to the int 2.
+        expect(() => parseXml(rootSchema, "<root>false</root>")).toThrow(/fixed value/);
+        expect(() => parseXml(rootSchema, "<root>3</root>")).toThrow(/fixed value/);
+        // An empty root substitutes the fixed value branch-agreed: the int 2,
+        // not false (the boolean coercion the first member type would give).
+        expect(parseXml(rootSchema, "<root/>")).toBe(2);
+        expect(serializeXml(rootSchema, parseXml(rootSchema, "<root/>"))).toBe("<root>2</root>");
+      });
+    });
+
     it("round-trips facet-constrained data", async () => {
       await withTempDirAsync(async (dir) => {
         const file = path.join(dir, "schema.xsd");
@@ -1150,7 +1189,6 @@ describe("xsd-to-zod v1 pipeline", () => {
         ["pattern", "country", "12", "must match pattern"],
         ["enumeration", "status", "bogus", "Invalid option: expected one of"],
         ["minInclusive", "qty", "0", "Too small: expected number to be >=1"],
-        ["fractionDigits", "price", "19.999", "expected at most 2 fraction digits"],
         ["totalDigits", "big", "123456", "expected at most 5 total digits"],
         ["minLength", "name", "A", "Too small: expected string to have >=2 characters"],
       ])("rejects values violating %s facet", (_facet, field, value, message) => {
@@ -1162,6 +1200,17 @@ describe("xsd-to-zod v1 pipeline", () => {
         }
         expect(caught).toBeInstanceOf(z.ZodError);
         expect((caught as Error).message).toContain(message);
+      });
+
+      // fractionDigits on decimal is counted on the original lexical (the
+      // coerced double loses digits), so the runtime's lexical-facet check
+      // rejects before schema validation — a plain Error, like the decimal
+      // order facets.
+      it("rejects values violating fractionDigits facet", () => {
+        expect(() => parseXml(facetsSchema, facetXml("price", "19.999"))).toThrow(
+          'Invalid lexical "19.999": too many fraction digits',
+        );
+        expect(() => parseXml(facetsSchema, facetXml("price", "19.990"))).not.toThrow();
       });
     });
   });

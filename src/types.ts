@@ -77,6 +77,9 @@ export type IrField = Cardinality & {
       means the field is exempt from the group checks: it is declared outside
       every such particle, or it was merged with a particle that is. */
   optionalUnits?: string[];
+  /** Raw xs:element block lexical ("#all" or a list of extension/restriction/
+      substitution), with the file's blockDefault already applied. */
+  block?: string;
 };
 
 export type Facet =
@@ -127,6 +130,8 @@ export type ComplexTypeDef = {
       alternatives list means the particle can never occur (minOccurs=0
       maxOccurs=0) and its members must be absent. */
   optionalUnits?: Record<string, { members: QName[]; alternatives: QName[][] }>;
+  /** Raw xs:complexType block lexical, blockDefault already applied. */
+  block?: string;
   fields: IrField[];
   description?: string;
   choiceGroups?: Record<string, Cardinality>;
@@ -165,6 +170,8 @@ export type ElementDef = {
   fixedValue?: string;
   /** Identity constraints declared on this element. */
   identityConstraints?: IdentityConstraint[];
+  /** Raw xs:element block lexical, blockDefault already applied. */
+  block?: string;
 };
 
 export type DiagnosticKind =

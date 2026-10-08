@@ -20,7 +20,7 @@ import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
-import { xsdDecimalCompare } from "./xsdChecks.js";
+import { countLexicalFractionDigits, xsdDecimalCompare } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
   writeXsdDatatype,
@@ -624,6 +624,12 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
       throw new Error(`Invalid lexical ${JSON.stringify(raw)}: not one of the allowed values`);
     }
   }
+  if (
+    facets.fractionDigits !== undefined &&
+    countLexicalFractionDigits(lexical) > facets.fractionDigits
+  ) {
+    throw new Error(`Invalid lexical ${JSON.stringify(raw)}: too many fraction digits`);
+  }
   const orderChecks: [string | undefined, (cmp: number) => boolean][] = [
     [facets.minInclusive, (cmp) => cmp >= 0],
     [facets.maxInclusive, (cmp) => cmp <= 0],
@@ -842,6 +848,80 @@ const storedLexicalFor = (
   }
 };
 
+// Fixed constraints compare in the VALUE space (cvc-elt): the declared fixed
+// lexical is coerced through the same branch-agreed path as the instance
+// lexical, so a union member mismatch ("2" the int vs "false" the boolean)
+// rejects even when naively coerced JS values would coincidentally compare
+// equal. Structured values compare canonical lexicals (item-wise for lists).
+const fixedValueSatisfied = (
+  value: unknown,
+  meta: { fixedLexical?: string; fixedValue?: unknown; datatype?: XsdDatatypeName },
+  itemSchema: AnySchema,
+): boolean => {
+  const lexical =
+    meta.fixedLexical ?? (typeof meta.fixedValue === "string" ? meta.fixedValue : undefined);
+  if (lexical === undefined) {
+    return true;
+  }
+  const datatype = meta.datatype;
+  if (datatype !== undefined) {
+    try {
+      // coerceLexical returns the pre-transform lexical for structured pipes,
+      // so strings go through the normalizing parser first.
+      const canonical = (v: unknown) =>
+        writeXsdDatatype(
+          datatype,
+          typeof v === "string" ? parseXsdDatatype(datatype, v) : (v as XsdStructuredValue),
+        );
+      const fixedItems =
+        lexical.trim() === ""
+          ? []
+          : lexical
+              .trim()
+              .split(/\s+/)
+              .map((token) => writeXsdDatatype(datatype, parseXsdDatatype(datatype, token)));
+      const values = Array.isArray(value) ? value : [value];
+      return (
+        values.length === fixedItems.length &&
+        values.every((item, i) => canonical(item) === fixedItems[i])
+      );
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const whiteSpace = findFacetsMeta(itemSchema)?.whiteSpace;
+    return valuesEqual(
+      coerceLexical(applyWhiteSpace(lexical, whiteSpace), itemSchema, true),
+      value,
+    );
+  } catch {
+    return false;
+  }
+};
+
+// Field-level fixed enforcement for values the schema does not constrain:
+// union-typed fixeds carry no z.literal (the member type accepting the
+// declared lexical decides the value — only the runtime's branch-agreed
+// coercion knows it), so the check rides the meta.
+const coerceFieldLexical = (
+  raw: unknown,
+  field: FieldAnalysis,
+  fieldMeta: XmlFieldMeta,
+): unknown => {
+  const value = coerceLexical(raw, field.itemSchema);
+  if (
+    !field.hasFixed &&
+    (fieldMeta.fixedLexical !== undefined || typeof fieldMeta.fixedValue === "string") &&
+    !fixedValueSatisfied(value, fieldMeta, field.itemSchema)
+  ) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(raw)}: value does not match the fixed value ${JSON.stringify(fieldMeta.fixedLexical ?? fieldMeta.fixedValue)}`,
+    );
+  }
+  return value;
+};
+
 // Serialize a leaf, preferring the lexical retained at parse time.
 const serializeStoredLeaf = (
   fieldMeta: XmlFieldMeta,
@@ -980,6 +1060,52 @@ const readXsiTypeAttr = (
   return namespace === undefined ? undefined : `{${namespace}}${local}`;
 };
 
+// The blocked-derivation check shared by both xsi:type block paths: if any
+// of the type's derivation methods is blocked, the cvc-elt block rule forbids
+// the xsi:type.
+const throwIfBlockedXsiType = (
+  xsiType: QName,
+  methods: string[],
+  blocked: ReadonlySet<string>,
+): void => {
+  const hit = methods.find((method) => blocked.has(method));
+  if (hit !== undefined) {
+    throw new Error(
+      `xsi:type "${xsiType}" derives by ${hit}, blocked by the element or type declaration`,
+    );
+  }
+};
+
+// xsi:type validity on simple-typed read paths (cvc-elt): the xsi:type must
+// be the declared type or validly derived from it, and no derivation step
+// may use a method the element/type declaration blocks. Unknown xsi:types
+// (not known to the module) stay lenient — they may come from schemas the
+// generator never saw.
+const checkXsiTypeValidity = (
+  xsiType: QName,
+  meta: {
+    declaredType?: QName;
+    derivations?: Record<QName, string[]>;
+    ancestors?: QName[];
+    knownTypes?: QName[];
+    block?: string[];
+  },
+): void => {
+  if (meta.declaredType === undefined || xsiType === meta.declaredType) {
+    return;
+  }
+  const methods = meta.derivations?.[xsiType];
+  if (methods !== undefined) {
+    throwIfBlockedXsiType(xsiType, methods, new Set(meta.block ?? []));
+    return;
+  }
+  if (meta.ancestors?.includes(xsiType) === true || meta.knownTypes?.includes(xsiType) === true) {
+    throw new Error(
+      `xsi:type "${xsiType}" is not derived from the declared type "${meta.declaredType}"`,
+    );
+  }
+};
+
 // Read one occurrence of a polymorphic slot: dispatch on xsi:type to the
 // matching variant schema (options[0] is the declared type). An absent or
 // declared-type xsi:type reads as the declared type; the discriminant is
@@ -991,6 +1117,8 @@ const readXsiTypeOccurrence = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
   walk?: WalkCtx,
+  unionSchema?: AnySchema,
+  elementBlock?: string[],
 ): Record<string, unknown> => {
   const options = unionDef.options as readonly AnySchema[];
   const declared = options[0];
@@ -998,6 +1126,22 @@ const readXsiTypeOccurrence = (
     throw new Error("xsi:type union without a declared-type option");
   }
   const xsiType = readXsiTypeAttr(node, namespaceContext);
+  // block enforcement: the element declaration's block plus the declared
+  // type's own block forbid xsi:type derivations by the blocked method.
+  if (xsiType !== undefined && unionSchema !== undefined) {
+    const unionMeta = findMeta(
+      unionSchema,
+      (m) => m.derivations !== undefined || m.block !== undefined,
+    );
+    const methods = unionMeta?.derivations?.[xsiType];
+    if (methods !== undefined) {
+      throwIfBlockedXsiType(
+        xsiType,
+        methods,
+        new Set([...(unionMeta?.block ?? []), ...(elementBlock ?? [])]),
+      );
+    }
+  }
   const derived =
     xsiType === undefined
       ? undefined
@@ -1224,20 +1368,24 @@ const readObject = (
     if (!fieldSchema) {
       continue;
     }
+    const fieldQnames =
+      fieldMeta.kind === "element" ? [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])] : [];
+    // A wildcard whose namespace constraint admits this element can claim the
+    // occurrences the field does not keep: a preceding one takes everything
+    // but the last (from-end), a following one takes everything but the first
+    // (the sweep's seen-count). Overflow is then the wildcard's, not a
+    // duplicate — see sweepWildcards.
+    const admitsField = (w: XmlFieldMeta): boolean =>
+      fieldQnames.some((q) =>
+        wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
+      );
+    const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
+      wildcardClaimsOverflow &&
       anyWildcards.some(
-        (w) =>
-          w.position !== undefined &&
-          w.position <= elementOrdinal &&
-          [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])].some((q) =>
-            wildcardAllows(
-              w.namespaceConstraint ?? "##any",
-              targetNamespace,
-              splitClark(q).namespace,
-            ),
-          ),
+        (w) => w.position !== undefined && w.position <= elementOrdinal && admitsField(w),
       );
     if (fieldMeta.kind === "element") {
       elementOrdinal++;
@@ -1256,6 +1404,7 @@ const readObject = (
         exactElementQNames,
         childWalk(walk, key),
         claimFromEnd,
+        wildcardClaimsOverflow,
       );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
@@ -1493,6 +1642,17 @@ const sweepWildcards = (
   });
 };
 
+// Union(-list)-typed fixed (no z.literal, no fixedValue meta): the value is
+// the branch-agreed coercion of the declared lexical — only the runtime's
+// coercion knows which member type accepts each token.
+const substituteFixedLexical = (
+  field: FieldAnalysis,
+  fixedLexical: string,
+): { value: unknown; lexical: string } => ({
+  value: coerceLexical(fixedLexical, field.itemSchema),
+  lexical: fixedLexical,
+});
+
 const substituteEmpty = (
   field: FieldAnalysis,
   fieldMeta: XmlFieldMeta,
@@ -1522,6 +1682,9 @@ const substituteEmpty = (
   }
   if (fieldMeta.fixedValue !== undefined) {
     return substituted(fieldMeta.fixedValue);
+  }
+  if (fieldMeta.fixedLexical !== undefined) {
+    return { substituted: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
   }
   if (fieldMeta.defaultValue !== undefined) {
     return substituted(fieldMeta.defaultValue);
@@ -1578,7 +1741,22 @@ const readOccurrence = (
     }
     const xsiUnion = xsiTypeUnionDef(field.itemSchema);
     if (xsiUnion !== undefined) {
-      return { value: readXsiTypeOccurrence(xsiUnion, childNode, childContext, walk) };
+      return {
+        value: readXsiTypeOccurrence(
+          xsiUnion,
+          childNode,
+          childContext,
+          walk,
+          field.itemSchema,
+          fieldMeta.block,
+        ),
+      };
+    }
+    if (fieldMeta.declaredType !== undefined) {
+      const xsiType = readXsiTypeAttr(childNode, childContext);
+      if (xsiType !== undefined) {
+        checkXsiTypeValidity(xsiType, fieldMeta);
+      }
     }
     if (fieldMeta.open) {
       // Element default/fixed applies to present-but-empty open fields too.
@@ -1613,7 +1791,7 @@ const readOccurrence = (
       value:
         text === undefined && hasElementChildren(childNode)
           ? undefined
-          : coerceLexical(text ?? "", field.itemSchema),
+          : coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? undefined : String(text),
       qnameNs:
         fieldMeta.qnameValue && text !== undefined && text !== ""
@@ -1657,7 +1835,7 @@ const readOccurrence = (
     };
   }
   return {
-    value: coerceLexical(entry, field.itemSchema),
+    value: coerceFieldLexical(entry, field, fieldMeta),
     lexical: String(entry),
     qnameNs:
       fieldMeta.qnameValue && entry !== ""
@@ -1692,6 +1870,7 @@ const readField = (
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
   claimFromEnd = false,
+  wildcardClaimsOverflow = false,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1707,9 +1886,13 @@ const readField = (
       if (field.hasFixed) {
         return { present: true, value: field.fixedValue, lexical };
       }
-      // Structured date/time fixed (no z.literal — see XmlFieldMeta.fixedValue).
+      // List and structured date/time fixed (no z.literal — the meta carries
+      // the value; see fixedValueMetaParts).
       if (fieldMeta.fixedValue !== undefined) {
         return { present: true, value: fieldMeta.fixedValue, lexical };
+      }
+      if (fieldMeta.fixedLexical !== undefined) {
+        return { present: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
       }
       // Structured date/time attribute default: the meta lexical, which
       // validation transforms (the def default is the transformed object and
@@ -1724,7 +1907,7 @@ const readField = (
     }
     return {
       present: true,
-      value: coerceLexical(raw, field.itemSchema),
+      value: coerceFieldLexical(raw, field, fieldMeta),
       lexical: String(raw),
       qnameNs: fieldMeta.qnameValue ? qnameBindingsOf(String(raw), namespaceContext) : undefined,
     };
@@ -1742,7 +1925,7 @@ const readField = (
     // for string-allowing types, and numeric coercion of '' still rejects.
     return {
       present: true,
-      value: coerceLexical(text ?? "", field.itemSchema),
+      value: coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? "" : String(text),
     };
   }
@@ -1753,6 +1936,39 @@ const readField = (
     namespaceContext,
     fieldMeta.substitutes ?? [],
   ).filter((entry) => entry.qname === fieldMeta.qname || !exactElementQNames?.has(entry.qname));
+  // block enforcement on substitution-group members: the head element's block
+  // rejects member replacements outright ("substitution"), and members whose
+  // type derives from the head's type by a method blocked on the head element
+  // or the head's type (substBlock) are rejected either way.
+  if (fieldMeta.block !== undefined || fieldMeta.substBlock !== undefined) {
+    const elementBlocked = new Set(fieldMeta.block ?? []);
+    const typeBlocked = new Set(fieldMeta.substBlock ?? []);
+    for (const entry of matched) {
+      if (entry.qname === fieldMeta.qname) {
+        continue;
+      }
+      if (elementBlocked.has("substitution")) {
+        throw new Error(
+          `element "${entry.qname}" substitutes for "${fieldMeta.qname}", which its block forbids`,
+        );
+      }
+      const hit = fieldMeta.substMethods?.[entry.qname]?.find((method) => typeBlocked.has(method));
+      if (hit !== undefined) {
+        throw new Error(
+          `element "${entry.qname}" derives by ${hit} from the type of "${fieldMeta.qname}", which its block forbids`,
+        );
+      }
+    }
+  }
+  // A scalar element (maxOccurs=1) occurs at most once. Extra occurrences are
+  // a duplicate error unless a wildcard in the same content model claims them
+  // — a preceding wildcard owns everything but the last, a following one
+  // everything but the first (see readObject / sweepWildcards).
+  if (!field.isArray && matched.length > 1 && !wildcardClaimsOverflow) {
+    throw new Error(
+      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most 1`,
+    );
+  }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
   // claimed the earlier ones); only that occurrence is read — the content of
   // overflow occurrences is not the field's to validate.
@@ -1877,7 +2093,20 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   const typeSchema = peelOnce(schema);
   const xsiUnion = xsiTypeUnionDef(typeSchema);
   if (xsiUnion !== undefined) {
-    return readXsiTypeOccurrence(xsiUnion, rootNode, namespaceContext, walk);
+    return readXsiTypeOccurrence(
+      xsiUnion,
+      rootNode,
+      namespaceContext,
+      walk,
+      typeSchema,
+      meta.block,
+    );
+  }
+  if (meta.declaredType !== undefined) {
+    const xsiType = readXsiTypeAttr(rootNode, namespaceContext);
+    if (xsiType !== undefined) {
+      checkXsiTypeValidity(xsiType, meta);
+    }
   }
   if (hasObjectShape(typeSchema)) {
     return readObject(typeSchema, rootNode, namespaceContext, false, walk);
@@ -1886,6 +2115,15 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   // XSD applies the root element's fixed/default to a present-but-empty root.
   const text = textOf(rootNode);
   if (text === undefined || text === "") {
+    if (meta.fixedLexical !== undefined && meta.fixedValue === undefined) {
+      // Union(-list)-typed fixed: the meta carries no coerced value (a
+      // first-member coercion would be wrong — see fixedValueMetaParts), so
+      // substitute the branch-agreed coercion of the declared lexical, as
+      // the field paths do.
+      const substituted = coerceLexical(meta.fixedLexical, typeSchema);
+      rootLexicals.set(schema, { data: substituted, lexical: meta.fixedLexical });
+      return substituted;
+    }
     const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
@@ -1903,6 +2141,13 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
     text === undefined && hasElementChildren(rootNode)
       ? undefined
       : coerceLexical(text ?? "", typeSchema);
+  // Simple-typed roots carry no z.literal for their fixed constraint, so the
+  // value-space check rides the meta (union member agreement included).
+  if (value !== undefined && !fixedValueSatisfied(value, meta, typeSchema)) {
+    throw new Error(
+      `Invalid lexical ${JSON.stringify(text)}: value does not match the fixed value ${JSON.stringify(meta.fixedLexical ?? meta.fixedValue)}`,
+    );
+  }
   if (text !== undefined) {
     rootLexicals.set(schema, {
       data: value,
