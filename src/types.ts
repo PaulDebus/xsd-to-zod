@@ -72,6 +72,9 @@ export type IrField = Cardinality & {
   description?: string;
   /** Identity constraints declared on this element particle. */
   identityConstraints?: IdentityConstraint[];
+  /** Raw xs:element block lexical ("#all" or a list of extension/restriction/
+      substitution), with the file's blockDefault already applied. */
+  block?: string;
 };
 
 export type Facet =
@@ -114,6 +117,8 @@ export type ComplexTypeDef = {
   restrictionBase?: QName;
   /** xs:complexType abstract="true" — instances must carry xsi:type. */
   abstract?: boolean;
+  /** Raw xs:complexType block lexical, blockDefault already applied. */
+  block?: string;
   fields: IrField[];
   description?: string;
   choiceGroups?: Record<string, Cardinality>;
@@ -152,6 +157,8 @@ export type ElementDef = {
   fixedValue?: string;
   /** Identity constraints declared on this element. */
   identityConstraints?: IdentityConstraint[];
+  /** Raw xs:element block lexical, blockDefault already applied. */
+  block?: string;
 };
 
 export type DiagnosticKind =

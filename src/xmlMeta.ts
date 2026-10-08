@@ -40,6 +40,23 @@ export type XmlFieldMeta = {
   qnameValue?: boolean;
   /** Identity constraints declared on this element particle (scoped per occurrence). */
   identity?: IdentityConstraint[];
+  /** Effective block set of the element declaration (subset of "extension" /
+      "restriction" / "substitution"), blockDefault already applied. */
+  block?: string[];
+  /** Union of the head element's and head type's extension/restriction
+      blocks — the blocked set for substitution-member type derivations. */
+  substBlock?: string[];
+  /** Per substitution-group member qname: the derivation methods of the
+      member's type from the head's type — emitted only when the head blocks
+      extension/restriction, so the runtime can reject blocked members. */
+  substMethods?: Record<QName, string[]>;
+  /** xsi:type validity inputs (emitted when block covers extension/
+      restriction): the element's declared type, its derived types with
+      derivation methods, its ancestors, and the module's known types. */
+  declaredType?: QName;
+  derivations?: Record<QName, string[]>;
+  ancestors?: QName[];
+  knownTypes?: QName[];
 };
 
 /** One branch of an xs:choice: the result keys its fields occupy. */
@@ -87,6 +104,19 @@ export type XmlMeta = {
   /** Set on generated roots when the module declares any identity constraint —
       gates the runtime's post-parse identity pass. */
   hasIdentity?: true;
+  /** Effective block set of an element declaration (roots) or a complexType
+      (xsi:type variant unions: the declared type's own block). */
+  block?: string[];
+  /** xsi:type variant unions: variant type qname → derivation methods along
+      the chain from the declared type (subset of extension/restriction).
+      On simple-typed roots: the declared type's derived types with methods,
+      for the same block check. */
+  derivations?: Record<QName, string[]>;
+  /** Simple-typed roots with a block: declared type, its ancestry, and the
+      module's known types — the xsi:type validity inputs. */
+  declaredType?: QName;
+  ancestors?: QName[];
+  knownTypes?: QName[];
 };
 
 /** Typed registry — globalThis singleton so generated modules and runtime share the instance. */
