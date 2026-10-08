@@ -72,6 +72,11 @@ export type IrField = Cardinality & {
   description?: string;
   /** Identity constraints declared on this element particle. */
   identityConstraints?: IdentityConstraint[];
+  /** Ids of the optional group particles (sequence/all/group-ref with
+      minOccurs=0) this field's element expands from — innermost last. No ids
+      means the field is exempt from the group checks: it is declared outside
+      every such particle, or it was merged with a particle that is. */
+  optionalUnits?: string[];
   /** Raw xs:element block lexical ("#all" or a list of extension/restriction/
       substitution), with the file's blockDefault already applied. */
   block?: string;
@@ -117,6 +122,14 @@ export type ComplexTypeDef = {
   restrictionBase?: QName;
   /** xs:complexType abstract="true" — instances must carry xsi:type. */
   abstract?: boolean;
+  /** Optional group particles expanding into this type, keyed by unit id:
+      the element qnames one occurrence contributes, and the alternatives one
+      occurrence must satisfy — some alternative's qnames must all be
+      present. The group is optional as a unit, not per member: a present
+      member that no satisfiable alternative explains is a failure. An empty
+      alternatives list means the particle can never occur (minOccurs=0
+      maxOccurs=0) and its members must be absent. */
+  optionalUnits?: Record<string, { members: QName[]; alternatives: QName[][] }>;
   /** Raw xs:complexType block lexical, blockDefault already applied. */
   block?: string;
   fields: IrField[];

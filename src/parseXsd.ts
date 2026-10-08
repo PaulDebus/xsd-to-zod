@@ -695,6 +695,20 @@ type GlobalAttributeDecl = {
   description?: string;
 };
 
+// One optional group particle (sequence/all/group-ref with minOccurs=0)
+// being expanded: fields collected while the frame is active belong to the
+// unit; minProduct accumulates the minOccurs factors below the unit's
+// particle (a member is required within one unit occurrence when the product
+// of the factors between unit and member, times the member's own minOccurs,
+// is positive).
+//
+// The requirement itself accumulates in a box shared by reference: nesting
+// spreads frames into new scope objects, but the box travels by reference,
+// so a merge performed deep inside one particle stays visible to the scopes
+// that come after it.
+type RequirementBox = { alts: Set<QName>[] };
+type OptionalUnitFrame = { id: string; minProduct: number; box: RequirementBox };
+
 // Shared state threaded through field collection — one object instead of a
 // dozen positional parameters.
 type FieldCollectionContext = {
@@ -703,6 +717,8 @@ type FieldCollectionContext = {
   elements: Record<string, ElementDef>;
   choiceCounter: { value: number };
   choiceGroupCardinality: Map<string, Cardinality>;
+  optionalUnitCounter: { value: number };
+  optionalUnits: Map<string, { members: Set<QName>; box: RequirementBox }>;
   choiceGroupGuards: Map<string, ChoiceGroupGuard>;
   complexTypes: Record<string, ComplexTypeDef>;
   syntheticTypes: SyntheticTypeContext;
@@ -753,6 +769,7 @@ type CollectFieldsScope = {
   inheritedCardinality: Cardinality;
   choiceBranch?: string;
   parentTypeName?: string;
+  optionalUnits?: OptionalUnitFrame[];
 };
 
 const expandGroupRef = (
@@ -813,7 +830,62 @@ const nestedScope = (
   inheritedCardinality,
   ...optProp("choiceBranch", scope.choiceBranch),
   ...optProp("parentTypeName", scope.parentTypeName),
+  ...optProp("optionalUnits", scope.optionalUnits),
 });
+
+// Scope for descending into a sequence/all compositor or group ref: active
+// optional-unit frames absorb the particle's own minOccurs factor, and an
+// optional particle (minOccurs=0) opens a new unit — its optionality applies
+// to its content as a unit, not per member.
+const optionalUnitScope = (
+  ownCard: Cardinality,
+  card: Cardinality,
+  ctx: FieldCollectionContext,
+  scope: CollectFieldsScope,
+): CollectFieldsScope => {
+  const frames = (scope.optionalUnits ?? []).map((frame) => ({
+    ...frame,
+    minProduct: frame.minProduct * ownCard.minOccurs,
+  }));
+  if (ownCard.minOccurs > 0) {
+    return { ...nestedScope(scope, card), optionalUnits: frames };
+  }
+  const id = `u${ctx.optionalUnitCounter.value++}`;
+  // maxOccurs=0: the particle can never occur, so no alternative is
+  // satisfiable and every member must stay absent.
+  const box: RequirementBox = { alts: ownCard.maxOccurs === 0 ? [] : [new Set()] };
+  ctx.optionalUnits.set(id, { members: new Set(), box });
+  return { ...nestedScope(scope, card), optionalUnits: [...frames, { id, minProduct: 1, box }] };
+};
+
+// Tag a collected element field with the active optional units: the field
+// joins each unit's member set, and — where the minOccurs product below the
+// unit makes it mandatory within one unit occurrence — every alternative of
+// the unit's current requirement (choices collect into branch-local copies
+// of the box, merged back when the choice closes).
+const tagOptionalUnits = (
+  field: IrField,
+  ownMinOccurs: number,
+  ctx: FieldCollectionContext,
+  scope: CollectFieldsScope,
+): void => {
+  if (scope.optionalUnits === undefined || scope.optionalUnits.length === 0) {
+    return;
+  }
+  for (const frame of scope.optionalUnits) {
+    const entry = ctx.optionalUnits.get(frame.id);
+    if (entry === undefined) {
+      continue;
+    }
+    entry.members.add(field.qname);
+    if (frame.minProduct * ownMinOccurs > 0) {
+      for (const alt of frame.box.alts) {
+        alt.add(field.qname);
+      }
+    }
+    field.optionalUnits = [...(field.optionalUnits ?? []), frame.id];
+  }
+};
 
 const findDerivation = (node: AnyNode): AnyNode | undefined =>
   nodeChildren(node).find(([key]) => {
@@ -957,12 +1029,10 @@ const collectElementRef = (
     }
     return;
   }
-  const effectiveCardinality = combineCardinality(
-    scope.inheritedCardinality,
-    parseCardinality(child),
-  );
+  const ownCard = parseCardinality(child);
+  const effectiveCardinality = combineCardinality(scope.inheritedCardinality, ownCard);
   const description = extractDocumentation(child) ?? referenced.description;
-  scope.fields.push({
+  const field: IrField = {
     ...buildRefField(
       effectiveCardinality,
       resolvedQName,
@@ -984,7 +1054,9 @@ const collectElementRef = (
     ...optProp("identityConstraints", referenced.identityConstraints),
     ...valueConstraints(child),
     ...optProp("description", description),
-  });
+  };
+  tagOptionalUnits(field, ownCard.minOccurs, ctx, scope);
+  scope.fields.push(field);
 };
 
 type FieldHandler = (
@@ -1005,11 +1077,9 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
     return;
   }
   const typeName = resolveElementTypeName(child, name, localCtx, scope);
-  const effectiveCardinality = combineCardinality(
-    scope.inheritedCardinality,
-    parseCardinality(child),
-  );
-  scope.fields.push({
+  const ownCard = parseCardinality(child);
+  const effectiveCardinality = combineCardinality(scope.inheritedCardinality, ownCard);
+  const field: IrField = {
     ...effectiveCardinality,
     kind: "element",
     qname: toClark(
@@ -1033,7 +1103,9 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
       ),
     ),
     ...optProp("description", extractDocumentation(child)),
-  });
+  };
+  tagOptionalUnits(field, ownCard.minOccurs, ctx, scope);
+  scope.fields.push(field);
 };
 
 const collectAttribute: FieldHandler = (child, ctx, scope) => {
@@ -1103,10 +1175,11 @@ const collectWildcard =
   };
 
 const collectCompositor: FieldHandler = (child, ctx, scope) => {
+  const ownCard = parseCardinality(child);
   collectFields(
     child,
     ctx,
-    nestedScope(scope, combineCardinality(scope.inheritedCardinality, parseCardinality(child))),
+    optionalUnitScope(ownCard, combineCardinality(scope.inheritedCardinality, ownCard), ctx, scope),
   );
 };
 
@@ -1114,13 +1187,21 @@ const CHOICE_BRANCH_TAGS = new Set(["element", "group", "sequence", "choice", "a
 
 const collectChoice: FieldHandler = (child, ctx, scope) => {
   const groupId = `${ctx.choiceCounter.value++}`;
-  const choiceCard = combineCardinality(scope.inheritedCardinality, parseCardinality(child));
+  const ownCard = parseCardinality(child);
+  const choiceCard = combineCardinality(scope.inheritedCardinality, ownCard);
   ctx.choiceGroupCardinality.set(groupId, choiceCard);
   // A choice nested inside a branch of an outer choice is only reachable when
   // that branch is selected — the codegen gates its check on the branch.
   if (scope.choiceGroup !== undefined && scope.choiceBranch !== undefined) {
     ctx.choiceGroupGuards.set(groupId, { group: scope.choiceGroup, branch: scope.choiceBranch });
   }
+  const parentFrames = scope.optionalUnits ?? [];
+  // A required choice contributes to the requirement of every unit whose
+  // content is still mandatory this deep (one alternative per branch).
+  // Frames already frozen by an optional particle above, and an optional
+  // choice itself, contribute nothing: their branch content is optional too.
+  const contributing = parentFrames.filter((frame) => frame.minProduct * ownCard.minOccurs > 0);
+  const branchBoxes: Map<string, RequirementBox>[] = [];
   // Each direct child of the xs:choice is one branch. Branch identity is
   // threaded through as choiceBranch so fields inlined from a group ref or
   // nested compositor stay together as a single branch (ipo-style
@@ -1131,6 +1212,12 @@ const collectChoice: FieldHandler = (child, ctx, scope) => {
       continue;
     }
     const branchId = `${groupId}.${branchIndex++}`;
+    // The branch collects into copies of the unit's requirement so far; the
+    // copies concatenate when the choice closes — one alternative set per
+    // branch path (disjunctive).
+    const boxes = new Map(
+      contributing.map((frame) => [frame.id, { alts: frame.box.alts.map((alt) => new Set(alt)) }]),
+    );
     collectFields({ [branchTag]: branchChild }, ctx, {
       ownerNs: scope.ownerNs,
       fields: scope.fields,
@@ -1139,7 +1226,22 @@ const collectChoice: FieldHandler = (child, ctx, scope) => {
       inheritedCardinality: choiceCard,
       choiceBranch: branchId,
       ...optProp("parentTypeName", scope.parentTypeName),
+      optionalUnits: parentFrames.map((frame) => {
+        const box = boxes.get(frame.id);
+        return box === undefined
+          ? { ...frame, minProduct: frame.minProduct * ownCard.minOccurs }
+          : { ...frame, minProduct: frame.minProduct * ownCard.minOccurs, box };
+      }),
     });
+    branchBoxes.push(boxes);
+  }
+  if (branchBoxes.length > 0) {
+    for (const frame of contributing) {
+      const boxes = branchBoxes
+        .map((branch) => branch.get(frame.id))
+        .filter((box): box is RequirementBox => box !== undefined);
+      frame.box.alts = boxes.flatMap((box) => box.alts);
+    }
   }
 };
 
@@ -1149,11 +1251,12 @@ const collectGroupRef: FieldHandler = (child, ctx, scope) => {
     return;
   }
   const refQName = resolveTypeQName(ref, ctx.nsMap, ctx.diagnostics);
+  const ownCard = parseCardinality(child);
   expandGroupRef(
     refQName,
     ctx.groups[refQName],
     ctx,
-    nestedScope(scope, combineCardinality(scope.inheritedCardinality, parseCardinality(child))),
+    optionalUnitScope(ownCard, combineCardinality(scope.inheritedCardinality, ownCard), ctx, scope),
     "group",
     "unresolved-group-ref",
     "unresolved group ref",
@@ -1504,6 +1607,20 @@ const dedupeTextFields = (fields: IrField[]): IrField[] => {
 };
 
 // Collapse adjacent same-name element particles into one repeated field.
+
+// The merged field keeps both particles' optional-unit tags — but only when
+// both sides carry them. A particle outside every optional unit may be the
+// one the instance's occurrence belongs to, and the two cannot be told apart
+// after the merge, so the merged field is exempted (no tags) rather than
+// pinned to the unit.
+const mergeOptionalUnitTags = (prev: IrField, field: IrField): void => {
+  if (prev.optionalUnits === undefined || field.optionalUnits === undefined) {
+    delete prev.optionalUnits;
+    return;
+  }
+  prev.optionalUnits = [...new Set([...prev.optionalUnits, ...field.optionalUnits])];
+};
+
 const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[]): IrField[] => {
   const wildcardPositions = new Set(
     wildcards.flatMap((w) => (w.position === undefined ? [] : [w.position])),
@@ -1559,6 +1676,7 @@ const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[])
             prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
               ? "unbounded"
               : prev.maxOccurs + field.maxOccurs;
+          mergeOptionalUnitTags(prev, field);
           continue;
         }
       } else {
@@ -1567,6 +1685,7 @@ const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[])
           prev.maxOccurs === "unbounded" || field.maxOccurs === "unbounded"
             ? "unbounded"
             : prev.maxOccurs + field.maxOccurs;
+        mergeOptionalUnitTags(prev, field);
         continue;
       }
     }
@@ -1749,6 +1868,7 @@ type ParseState = {
   deferredSyntheticTypes: DeferredInlineType[];
   syntheticTypeCounter: { value: number };
   choiceCounter: { value: number };
+  optionalUnitCounter: { value: number };
   groups: Record<string, GroupEntry>;
   attributeGroups: Record<string, GroupEntry>;
   attributes: Record<string, GlobalAttributeDecl>;
@@ -1773,6 +1893,55 @@ const choiceGuardsMeta = (
 ): Pick<ComplexTypeDef, "choiceGroupGuards"> => {
   const record = toRecord(entries);
   return Object.keys(record).length > 0 ? { choiceGroupGuards: record } : {};
+};
+
+// A long run of required choices inside one optional group multiplies its
+// alternatives combinatorially; past this point the check collapses to "no
+// constraint" instead of emitting a huge — or truncated, hence wrong — test.
+const MAX_OPTIONAL_UNIT_ALTERNATIVES = 64;
+
+type OptionalUnitSets = { members: Set<QName>; box: RequirementBox };
+
+const optionalUnitsMeta = (
+  entries: Map<string, OptionalUnitSets>,
+): Pick<ComplexTypeDef, "optionalUnits"> => {
+  if (entries.size === 0) {
+    return {};
+  }
+  return {
+    optionalUnits: Object.fromEntries(
+      [...entries].map(([id, unit]) => [
+        id,
+        {
+          members: [...unit.members],
+          alternatives:
+            unit.box.alts.length > MAX_OPTIONAL_UNIT_ALTERNATIVES
+              ? [[]]
+              : unit.box.alts.map((alt) => [...alt]),
+        },
+      ]),
+    ),
+  };
+};
+
+// Base record + freshly collected sets (redefine/extension merging).
+const mergedOptionalUnitsMeta = (
+  base: ComplexTypeDef["optionalUnits"],
+  own: Map<string, OptionalUnitSets>,
+): Pick<ComplexTypeDef, "optionalUnits"> => {
+  const merged = new Map<string, OptionalUnitSets>(
+    Object.entries(base ?? {}).map(([id, unit]) => [
+      id,
+      {
+        members: new Set(unit.members),
+        box: { alts: unit.alternatives.map((alt) => new Set(alt)) },
+      },
+    ]),
+  );
+  for (const [id, unit] of own) {
+    merged.set(id, unit);
+  }
+  return optionalUnitsMeta(merged);
 };
 
 const createFieldContext = (
@@ -1803,6 +1972,8 @@ const createFieldContext = (
   unenforcedConstructs: state.unenforcedConstructs,
   expansionStack: { groups: new Set(), attributeGroups: new Set() },
   inlineComplexTypes: state.inlineComplexTypes,
+  optionalUnitCounter: state.optionalUnitCounter,
+  optionalUnits: new Map(),
 });
 
 type ScannedFile = {
@@ -2334,6 +2505,7 @@ const collectComplexTypes = (state: ParseState, pendingFiles: PendingFile[]): vo
         ...optProp("description", description),
         ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
         ...choiceGuardsMeta(fCtx.choiceGroupGuards),
+        ...optionalUnitsMeta(fCtx.optionalUnits),
         ...(wildcards.length > 0 ? { wildcards } : {}),
       };
     }
@@ -2409,6 +2581,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("description", description ?? original.description),
             ...choiceGroupsMeta(mergedChoiceGroups),
             ...choiceGuardsMeta(mergedChoiceGuards),
+            ...mergedOptionalUnitsMeta(original.optionalUnits, fCtx.optionalUnits),
             ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
           };
         } else {
@@ -2421,6 +2594,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
             ...optProp("description", description),
             ...choiceGroupMeta,
             ...choiceGuardMeta,
+            ...optionalUnitsMeta(fCtx.optionalUnits),
             ...(wildcards.length > 0 ? { wildcards } : {}),
           };
         }
@@ -2434,6 +2608,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
           ...optProp("description", description),
           ...choiceGroupMeta,
           ...choiceGuardMeta,
+          ...optionalUnitsMeta(fCtx.optionalUnits),
           ...(wildcards.length > 0 ? { wildcards } : {}),
         };
       }
@@ -2515,6 +2690,7 @@ const processDeferredType = (
     ...optProp("block", container["@_block"] ? String(container["@_block"]) : undefined),
     ...choiceGroupsMeta(fCtx.choiceGroupCardinality),
     ...choiceGuardsMeta(fCtx.choiceGroupGuards),
+    ...optionalUnitsMeta(fCtx.optionalUnits),
     ...(wildcards.length > 0 ? { wildcards } : {}),
   };
 };
@@ -2598,6 +2774,26 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     }
     return type.choiceGroups ?? baseGroups;
   };
+  // Optional-unit tables inherit down the extension chain, like fields.
+  const resolveMergedOptionalUnits = (
+    typeName: string,
+    stack: Set<string>,
+  ): ComplexTypeDef["optionalUnits"] => {
+    const type = state.complexTypes[typeName];
+    if (!type) {
+      return undefined;
+    }
+    if (!type.baseType || stack.has(typeName)) {
+      return type.optionalUnits;
+    }
+    const nextStack = new Set(stack);
+    nextStack.add(typeName);
+    const baseUnits = resolveMergedOptionalUnits(type.baseType, nextStack);
+    if (baseUnits && type.optionalUnits) {
+      return { ...baseUnits, ...type.optionalUnits };
+    }
+    return type.optionalUnits ?? baseUnits;
+  };
   // Guards for nested choice groups inherit the same way.
   const resolveMergedChoiceGuards = (
     typeName: string,
@@ -2624,6 +2820,7 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     const mergedWildcards = resolveMergedWildcards(name, new Set());
     const mergedChoiceGroups = resolveMergedChoiceGroups(name, new Set());
     const mergedChoiceGuards = resolveMergedChoiceGuards(name, new Set());
+    const mergedOptionalUnits = resolveMergedOptionalUnits(name, new Set());
     mergedComplexTypes[name] = {
       ...type,
       fields: disambiguateFieldKeys(
@@ -2634,6 +2831,7 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
       ),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedChoiceGuards ? { choiceGroupGuards: mergedChoiceGuards } : {}),
+      ...(mergedOptionalUnits ? { optionalUnits: mergedOptionalUnits } : {}),
       ...(mergedWildcards.length > 0 ? { wildcards: mergedWildcards } : {}),
     };
   }
@@ -2760,6 +2958,7 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
     // xs:choice is a separate group appended after the base content. A shared
     // counter keeps every group's id unique across the parse.
     choiceCounter: { value: 0 },
+    optionalUnitCounter: { value: 0 },
     groups: {},
     attributeGroups: {},
     attributes: {},
