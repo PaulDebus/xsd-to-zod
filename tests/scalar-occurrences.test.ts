@@ -73,6 +73,20 @@ const OTHER_NAMESPACE_WILDCARDS = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
+// A single constrained wildcard must gate the duplicate exemption just like
+// several do: it cannot claim an occurrence of a no-namespace element.
+const SINGLE_OTHER_NAMESPACE_WILDCARD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="urn:a"/>
+        <xs:element name="e" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
 const UNBOUNDED = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
@@ -152,6 +166,12 @@ describe("scalar element occurrences", () => {
   it("rejects duplicates no wildcard's namespace constraint admits", async () => {
     const xml = "<root><e>a</e><e>b</e></root>";
     const mod = await schemasFor(OTHER_NAMESPACE_WILDCARDS);
+    expect(safeParseXml(rootFor(mod, xml), xml).success).toBe(false);
+  });
+
+  it("rejects duplicates a single constrained wildcard cannot admit", async () => {
+    const xml = "<root><e>a</e><e>b</e></root>";
+    const mod = await schemasFor(SINGLE_OTHER_NAMESPACE_WILDCARD);
     expect(safeParseXml(rootFor(mod, xml), xml).success).toBe(false);
   });
 
