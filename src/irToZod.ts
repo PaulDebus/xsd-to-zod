@@ -1073,9 +1073,7 @@ const withCardinality = (
         // Structured date/time fixed: z.literal compares objects by reference, so
         // constrain by canonical lexical equality instead. The value itself is in
         // the field meta (the runtime substitutes present-but-empty content).
-        const st = structured
-          ? structuredType(resolveBuiltinLocal(field.typeName, ir))
-          : undefined;
+        const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
         if (st) {
           usedHelpers.add(st.writeFn);
           const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
@@ -2000,7 +1998,8 @@ const derivationStep = (
   }
   const parts = trySplitClark(typeName);
   if (parts?.ns === XSD_NS) {
-    const isList = parts.local === "NMTOKENS" || parts.local === "IDREFS" || parts.local === "ENTITIES";
+    const isList =
+      parts.local === "NMTOKENS" || parts.local === "IDREFS" || parts.local === "ENTITIES";
     return { method: isList ? "list" : "restriction", next: builtinDerivationParent(parts.local) };
   }
   return undefined;

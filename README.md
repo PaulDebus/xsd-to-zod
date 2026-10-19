@@ -278,6 +278,8 @@ const xml = serializeXml(orderSchema, order);
 
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
+Lexical retention is **opt-in**. By default `serializeXml` derives each lexical from the parsed value in its shortest round-trip form, so `1.0` serializes as `1` and `001` as `1` (and numeric values never use exponent notation, which `xs:decimal` forbids). Fields whose type carries lexical-space facets (`pattern`, `enumeration`, `whiteSpace`, order/fraction digits) keep their parse-time lexical regardless, so serialized output still satisfies the schema. Pass `{ retainLexicals: true }` to `parseXml`/`safeParseXml` to keep every value's original XML lexical and re-emit it verbatim for unchanged values — byte-fidelity for diffs, hashes, and XML content signatures. Retention never changes the parsed data (it only feeds serialization), and QName-valued content is unaffected either way: its prefix bindings are tracked and re-declared independently.
+
 Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced by default: violations fail parsing with a `ZodError` naming the constraint, value, and data path. To parse documents whose referential integrity is knowingly broken (partial exports, data being repaired) while keeping all other validation, use `parseXml(schema, xml, { identityConstraints: false })`.
 
 ### Conformance tier (`xsd-to-zod/validate`)

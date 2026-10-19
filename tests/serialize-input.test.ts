@@ -73,12 +73,24 @@ describe("serializeXml validates its input", () => {
     expect(() => serializeXml(orderSchema, { item: "x" })).toThrow(z.ZodError);
   });
 
+  it("canonicalizes lexicals by default", async () => {
+    const mod = await generate(DEFAULTS_XSD);
+    const orderSchema = mod["orderSchema"] as z.ZodType;
+    const parsed = parseXml(
+      orderSchema,
+      '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+    );
+    // Retention is opt-in: serialize derives the lexical from the value.
+    expect(serializeXml(orderSchema, parsed)).toContain(">3</ns0:quantity>");
+  });
+
   it("does not consume the caller's parse-time recordings", async () => {
     const mod = await generate(DEFAULTS_XSD);
     const orderSchema = mod["orderSchema"] as z.ZodType;
     const parsed = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     // The retained lexical "03" is re-emitted on every serialize of the same
     // tree, not just the first.
@@ -95,10 +107,12 @@ describe("serializeXml validates its input", () => {
     const first = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     const second = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults"><ns0:item>y</ns0:item><ns0:quantity>7</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
     expect(serializeXml(orderSchema, second)).toContain(">7</ns0:quantity>");
