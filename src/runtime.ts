@@ -2414,10 +2414,11 @@ const pushOpenChildren = (
   return usesXsi;
 };
 
-// XSD numeric lexicals have no exponent notation, but JS String() switches to
-// exponential form for very large/small magnitudes (xs:decimal rejects
-// "9.8e+27"). Expand it to plain positional notation — same double value,
-// valid for every numeric datatype.
+// JS String() switches to exponential form for very large/small magnitudes,
+// and xs:decimal rejects "9.8e+27". Expand such a numeric value's lexical to
+// plain positional notation — same double value, valid for every numeric
+// datatype. Only numeric values are passed here (see serializePrimitive):
+// a string leaf must be re-emitted verbatim, never rewritten by value shape.
 const expandExponent = (lexical: string): string => {
   const match = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(lexical);
   if (match === null) {
@@ -2459,8 +2460,12 @@ const serializePrimitive = (value: unknown): string => {
     if (Object.is(value, -0)) {
       return "-0";
     }
+    // Only a numeric value can stringify to exponent form, so the expansion
+    // is gated here rather than on the lexical's shape: a string leaf (an
+    // xs:string whose content reads "2e3", a retained lexical) stays verbatim.
+    return escapeXml(expandExponent(String(value)));
   }
-  return escapeXml(expandExponent(String(value)));
+  return escapeXml(String(value));
 };
 
 const serializeListValue = (value: unknown): string => {

@@ -22,6 +22,15 @@ const DEFAULTS_XSD = `<?xml version="1.0"?>
   <xs:element name="order" type="t:OrderType"/>
 </xs:schema>`;
 
+const STRINGS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="Codes">
+    <xs:list itemType="xs:string"/>
+  </xs:simpleType>
+  <xs:element name="note" type="xs:string"/>
+  <xs:element name="codes" type="Codes"/>
+</xs:schema>`;
+
 const generate = async (xsd: string): Promise<Record<string, unknown>> => {
   let mod: Record<string, unknown> = {};
   await withTempDirAsync(async (dir) => {
@@ -118,6 +127,17 @@ describe("serializeXml validates its input", () => {
     expect(serializeXml(orderSchema, second)).toContain(">7</ns0:quantity>");
     expect(serializeXml(orderSchema, second)).not.toContain(">03</ns0:quantity>");
     expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
+  });
+
+  it("leaves string content that looks like exponent notation verbatim", async () => {
+    // expandExponent is numeric-only: an xs:string lexical ("2e3") or a
+    // string-list item must never be rewritten by its shape.
+    const mod = await generate(STRINGS_XSD);
+    const noteSchema = mod["noteSchema"] as z.ZodType;
+    expect(serializeXml(noteSchema, "2e3")).toBe("<note>2e3</note>");
+    expect(serializeXml(noteSchema, "1e-7")).toBe("<note>1e-7</note>");
+    const codesSchema = mod["codesSchema"] as z.ZodType;
+    expect(serializeXml(codesSchema, ["1e-7", "2E3"])).toBe("<codes>1e-7 2E3</codes>");
   });
 
   it("generated modules export input types that admit partial construction", async () => {
