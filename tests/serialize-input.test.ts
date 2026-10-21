@@ -22,6 +22,15 @@ const DEFAULTS_XSD = `<?xml version="1.0"?>
   <xs:element name="order" type="t:OrderType"/>
 </xs:schema>`;
 
+const STRINGS_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="Codes">
+    <xs:list itemType="xs:string"/>
+  </xs:simpleType>
+  <xs:element name="note" type="xs:string"/>
+  <xs:element name="codes" type="Codes"/>
+</xs:schema>`;
+
 const generate = async (xsd: string): Promise<Record<string, unknown>> => {
   let mod: Record<string, unknown> = {};
   await withTempDirAsync(async (dir) => {
@@ -73,12 +82,24 @@ describe("serializeXml validates its input", () => {
     expect(() => serializeXml(orderSchema, { item: "x" })).toThrow(z.ZodError);
   });
 
+  it("canonicalizes lexicals by default", async () => {
+    const mod = await generate(DEFAULTS_XSD);
+    const orderSchema = mod["orderSchema"] as z.ZodType;
+    const parsed = parseXml(
+      orderSchema,
+      '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+    );
+    // Retention is opt-in: serialize derives the lexical from the value.
+    expect(serializeXml(orderSchema, parsed)).toContain(">3</ns0:quantity>");
+  });
+
   it("does not consume the caller's parse-time recordings", async () => {
     const mod = await generate(DEFAULTS_XSD);
     const orderSchema = mod["orderSchema"] as z.ZodType;
     const parsed = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     // The retained lexical "03" is re-emitted on every serialize of the same
     // tree, not just the first.
@@ -95,15 +116,28 @@ describe("serializeXml validates its input", () => {
     const first = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     const second = parseXml(
       orderSchema,
       '<ns0:order xmlns:ns0="urn:defaults"><ns0:item>y</ns0:item><ns0:quantity>7</ns0:quantity></ns0:order>',
+      { retainLexicals: true },
     );
     expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
     expect(serializeXml(orderSchema, second)).toContain(">7</ns0:quantity>");
     expect(serializeXml(orderSchema, second)).not.toContain(">03</ns0:quantity>");
     expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
+  });
+
+  it("leaves string content that looks like exponent notation verbatim", async () => {
+    // expandExponent is numeric-only: an xs:string lexical ("2e3") or a
+    // string-list item must never be rewritten by its shape.
+    const mod = await generate(STRINGS_XSD);
+    const noteSchema = mod["noteSchema"] as z.ZodType;
+    expect(serializeXml(noteSchema, "2e3")).toBe("<note>2e3</note>");
+    expect(serializeXml(noteSchema, "1e-7")).toBe("<note>1e-7</note>");
+    const codesSchema = mod["codesSchema"] as z.ZodType;
+    expect(serializeXml(codesSchema, ["1e-7", "2E3"])).toBe("<codes>1e-7 2E3</codes>");
   });
 
   it("generated modules export input types that admit partial construction", async () => {

@@ -2557,9 +2557,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
       // original type's block on every branch (xs:redefine amends the
       // original declaration rather than replacing it wholesale).
       const effectiveBlock =
-        override.node["@_block"] === undefined
-          ? original?.block
-          : String(override.node["@_block"]);
+        override.node["@_block"] === undefined ? original?.block : String(override.node["@_block"]);
       if (baseType === override.qname && derivationKind === "extension") {
         if (original) {
           const mergedChoiceGroups = {

@@ -1076,9 +1076,10 @@ describe("xsd-to-zod v1 pipeline", () => {
         });
 
         // The serializer always writes elements — even equal to default/fixed.
-        // Substituted defaults re-emit the declared default lexical.
+        // Lexical retention is opt-in, so substituted defaults serialize
+        // canonically ("1.50" → 1.5).
         const serialized = serializeXml(cfgSchema, parsed);
-        expect(serialized).toContain("<ns0:ratio>1.50</ns0:ratio>");
+        expect(serialized).toContain("<ns0:ratio>1.5</ns0:ratio>");
         expect(serialized).toContain("<ns0:level>3</ns0:level>");
       });
     });

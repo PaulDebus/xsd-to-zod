@@ -278,6 +278,15 @@ type WalkCtx = {
 const childWalk = (walk: WalkCtx | undefined, segment: string | number): WalkCtx | undefined =>
   walk === undefined ? undefined : { issues: walk.issues, path: [...walk.path, segment] };
 
+// Lexical recording is opt-in (parse-time only; the stores are a serializer
+// side channel). Semantic side channels — QName bindings, substitution
+// members, xsi:type captures, document order — are recorded regardless.
+type ReadCtx = {
+  retainLexicals: boolean;
+};
+
+const NO_LEXICAL_RETENTION: ReadCtx = { retainLexicals: false };
+
 type FieldAnalysis = {
   // Schema for one occurrence / the leaf. Lazy type schemas are kept intact:
   // their registry meta (the fields map) is keyed on the lazy object.
@@ -742,7 +751,7 @@ const recordQNameNs = (
 // different document.
 const rootLexicals = new Map<
   AnySchema,
-  { data: unknown; lexical: string; qnameNs?: Record<string, string> | undefined }
+  { data: unknown; lexical?: string; qnameNs?: Record<string, string> | undefined }
 >();
 
 const recordInto = <V>(
@@ -1119,6 +1128,7 @@ const readXsiTypeOccurrence = (
   walk?: WalkCtx,
   unionSchema?: AnySchema,
   elementBlock?: string[],
+  read: ReadCtx = NO_LEXICAL_RETENTION,
 ): Record<string, unknown> => {
   const options = unionDef.options as readonly AnySchema[];
   const declared = options[0];
@@ -1151,7 +1161,7 @@ const readXsiTypeOccurrence = (
   // the gate would otherwise skip (single-field declared types).
   const mayCapture =
     derived === undefined && xsiType !== undefined && xsiType !== xsiTypeOptionQName(declared);
-  const value = readObject(derived ?? declared, node, namespaceContext, mayCapture, walk);
+  const value = readObject(derived ?? declared, node, namespaceContext, mayCapture, walk, read);
   if (derived !== undefined && xsiType !== undefined) {
     value[XSI_TYPE_FIELD] = xsiType;
     return value;
@@ -1316,12 +1326,22 @@ const extractRoot = (
 // Reading: XML nodes → data, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
+// Canonical re-serialization is only unsafe where the lexical carries meaning
+// the value cannot reconstruct: lexical-space facets (pattern, enumeration,
+// whiteSpace) and exact order/fraction digits. Those fields keep their
+// parse-time lexical even by default, so serialized output still satisfies the
+// schema; every other leaf serializes canonically unless the caller opts into
+// full retention. A declared fixed/default lexical needs no such guard — the
+// constraint is value-space, so the canonical form is valid.
+const lexicalRequired = (schema: AnySchema): boolean => findFacetsMeta(schema) !== undefined;
+
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
   forceOrderRecording = false,
   walk?: WalkCtx,
+  read: ReadCtx = NO_LEXICAL_RETENTION,
 ): Record<string, unknown> => {
   const fields = findFieldsMeta(schema) ?? {};
   const shape = objectDefOf(schema)?.shape ?? {};
@@ -1405,13 +1425,14 @@ const readObject = (
         childWalk(walk, key),
         claimFromEnd,
         wildcardClaimsOverflow,
+        read,
       );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
     }
     if (present) {
       result[key] = value;
-      if (lexical !== undefined) {
+      if (lexical !== undefined && (read.retainLexicals || lexicalRequired(fieldSchema))) {
         recordLexical(result, key, lexical);
       }
       if (substQNames !== undefined) {
@@ -1723,6 +1744,7 @@ const readOccurrence = (
   namespaceContext: Record<string, string>,
   walk?: WalkCtx,
   position?: number,
+  read: ReadCtx = NO_LEXICAL_RETENTION,
 ): {
   value: unknown;
   lexical?: string | undefined;
@@ -1749,6 +1771,7 @@ const readOccurrence = (
           walk,
           field.itemSchema,
           fieldMeta.block,
+          read,
         ),
       };
     }
@@ -1774,7 +1797,7 @@ const readOccurrence = (
       };
     }
     if (hasObjectShape(field.itemSchema)) {
-      return { value: readObject(field.itemSchema, childNode, childContext, false, walk) };
+      return { value: readObject(field.itemSchema, childNode, childContext, false, walk, read) };
     }
     const text = textOf(childNode);
     if (text === undefined || text === "") {
@@ -1826,12 +1849,13 @@ const readOccurrence = (
         namespaceContext,
         false,
         walk,
+        read,
       ),
     };
   }
   if (hasObjectShape(field.itemSchema)) {
     return {
-      value: readObject(field.itemSchema, { "#text": entry }, namespaceContext, false, walk),
+      value: readObject(field.itemSchema, { "#text": entry }, namespaceContext, false, walk, read),
     };
   }
   return {
@@ -1871,6 +1895,7 @@ const readField = (
   walk?: WalkCtx,
   claimFromEnd = false,
   wildcardClaimsOverflow = false,
+  read: ReadCtx = NO_LEXICAL_RETENTION,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
 
@@ -1990,7 +2015,7 @@ const readField = (
     const occField = itemSchema === field.itemSchema ? field : { ...field, itemSchema };
     const occWalk = field.isArray ? childWalk(walk, index) : walk;
     return {
-      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk, index),
+      ...readOccurrence(occField, fieldMeta, entry.value, namespaceContext, occWalk, index, read),
       qname: entry.qname,
     };
   });
@@ -2069,7 +2094,12 @@ const warnOnGeneratorMismatch = (meta: XmlMeta): void => {
   );
 };
 
-const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
+const walkRoot = (
+  schema: AnySchema,
+  xml: string,
+  walk?: WalkCtx,
+  read: ReadCtx = NO_LEXICAL_RETENTION,
+): unknown => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
@@ -2100,6 +2130,7 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
       walk,
       typeSchema,
       meta.block,
+      read,
     );
   }
   if (meta.declaredType !== undefined) {
@@ -2109,7 +2140,7 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
     }
   }
   if (hasObjectShape(typeSchema)) {
-    return readObject(typeSchema, rootNode, namespaceContext, false, walk);
+    return readObject(typeSchema, rootNode, namespaceContext, false, walk, read);
   }
   // Simple-typed root element: the document value is the root's text content.
   // XSD applies the root element's fixed/default to a present-but-empty root.
@@ -2121,14 +2152,28 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
       // substitute the branch-agreed coercion of the declared lexical, as
       // the field paths do.
       const substituted = coerceLexical(meta.fixedLexical, typeSchema);
-      rootLexicals.set(schema, { data: substituted, lexical: meta.fixedLexical });
+      rootLexicals.set(schema, {
+        data: substituted,
+        ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
+          ? { lexical: meta.fixedLexical }
+          : {}),
+        ...(meta.qnameValue
+          ? { qnameNs: qnameBindingsOf(meta.fixedLexical, namespaceContext) }
+          : {}),
+      });
       return substituted;
     }
     const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
       if (declared !== undefined) {
-        rootLexicals.set(schema, { data: substituted, lexical: declared });
+        rootLexicals.set(schema, {
+          data: substituted,
+          ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
+            ? { lexical: declared }
+            : {}),
+          ...(meta.qnameValue ? { qnameNs: qnameBindingsOf(declared, namespaceContext) } : {}),
+        });
       }
       return substituted;
     }
@@ -2151,8 +2196,10 @@ const walkRoot = (schema: AnySchema, xml: string, walk?: WalkCtx): unknown => {
   if (text !== undefined) {
     rootLexicals.set(schema, {
       data: value,
-      lexical: String(text),
-      qnameNs: meta.qnameValue ? qnameBindingsOf(String(text), namespaceContext) : undefined,
+      ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
+        ? { lexical: String(text) }
+        : {}),
+      ...(meta.qnameValue ? { qnameNs: qnameBindingsOf(String(text), namespaceContext) } : {}),
     });
   }
   return value;
@@ -2367,6 +2414,30 @@ const pushOpenChildren = (
   return usesXsi;
 };
 
+// JS String() switches to exponential form for very large/small magnitudes,
+// and xs:decimal rejects "9.8e+27". Expand such a numeric value's lexical to
+// plain positional notation — same double value, valid for every numeric
+// datatype. Only numeric values are passed here (see serializePrimitive):
+// a string leaf must be re-emitted verbatim, never rewritten by value shape.
+const expandExponent = (lexical: string): string => {
+  const match = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(lexical);
+  if (match === null) {
+    return lexical;
+  }
+  const sign = match[1] ?? "";
+  const int = match[2] ?? "0";
+  const frac = match[3] ?? "";
+  const point = int.length + Number(match[4]);
+  const digits = int + frac;
+  if (point <= 0) {
+    return `${sign}0.${"0".repeat(-point)}${digits}`;
+  }
+  if (point >= digits.length) {
+    return `${sign}${digits}${"0".repeat(point - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+};
+
 const serializePrimitive = (value: unknown): string => {
   if (value === null || value === undefined) {
     return "";
@@ -2389,6 +2460,10 @@ const serializePrimitive = (value: unknown): string => {
     if (Object.is(value, -0)) {
       return "-0";
     }
+    // Only a numeric value can stringify to exponent form, so the expansion
+    // is gated here rather than on the lexical's shape: a string leaf (an
+    // xs:string whose content reads "2e3", a retained lexical) stays verbatim.
+    return escapeXml(expandExponent(String(value)));
   }
   return escapeXml(String(value));
 };
@@ -3650,6 +3725,11 @@ export type ParseXmlOptions = {
   // schema validation still runs. For documents whose referential integrity
   // is knowingly broken (partial exports, data being repaired).
   identityConstraints?: false;
+  // Retain the original XML lexicals so serializeXml can re-emit the document
+  // byte-for-byte for unchanged values (diffs, hashes, content signatures).
+  // Off by default: serializeXml derives lexicals from the parsed values
+  // (shortest round-trip form, e.g. "1" for "1.0").
+  retainLexicals?: boolean;
 };
 
 /**
@@ -3664,11 +3744,12 @@ export const safeParseXml = <S extends z.ZodType>(
   opts?: ParseXmlOptions,
 ): { success: true; data: z.output<S> } | { success: false; error: unknown } => {
   let data: unknown;
+  const read: ReadCtx = { retainLexicals: opts?.retainLexicals === true };
   // Choice groups are validated during the walk (registry-meta driven); the
   // validate:false fast path skips them, exactly as it skipped the refines.
   const walk: WalkCtx | undefined = opts?.validate === false ? undefined : { issues: [], path: [] };
   try {
-    data = walkRoot(schema, xml, walk);
+    data = walkRoot(schema, xml, walk, read);
   } catch (error) {
     return { success: false, error };
   }
@@ -3800,15 +3881,15 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
       storedLexicalFor(entry?.lexical, value, typeSchema) ??
       (meta.datatype === undefined ? undefined : meta.fixedLexical);
     body = rootFixed === undefined ? serializeLeaf(typeSchema, value) : escapeXml(rootFixed);
-    if (meta.qnameValue) {
-      body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
+    if (meta.qnameValue && entry?.qnameNs !== undefined) {
+      body = declareQNamePrefixes(body, entry.qnameNs, ctx);
     }
   } else if (meta.datatype === undefined) {
     const entry = rootLexicals.get(schema);
     const stored = storedLexicalFor(entry?.lexical, value, typeSchema);
     body = stored === undefined ? serializeLeaf(typeSchema, value) : escapeXml(stored);
-    if (meta.qnameValue && stored !== undefined) {
-      body = declareQNamePrefixes(body, entry?.qnameNs, ctx);
+    if (meta.qnameValue && entry?.qnameNs !== undefined) {
+      body = declareQNamePrefixes(body, entry.qnameNs, ctx);
     }
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
