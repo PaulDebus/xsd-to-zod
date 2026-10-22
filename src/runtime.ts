@@ -1,8 +1,4 @@
-import {
-  type BaseOutputBuilder,
-  BaseOutputBuilderFactory,
-  BaseValueParser,
-} from "@nodable/base-output-builder";
+import { type BaseOutputBuilderFactory, BaseValueParser } from "@nodable/base-output-builder";
 import { CompactBuilderFactory, type FactoryOptions } from "@nodable/compact-builder";
 import XMLParser from "@nodable/flexible-xml-parser";
 import { z } from "zod";
@@ -46,7 +42,6 @@ const XSI_TYPE_FIELD = "xsiType";
 const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
 type GetInstanceArgs = Parameters<BaseOutputBuilderFactory["getInstance"]>;
-type RegisterArgs = Parameters<BaseOutputBuilderFactory["registerValueParser"]>;
 
 // XML 1.0 §3.3.3: literal TAB/LF/CR in attribute values normalize to spaces
 // before the app sees them; character references (&#9; etc.) keep the control
@@ -61,33 +56,54 @@ class AttributeWhitespaceNormalizer extends BaseValueParser {
 
 const attributeWhitespaceNormalizer = new AttributeWhitespaceNormalizer();
 
-// Works around a declaration bug in @nodable/compact-builder@2.0.0:
-// CompactBuilder.addElement is declared as addElement(tag, matcher) while the
-// implementation — like BaseOutputBuilder.addElement — is addElement(tag),
-// which makes CompactBuilderFactory structurally incompatible with
-// BaseOutputBuilderFactory. The single upcast in getInstance follows the
-// declared extends chain and is runtime-safe. Remove this wrapper once
-// upstream ships fixed declarations.
-class EntityCompactBuilderFactory extends BaseOutputBuilderFactory {
-  // Entity decoding is left to the parser; number/boolean coercion is disabled
-  // so that every value arrives as a raw lexical and coerceLexical stays the
-  // single coercion point for elements and attributes.
-  private readonly inner = new CompactBuilderFactory({
-    tags: { valueParsers: ["entity"] },
-    attributes: { valueParsers: [attributeWhitespaceNormalizer, "entity"] },
-  });
-
-  override getInstance(...args: GetInstanceArgs): BaseOutputBuilder {
-    return new OrderTrackingCompactBuilder(
-      args[0],
-      this.inner.builderOptions as FactoryOptions,
-      args[1],
-      this.inner.registry,
-    ) as unknown as BaseOutputBuilder;
+// @nodable/compact-builder@2.0.0 declares addElement/addValue/closeElement
+// with a trailing matcher parameter, unlike BaseOutputBuilder. The two classes
+// therefore are not structurally assignable even though CompactBuilder extends
+// BaseOutputBuilder, and the parser's calls already rely on the base shape.
+// Re-declare the affected methods with the base signatures and read the live
+// matcher from the builder instance (the parser passes the same view to
+// getInstance). Remove this subclass once upstream aligns its declarations.
+class EntityCompactBuilder extends OrderTrackingCompactBuilder {
+  private matcherOrThrow() {
+    const matcher = this.matcher;
+    if (matcher === null) {
+      throw new Error("XML output builder was created without a matcher");
+    }
+    return matcher;
   }
 
-  override registerValueParser(...args: RegisterArgs): void {
-    this.inner.registerValueParser(...args);
+  override addElement(tag: { name: string; [key: string]: unknown }): void {
+    super.addElement(tag, this.matcherOrThrow());
+  }
+
+  override addValue(text: string): void {
+    super.addValue(text, this.matcherOrThrow());
+  }
+
+  override closeElement(): void {
+    super.closeElement(this.matcherOrThrow());
+  }
+}
+
+// Entity decoding is left to the parser; number/boolean coercion is disabled
+// so that every value arrives as a raw lexical and coerceLexical stays the
+// single coercion point for elements and attributes.
+const ENTITY_BUILDER_OPTIONS: FactoryOptions = {
+  tags: { valueParsers: ["entity"] },
+  attributes: { valueParsers: [attributeWhitespaceNormalizer, "entity"] },
+};
+
+class EntityCompactBuilderFactory extends CompactBuilderFactory {
+  // The factory stores the built options (including the compiled alwaysArray
+  // matcher) here, but the upstream declaration widens them to object.
+  declare builderOptions: FactoryOptions;
+
+  constructor() {
+    super(ENTITY_BUILDER_OPTIONS);
+  }
+
+  override getInstance(...args: GetInstanceArgs): EntityCompactBuilder {
+    return new EntityCompactBuilder(args[0], this.builderOptions, args[1], this.registry);
   }
 }
 
