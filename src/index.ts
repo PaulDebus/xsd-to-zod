@@ -59,6 +59,7 @@ export {
   countFractionDigits,
   countTotalDigits,
   xsdDecimalCompare,
+  xsdDecimalLexical,
   xsdFractionDigits,
   xsdTotalDigits,
 } from "./xsdChecks.js";

@@ -15,6 +15,8 @@ export type XmlLexicalFacets = {
   /** fractionDigits on decimal-derived types, counted on the lexical (the
       coerced double loses digits beyond its precision). */
   fractionDigits?: number;
+  /** totalDigits on string-backed decimals, counted on the exact lexical. */
+  totalDigits?: number;
   datatype?: XsdDatatypeName;
 };
 

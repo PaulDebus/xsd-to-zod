@@ -258,6 +258,46 @@ describe("CLI e2e", () => {
     });
   });
 
+  it("maps xs:decimal to numbers by default, exact strings with --decimal string", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "dec.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="amount" type="xs:decimal"/>
+</xs:schema>`,
+      );
+      const r = await runCli([xsdFile, "-o", dir]);
+      expect(r.code).toBe(0);
+      expect(fs.readFileSync(path.join(dir, "dec.zod.ts"), "utf8")).toContain("z.number()");
+
+      const rExact = await runCli([
+        xsdFile,
+        "-o",
+        dir,
+        "--name",
+        "dec-exact",
+        "--decimal",
+        "string",
+      ]);
+      expect(rExact.code).toBe(0);
+      const exact = fs.readFileSync(path.join(dir, "dec-exact.zod.ts"), "utf8");
+      expect(exact).toContain("xsdDecimalLexical");
+      expect(exact).toContain("z.string().trim().refine(xsdDecimalLexical");
+    });
+  });
+
+  it("rejects an invalid --decimal mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "test.xsd");
+      fs.writeFileSync(xsdFile, XSD);
+      const r = await runCli([xsdFile, "-o", dir, "--decimal", "float"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('invalid --decimal mode: float (expected "number" or "string")');
+    });
+  });
+
   it("rejects an invalid --integers mode", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "test.xsd");

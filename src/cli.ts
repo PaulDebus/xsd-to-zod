@@ -238,6 +238,7 @@ type GenerateOptions = {
   silent?: boolean;
   datatypes?: string;
   integers?: string;
+  decimal?: string;
   fetch?: boolean;
   frozen?: boolean;
   offline?: boolean;
@@ -334,6 +335,10 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   if (integers !== "number" && integers !== "bigint") {
     throw new Error(`invalid --integers mode: ${integers} (expected "number" or "bigint")`);
   }
+  const decimal = opts.decimal ?? "number";
+  if (decimal !== "number" && decimal !== "string") {
+    throw new Error(`invalid --decimal mode: ${decimal} (expected "number" or "string")`);
+  }
   if (opts.revalidate === true && opts.offline === true) {
     throw new Error("--revalidate and --offline cannot be used together");
   }
@@ -429,7 +434,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   }
   warnUnenforcedConstructs(ir);
 
-  const { schemas, warnings } = irToZod(ir, { datatypes, integers });
+  const { schemas, warnings } = irToZod(ir, { datatypes, integers, decimal });
   reportWarnings(warnings);
 
   const outDir = resolve(out);
@@ -564,6 +569,10 @@ const program = new Command()
   .option(
     "--integers <mode>",
     'Mapping for the xs:integer family: "number" (default; JSON-safe, exact below 2^53, long/unsignedLong outer bounds dropped) or "bigint" (exact at any magnitude, but JSON.stringify throws on the parsed data)',
+  )
+  .option(
+    "--decimal <mode>",
+    'Mapping for xs:decimal: "number" (default; float64, lossy beyond ~16 significant digits) or "string" (exact canonical decimal lexical)',
   )
   .option("--fetch", "Resolve remote imports/includes for local schema inputs")
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
