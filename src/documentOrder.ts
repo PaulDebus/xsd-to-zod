@@ -258,7 +258,7 @@ const matchCounts = (
     if (fieldMeta.kind === "text") {
       return undefined;
     }
-    if (fieldMeta.kind !== "element") {
+    if (fieldMeta.kind !== "element" && fieldMeta.kind !== "choice") {
       continue;
     }
     if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {

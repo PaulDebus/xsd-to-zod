@@ -3,6 +3,7 @@ import { clarkToLocal, trySplitClark } from "./qname.js";
 import type {
   ComplexTypeDef,
   ElementDef,
+  ErgoChoice,
   Facet,
   IrField,
   QName,
@@ -572,6 +573,215 @@ const toFieldKey = (field: IrField): string => {
 // downstream form generators pick it up from the schema.
 const withDescription = (expr: string, description: string | undefined): string =>
   description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
+
+// ---------------------------------------------------------------------------
+// Ergonomic output (opt-in, temporary scaffolding flag)
+// ---------------------------------------------------------------------------
+
+const ANY_TYPE_QNAME: QName = `{${XSD_NS}}anyType`;
+const ANY_SIMPLE_TYPE_QNAME: QName = `{${XSD_NS}}anySimpleType`;
+
+/** Types deriving from `typeName` by complex-content extension/restriction. */
+const hasDerivedTypes = (typeName: QName, ir: XsdIr): boolean =>
+  Object.values(ir.complexTypes).some(
+    (type) => type.baseType === typeName || type.restrictionBase === typeName,
+  );
+
+/**
+ * The single attribute a value-wrapper complex type exposes, when the type has
+ * no other content. Collapsing such a slot to a scalar needs the attribute to
+ * be required, occurrence-free, and simple-typed — anything else keeps the
+ * object shape.
+ */
+const wrapperFieldOf = (typeName: QName, ir: XsdIr, ergonomic: boolean): IrField | undefined => {
+  if (!ergonomic) {
+    return undefined;
+  }
+  const type = ir.complexTypes[typeName];
+  if (type === undefined) {
+    return undefined;
+  }
+  if (type.abstract === true || type.baseType !== undefined || type.restrictionBase !== undefined) {
+    return undefined;
+  }
+  if ((type.wildcards?.length ?? 0) > 0) {
+    return undefined;
+  }
+  if (type.choiceGroups !== undefined || type.choiceGroupGuards !== undefined) {
+    return undefined;
+  }
+  if (hasDerivedTypes(typeName, ir)) {
+    return undefined;
+  }
+  if (type.fields.length !== 1) {
+    return undefined;
+  }
+  const field = type.fields[0];
+  if (field === undefined || field.kind !== "attribute") {
+    return undefined;
+  }
+  if (field.minOccurs !== 1 || field.maxOccurs !== 1) {
+    return undefined;
+  }
+  if (field.nillable === true) {
+    return undefined;
+  }
+  if (
+    field.defaultValue !== undefined ||
+    field.fixedValue !== undefined ||
+    field.positionalFixeds !== undefined
+  ) {
+    return undefined;
+  }
+  if ((field.identityConstraints?.length ?? 0) > 0) {
+    return undefined;
+  }
+  if (ir.complexTypes[field.typeName] !== undefined) {
+    return undefined;
+  }
+  // A list value is itself an array, so it would be indistinguishable from a
+  // repeated occurrence in the runtime's field analysis.
+  if (resolveListItemType(field.typeName, ir) !== undefined) {
+    return undefined;
+  }
+  return field;
+};
+
+/** The wrapper a field's *slot* collapses to, if the slot's own constraints allow it. */
+const wrapperTargetFor = (field: IrField, ir: XsdIr, ergonomic: boolean): IrField | undefined => {
+  if (field.kind !== "element" || field.nillable === true) {
+    return undefined;
+  }
+  if (field.fixedValue !== undefined || field.defaultValue !== undefined) {
+    return undefined;
+  }
+  if ((field.identityConstraints?.length ?? 0) > 0) {
+    return undefined;
+  }
+  return wrapperFieldOf(field.typeName, ir, ergonomic);
+};
+
+type ErgoChoiceGroup = { group: string; branches: { tag: string; field: IrField }[] };
+
+/**
+ * Repeated choices that can become one tagged array: flat (one element field
+ * per branch), occurrence-free branches, no wildcards, no nested choices, and
+ * no qname collisions. Everything else keeps the parallel optional arrays.
+ */
+const ergonomicChoiceGroups = (
+  type: ComplexTypeDef,
+  ir: XsdIr,
+  ergonomic: boolean,
+): ErgoChoiceGroup[] => {
+  if (!ergonomic) {
+    return [];
+  }
+  const guards = type.choiceGroupGuards ?? {};
+  const nestedGroups = new Set<string>([
+    ...Object.keys(guards),
+    ...Object.values(guards).map((guard) => guard.group),
+  ]);
+  const groupIds = new Set<string>([
+    ...(type.choiceGroups === undefined ? [] : Object.keys(type.choiceGroups)),
+    ...nestedGroups,
+  ]);
+  const substitutionHeads = new Set(
+    Object.values(ir.elements)
+      .map((element) => element.substitutionGroup)
+      .filter((qname): qname is QName => qname !== undefined),
+  );
+  const result: ErgoChoiceGroup[] = [];
+  for (const group of groupIds) {
+    const card = type.choiceGroups?.[group];
+    if (card === undefined || (card.maxOccurs !== "unbounded" && card.maxOccurs <= 1)) {
+      continue;
+    }
+    if (nestedGroups.has(group)) {
+      continue;
+    }
+    if ((type.wildcards ?? []).some((wildcard) => wildcard.choiceGroup === group)) {
+      continue;
+    }
+    const branchMap = choiceBranchMap(type, group);
+    if (branchMap.size < 2) {
+      continue;
+    }
+    const branches: { tag: string; field: IrField }[] = [];
+    const branchQNames = new Set<QName>();
+    const branchTags = new Set<string>();
+    let eligible = true;
+    for (const [, fields] of branchMap) {
+      const field = fields[0];
+      if (fields.length !== 1 || field === undefined || field.kind !== "element") {
+        eligible = false;
+        break;
+      }
+      // The group's cardinality multiplies onto its branch fields, so a
+      // repeated group gives every branch maxOccurs > 1 and an optional group
+      // gives them minOccurs 0. Each array item is one occurrence, so only a
+      // genuinely repeated branch (minOccurs > 1 of its own) is inexpressible.
+      if (field.minOccurs > 1) {
+        eligible = false;
+        break;
+      }
+      if (field.nillable === true || (field.optionalUnits?.length ?? 0) > 0) {
+        eligible = false;
+        break;
+      }
+      if (
+        field.defaultValue !== undefined ||
+        field.fixedValue !== undefined ||
+        field.positionalFixeds !== undefined
+      ) {
+        eligible = false;
+        break;
+      }
+      if ((field.identityConstraints?.length ?? 0) > 0) {
+        eligible = false;
+        break;
+      }
+      if (
+        field.typeName === ANY_TYPE_QNAME ||
+        field.typeName === ANY_SIMPLE_TYPE_QNAME ||
+        hasDerivedTypes(field.typeName, ir) ||
+        substitutionHeads.has(field.qname) ||
+        wrapperTargetFor(field, ir, ergonomic) !== undefined
+      ) {
+        eligible = false;
+        break;
+      }
+      if (branchQNames.has(field.qname)) {
+        eligible = false;
+        break;
+      }
+      // The tag is the branch element's own result key, not the internal
+      // group branch id.
+      const tag = toFieldKey(field);
+      if (branchTags.has(tag)) {
+        eligible = false;
+        break;
+      }
+      branchQNames.add(field.qname);
+      branchTags.add(tag);
+      branches.push({ tag, field });
+    }
+    if (!eligible) {
+      continue;
+    }
+    // A branch qname shared with a field outside the group would be ambiguous
+    // in the flat array.
+    const outsideQNames = new Set(
+      type.fields
+        .filter((field) => field.kind === "element" && field.choiceGroup !== group)
+        .map((field) => field.qname),
+    );
+    if ([...branchQNames].some((qname) => outsideQNames.has(qname))) {
+      continue;
+    }
+    result.push({ group, branches });
+  }
+  return result;
+};
 
 type FacetUsage = { totalDigits: boolean; fractionDigits: boolean };
 
@@ -1334,7 +1544,10 @@ const choiceFlags = (
   return { required, repeated, flat, branches: entries };
 };
 
-const choicesMetaFor = (type: ComplexTypeDef): string | undefined => {
+const choicesMetaFor = (
+  type: ComplexTypeDef,
+  skipGroups: ReadonlySet<string> = new Set(),
+): string | undefined => {
   // Collect all group ids: choiceGroups keys + every key and guard.group from
   // choiceGroupGuards (mirror what multiBranchGroups collects).
   const groupIds: Set<string> = new Set();
@@ -1346,6 +1559,13 @@ const choicesMetaFor = (type: ComplexTypeDef): string | undefined => {
   for (const [id, guard] of Object.entries(type.choiceGroupGuards ?? {})) {
     groupIds.add(id);
     groupIds.add(guard.group);
+  }
+
+  // Ergonomic repeated choices are enforced by the array shape itself (a
+  // strict tagged union per item, min/max on the array), so their field-based
+  // refine is dropped rather than pointing at branch keys that no longer exist.
+  for (const group of skipGroups) {
+    groupIds.delete(group);
   }
 
   // If no choice groups, emit nothing.
@@ -1763,14 +1983,56 @@ const xsiBlockMetaParts = (typeName: QName, blockTokens: string[], ir: XsdIr): s
 // consts (extension-derived types repeat their base's entries verbatim).
 const fieldsMetaFor = (
   type: ComplexTypeDef,
+  fields: IrField[],
   ir: XsdIr,
+  ergonomic: boolean,
   structured: boolean,
   integers: IntegersMode,
   decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
+  skipChoiceGroups: ReadonlySet<string>,
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
-  const entries = dedupeEmissionFields(type).map((field) => {
+  const entries = fields.map((field) => {
+    if (field.kind === "choice") {
+      const choice = field.ergoChoice;
+      if (choice === undefined) {
+        throw new Error("choice field without ergonomic branch metadata");
+      }
+      const branches = choice.branches.map((branch) => {
+        const branchParts = [
+          `tag: ${JSON.stringify(branch.tag)}`,
+          `qname: ${JSON.stringify(branch.field.qname)}`,
+        ];
+        const st = structured ? structuredTypeOfTypeName(branch.field.typeName, ir) : undefined;
+        if (st) {
+          branchParts.push(`datatype: ${JSON.stringify(st.name)}`);
+        }
+        if (isQNameTyped(branch.field.typeName, ir)) {
+          branchParts.push("qnameValue: true");
+        }
+        return `{ ${branchParts.join(", ")} }`;
+      });
+      const firstQName = choice.branches[0]?.field.qname ?? "{}";
+      return `${JSON.stringify(toFieldKey(field))}: { kind: "choice", qname: ${JSON.stringify(firstQName)}, choice: { branches: [${branches.join(", ")}], minOccurs: ${field.minOccurs}, maxOccurs: ${JSON.stringify(field.maxOccurs)} } }`;
+    }
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
+    if (field.kind === "element") {
+      const wrapped = wrapperTargetFor(field, ir, ergonomic);
+      if (wrapped !== undefined && (membersByHead.get(field.qname)?.length ?? 0) === 0) {
+        const wrappedParts = [
+          `kind: ${JSON.stringify(wrapped.kind)}`,
+          `qname: ${JSON.stringify(wrapped.qname)}`,
+        ];
+        const wrappedSt = structured ? structuredTypeOfTypeName(wrapped.typeName, ir) : undefined;
+        if (wrappedSt) {
+          wrappedParts.push(`datatype: ${JSON.stringify(wrappedSt.name)}`);
+        }
+        if (isQNameTyped(wrapped.typeName, ir)) {
+          wrappedParts.push("qnameValue: true");
+        }
+        parts.push(`wrapped: { ${wrappedParts.join(", ")} }`);
+      }
+    }
     const substMembers = membersByHead.get(field.qname);
     if (substMembers !== undefined && substMembers.length > 0) {
       parts.push(`substitutes: ${JSON.stringify(substMembers.map((m) => m.name))}`);
@@ -1871,7 +2133,10 @@ const fieldsMetaFor = (
   if ((type.wildcards ?? []).some((w) => w.kind === "anyAttribute")) {
     entries.push(`"@*": { kind: "anyAttribute", qname: "{}*" }`);
   }
-  return { fieldsEntries: entries, choicesBody: choicesMetaFor(type) };
+  return {
+    fieldsEntries: entries,
+    choicesBody: choicesMetaFor(type, skipChoiceGroups),
+  };
 };
 
 // Head element qname → substitution-group member declarations, transitively
@@ -2346,11 +2611,45 @@ const tsFieldLine = (
   integers: IntegersMode,
   decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
+  ergonomic: boolean,
   polymorphicSlotType?: (field: IrField) => string | undefined,
 ): string => {
   let type: string;
   const polymorphicType = field.fixedValue === undefined ? polymorphicSlotType?.(field) : undefined;
-  if (polymorphicType !== undefined) {
+  if (field.kind === "choice") {
+    const choice = field.ergoChoice;
+    if (choice === undefined) {
+      throw new Error("choice field without ergonomic branch metadata");
+    }
+    const union = choice.branches
+      .map(
+        (branch) =>
+          `{ ${JSON.stringify(branch.tag)}: ${tsTypeOfTypeName(
+            branch.field.typeName,
+            ir,
+            ifaceName,
+            new Set(),
+            dt,
+            integers,
+            decimal,
+          )} }`,
+      )
+      .join(" | ");
+    type = field.maxOccurs === "unbounded" || field.maxOccurs > 1 ? tsArrayOf(union) : union;
+    const props = field.minOccurs === 0 || forceOptional ? "?" : "";
+    const optionalType = props === "?" ? " | undefined" : "";
+    return `  ${JSON.stringify(toFieldKey(field))}${props}: ${type}${optionalType};`;
+  }
+  const wrapped =
+    field.kind === "element" &&
+    field.fixedValue === undefined &&
+    polymorphicType === undefined &&
+    (membersByHead.get(field.qname)?.length ?? 0) === 0
+      ? wrapperTargetFor(field, ir, ergonomic)
+      : undefined;
+  if (wrapped !== undefined) {
+    type = tsTypeOfTypeName(wrapped.typeName, ir, ifaceName, new Set(), dt, integers, decimal);
+  } else if (polymorphicType !== undefined) {
     type = polymorphicType;
   } else if (field.fixedValue === undefined) {
     const headType = tsTypeOfTypeName(
@@ -2539,6 +2838,10 @@ export type IrToZodOptions = {
   // Where xs:decimal lands: "number" (default) is float64, lossy beyond ~16
   // significant digits; "string" keeps the exact canonical decimal lexical.
   decimal?: "number" | "string";
+  // Temporary scaffolding for the 1.0 output shape: collapse lone-attribute
+  // value wrappers to scalars and emit repeated choices as one tagged array.
+  // Deliberately not part of the documented public API; removed at the flip.
+  ergonomic?: boolean;
 };
 
 export const irToZod = (
@@ -2574,6 +2877,77 @@ export const irToZod = (
     Object.values(ir.complexTypes).some((t) =>
       t.fields.some((f) => (f.identityConstraints?.length ?? 0) > 0),
     );
+
+  // Ergonomic output. Identity constraints navigate the parsed object by
+  // field key, so their document paths would no longer line up after a
+  // collapse — keep the plain shape whenever a module declares any.
+  const ergonomic = opts?.ergonomic === true && !moduleHasIdentity;
+
+  // Emitted fields per complex type: eligible repeated choices collapse their
+  // branch fields into one synthetic "choice" field, placed where the first
+  // branch sat so hand-built data serializes in content-model order.
+  const ergoEmission = new Map<QName, { choices: ErgoChoice[]; fields: IrField[] }>();
+  const ergoFor = (type: ComplexTypeDef): { choices: ErgoChoice[]; fields: IrField[] } => {
+    const cached = ergoEmission.get(type.name);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const base = dedupeEmissionFields(type);
+    const groups = ergonomicChoiceGroups(type, ir, ergonomic);
+    let built: { choices: ErgoChoice[]; fields: IrField[] };
+    if (groups.length === 0) {
+      built = { choices: [], fields: base };
+    } else {
+      const usedKeys = new Set(base.map((field) => toFieldKey(field)));
+      const choices: ErgoChoice[] = groups.map((group) => {
+        let key = "_choice";
+        let suffix = 2;
+        while (usedKeys.has(key)) {
+          key = `_choice${suffix}`;
+          suffix += 1;
+        }
+        usedKeys.add(key);
+        return { group: group.group, key, branches: group.branches };
+      });
+      const branchToChoice = new Map<string, ErgoChoice>();
+      for (const choice of choices) {
+        for (const branch of choice.branches) {
+          branchToChoice.set(toFieldKey(branch.field), choice);
+        }
+      }
+      const fields: IrField[] = [];
+      const placed = new Set<string>();
+      for (const field of base) {
+        const choice = branchToChoice.get(toFieldKey(field));
+        if (choice === undefined) {
+          fields.push(field);
+          continue;
+        }
+        if (placed.has(choice.key)) {
+          continue;
+        }
+        placed.add(choice.key);
+        const card = type.choiceGroups?.[choice.group];
+        fields.push({
+          kind: "choice",
+          qname: "{}" as QName,
+          typeName: ANY_TYPE_QNAME,
+          minOccurs: card?.minOccurs ?? 0,
+          maxOccurs: card?.maxOccurs ?? "unbounded",
+          fieldKey: choice.key,
+          ergoChoice: choice,
+        });
+      }
+      built = { choices, fields };
+      if (fields.length === 0) {
+        throw new Error(`Ergonomic choice emission lost every field of ${type.name}`);
+      }
+    }
+    ergoEmission.set(type.name, built);
+    return built;
+  };
+  const emissionFields = (type: ComplexTypeDef): IrField[] => ergoFor(type).fields;
+  const ergoChoicesFor = (type: ComplexTypeDef): ErgoChoice[] => ergoFor(type).choices;
 
   // xsi:type polymorphism. variantSets maps a polymorphic declared type
   // (abstract, or with known derived types) to [declared, ...derivedClosure].
@@ -2789,13 +3163,17 @@ export const irToZod = (
     const fieldsEntriesByType = new Map<QName, string[]>();
     const choicesBodyByType = new Map<QName, string>();
     for (const t of Object.values(ir.complexTypes)) {
+      const ergoChoices = ergoChoicesFor(t);
       const { fieldsEntries, choicesBody } = fieldsMetaFor(
         t,
+        emissionFields(t),
         ir,
+        ergonomic,
         structured,
         integers,
         decimal,
         membersByHead,
+        new Set(ergoChoices.map((choice) => choice.group)),
       );
       fieldsEntriesByType.set(t.name, fieldsEntries);
       if (choicesBody !== undefined) {
@@ -2974,6 +3352,29 @@ export const irToZod = (
   // evaluated at module init) every reference to a complex type or union
   // const is lazy-wrapped so declaration order and recursion cannot bite.
   const fieldTypeExpr = (field: IrField, eager: boolean): string => {
+    if (field.kind === "choice") {
+      const choice = field.ergoChoice;
+      if (choice === undefined) {
+        throw new Error("choice field without ergonomic branch metadata");
+      }
+      const items = choice.branches
+        .map(
+          (branch) =>
+            `z.strictObject({ ${JSON.stringify(branch.tag)}: ${fieldTypeExpr(branch.field, eager)} })`,
+        )
+        .join(", ");
+      let expr = `z.array(z.union([${items}]))`;
+      if (field.minOccurs > 0) {
+        expr += `.min(${field.minOccurs})`;
+      }
+      if (field.maxOccurs !== "unbounded") {
+        expr += `.max(${field.maxOccurs})`;
+      }
+      if (field.minOccurs === 0) {
+        expr += ".optional()";
+      }
+      return expr;
+    }
     const variants = polymorphicVariants(field);
     if (variants !== undefined) {
       const union = unionConstName.get(field.typeName) ?? "z.unknown()";
@@ -2985,6 +3386,13 @@ export const irToZod = (
       return opts?.js
         ? `z.lazy(() => ${union})`
         : `z.lazy((): z.ZodType<${tsVariantUnionType(field.typeName)}> => ${union})`;
+    }
+    const wrapped =
+      (membersByHead.get(field.qname)?.length ?? 0) === 0
+        ? wrapperTargetFor(field, ir, ergonomic)
+        : undefined;
+    if (wrapped !== undefined) {
+      return primitiveToZod(wrapped.typeName, primitiveCtx);
     }
     const headExpr = primitiveToZod(field.typeName, primitiveCtx);
     const eagerHeadExpr =
@@ -3004,25 +3412,38 @@ export const irToZod = (
     return `z.union([${options.join(", ")}])`;
   };
 
+  // One object-shape property. The synthetic repeated-choice field carries
+  // its own array cardinality, so it bypasses withCardinality.
+  const fieldPropExpr = (field: IrField, eager: boolean, forceOptional: boolean): string => {
+    if (field.kind === "choice") {
+      return withDescription(fieldTypeExpr(field, eager), field.description);
+    }
+    return withDescription(
+      withCardinality(
+        fieldTypeExpr(field, eager),
+        field,
+        ir,
+        forceOptional,
+        structured,
+        usedHelpers,
+        integers,
+        decimal,
+      ),
+      field.description,
+    );
+  };
+
   // Object shape properties of a complex type. Eager mode is for the family
   // object consts; the main consts wrap their shape in z.lazy as before.
   const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string => {
     const multiBranch = choiceOptionalGroups(complexType);
-    return dedupeEmissionFields(complexType)
+    return emissionFields(complexType)
       .map(
         (field) =>
-          `${JSON.stringify(toFieldKey(field))}: ${withDescription(
-            withCardinality(
-              fieldTypeExpr(field, eager),
-              field,
-              ir,
-              field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-              structured,
-              usedHelpers,
-              integers,
-              decimal,
-            ),
-            field.description,
+          `${JSON.stringify(toFieldKey(field))}: ${fieldPropExpr(
+            field,
+            eager,
+            field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
           )}`,
       )
       .join(", ");
@@ -3055,7 +3476,15 @@ export const irToZod = (
         if (def === undefined) {
           return;
         }
-        for (const field of dedupeEmissionFields(def)) {
+        for (const field of emissionFields(def)) {
+          if (field.kind === "choice") {
+            for (const branch of field.ergoChoice?.branches ?? []) {
+              for (const dep of typeRefDeps(branch.field.typeName)) {
+                out.add(dep);
+              }
+            }
+            continue;
+          }
           const variants = polymorphicVariants(field);
           if (variants !== undefined) {
             if (!eager) {
@@ -3111,7 +3540,7 @@ export const irToZod = (
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
       const multiBranch = choiceOptionalGroups(complexType);
-      const props = dedupeEmissionFields(complexType)
+      const props = emissionFields(complexType)
         .map((field) =>
           tsFieldLine(
             field,
@@ -3122,6 +3551,7 @@ export const irToZod = (
             integers,
             decimal,
             membersByHead,
+            ergonomic,
             (f) =>
               polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
           ),
@@ -3243,21 +3673,13 @@ export const irToZod = (
       continue;
     }
     const multiBranch = choiceOptionalGroups(complexType);
-    const props = dedupeEmissionFields(complexType)
+    const props = emissionFields(complexType)
       .map(
         (field) =>
-          `${JSON.stringify(toFieldKey(field))}: ${withDescription(
-            withCardinality(
-              fieldTypeExpr(field, false),
-              field,
-              ir,
-              field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-              structured,
-              usedHelpers,
-              integers,
-              decimal,
-            ),
-            field.description,
+          `${JSON.stringify(toFieldKey(field))}: ${fieldPropExpr(
+            field,
+            false,
+            field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
           )}`,
       )
       .join(", ");

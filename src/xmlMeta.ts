@@ -20,10 +20,41 @@ export type XmlLexicalFacets = {
   datatype?: XsdDatatypeName;
 };
 
+/**
+ * Value-wrapper collapse: the element's whole content is this one attribute
+ * (or text). `serializeXml` re-wraps the scalar into the element.
+ */
+export type XmlWrappedMeta = {
+  kind: "attribute" | "text";
+  qname: QName;
+  datatype?: XsdDatatypeName;
+  qnameValue?: boolean;
+};
+
+/** One branch of an ergonomic repeated-choice array. */
+export type XmlChoiceFieldMeta = {
+  /** Tag key of the tagged item (`{ A: value }`). */
+  tag: string;
+  qname: QName;
+  datatype?: XsdDatatypeName;
+  qnameValue?: boolean;
+};
+
+/** Ergonomic repeated xs:choice: one array of tagged branch values. */
+export type XmlChoiceArrayMeta = {
+  branches: XmlChoiceFieldMeta[];
+  minOccurs: number;
+  maxOccurs: number | "unbounded";
+};
+
 /** Per-field XML knowledge stored on the containing object schema. */
 export type XmlFieldMeta = {
-  kind: "element" | "attribute" | "text" | "any" | "anyAttribute";
+  kind: "element" | "attribute" | "text" | "any" | "anyAttribute" | "choice";
   qname: QName;
+  /** Set when this element field was collapsed to its single attribute/text. */
+  wrapped?: XmlWrappedMeta;
+  /** Set on the synthetic "choice" field of an ergonomic repeated choice. */
+  choice?: XmlChoiceArrayMeta;
   defaultValue?: unknown;
   fixedValue?: unknown;
   datatype?: XsdDatatypeName;
