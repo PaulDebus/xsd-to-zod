@@ -582,7 +582,7 @@ const program = new Command()
   )
   .option(
     "--ergonomic",
-    "Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars and emit repeated choices as one tagged array",
+    'Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars, drop the "@" prefix from attribute keys (colliding attributes keep it), and emit repeated choices as one tagged array',
   )
   .option("--fetch", "Resolve remote imports/includes for local schema inputs")
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
