@@ -20,7 +20,13 @@ import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
 import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
-import { countLexicalFractionDigits, xsdDecimalCompare } from "./xsdChecks.js";
+import {
+  canonicalDecimalLexical,
+  countLexicalFractionDigits,
+  countLexicalTotalDigits,
+  xsdDecimalCompare,
+  xsdDecimalLexical,
+} from "./xsdChecks.js";
 import {
   parseXsdDatatype,
   writeXsdDatatype,
@@ -361,6 +367,32 @@ const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
     return checkDef.check === "number_format" && INT_FORMATS.has(checkDef.format ?? "");
   });
 
+// String-backed xs:decimal schemas carry the xsdDecimalLexical refine emitted by
+// codegen; its identity lets the runtime canonicalize exact decimals and keep
+// them distinct from plain strings in value-space comparisons.
+const isDecimalStringSchema = (schema: AnySchema): boolean => {
+  const def = unwrapModifiers(schema)._zod.def;
+  if (def.type !== "string") {
+    return false;
+  }
+  return ((def as z.core.$ZodStringDef).checks ?? []).some((check) => {
+    const checkDef = check._zod.def as { check?: string; fn?: { xsdDecimalMarker?: true } };
+    return (
+      checkDef.check === "custom" &&
+      (checkDef.fn === xsdDecimalLexical || checkDef.fn?.xsdDecimalMarker === true)
+    );
+  });
+};
+
+const coerceDecimalString = (raw: string): string => {
+  try {
+    return canonicalDecimalLexical(raw);
+  } catch {
+    // Invalid lexicals fail in zod validation with the usual ZodError.
+    return raw;
+  }
+};
+
 // XSD float/double special lexicals → JS values.
 const FLOAT_SPECIALS: Record<string, number> = {
   INF: Infinity,
@@ -438,7 +470,7 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
     case "boolean":
       return coerceBoolean(String(raw));
     case "string":
-      return String(raw);
+      return isDecimalStringSchema(schema) ? coerceDecimalString(String(raw)) : String(raw);
     case "literal": {
       const value = (def as z.core.$ZodLiteralDef<z.core.util.Literal>).values[0];
       if (typeof value === "number") {
@@ -638,6 +670,9 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
     countLexicalFractionDigits(lexical) > facets.fractionDigits
   ) {
     throw new Error(`Invalid lexical ${JSON.stringify(raw)}: too many fraction digits`);
+  }
+  if (facets.totalDigits !== undefined && countLexicalTotalDigits(lexical) > facets.totalDigits) {
+    throw new Error(`Invalid lexical ${JSON.stringify(raw)}: too many total digits`);
   }
   const orderChecks: [string | undefined, (cmp: number) => boolean][] = [
     [facets.minInclusive, (cmp) => cmp >= 0],
@@ -3001,6 +3036,9 @@ const identityTupleDisplay = (values: unknown[]): string =>
         const tagged = v as { $xsiType: string; $value: unknown };
         return `${splitClark(tagged.$xsiType).local} ${JSON.stringify(tagged.$value)}`;
       }
+      if (v !== null && typeof v === "object" && !Array.isArray(v) && "$decimal" in v) {
+        return `decimal ${JSON.stringify((v as { $decimal: unknown }).$decimal)}`;
+      }
       return typeof v === "bigint" ? v.toString() : (JSON.stringify(v) ?? String(v));
     })
     .join(", ");
@@ -3392,6 +3430,11 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
     };
   }
   if (typeof value === "string") {
+    // String-backed decimals compare by value (canonical form), and stay
+    // distinct from plain strings of the same text.
+    if (node.schema !== undefined && isDecimalStringSchema(node.schema)) {
+      return { $decimal: value };
+    }
     if (node.qnameNs !== undefined) {
       const { prefix, local } = splitQName(value.trim());
       const ns = prefix === "" ? node.qnameNs[""] : node.qnameNs[prefix];

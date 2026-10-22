@@ -51,6 +51,36 @@ export const xsdFractionDigits =
 
 const DECIMAL_LEXICAL = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
+// The XSD decimal lexical space (no exponent notation). The marker lets the
+// runtime recognize string-backed decimal schemas even when the generated
+// module and the runtime were loaded from separate builds (function identity
+// is not stable across copies).
+export type XsdDecimalLexical = ((value: string) => boolean) & {
+  readonly xsdDecimalMarker: true;
+};
+
+export const xsdDecimalLexical: XsdDecimalLexical = Object.assign(
+  (value: string): boolean => DECIMAL_LEXICAL.test(value),
+  { xsdDecimalMarker: true } as const,
+);
+
+// Normalize a decimal lexical to an exact canonical form: no leading `+`, no
+// leading integer zeros, no trailing fraction zeros, and `0` for every zero
+// value. The value is unchanged because only representation is rewritten —
+// unlike Number(), no significant digit is ever dropped.
+export const canonicalDecimalLexical = (lexical: string): string => {
+  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  if (!m) {
+    throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
+  }
+  const intPart = (m[2] ?? "0").replace(/^0+/, "") || "0";
+  const fracPart = (m[3] ?? m[4] ?? "").replace(/0+$/, "");
+  if (intPart === "0" && fracPart === "") {
+    return "0";
+  }
+  return `${m[1] === "-" ? "-" : ""}${intPart}${fracPart === "" ? "" : `.${fracPart}`}`;
+};
+
 // Fraction digits of a decimal LEXICAL in value space: trailing zeros carry no
 // value (1.100 is 1.1), so they do not count. Non-decimal lexicals (exponent
 // notation) return 0 — other checks reject them.
@@ -60,6 +90,20 @@ export const countLexicalFractionDigits = (lexical: string): number => {
     return 0;
   }
   return (m[3] ?? m[4] ?? "").replace(/0+$/, "").length;
+};
+
+// Total digits of a decimal LEXICAL in value space: positional zeros count
+// (1200 has 4), but leading integer/fraction zeros and trailing fraction zeros
+// do not (0.0012 has 2, 1.2300 has 3).
+export const countLexicalTotalDigits = (lexical: string): number => {
+  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  if (!m) {
+    return 0;
+  }
+  const intPart = m[2] ?? "0";
+  const fracPart = (m[3] ?? m[4] ?? "").replace(/0+$/, "");
+  const digits = `${intPart}${fracPart}`.replace(/^0+/, "");
+  return digits.length === 0 ? 1 : digits.length;
 };
 
 const decimalParts = (lexical: string): { neg: boolean; digits: bigint; scale: number } => {

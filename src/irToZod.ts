@@ -16,7 +16,7 @@ import {
   XSD_INTEGER_TYPE_NAMES,
   XSD_SAFE_INTEGER_TYPE_NAMES,
 } from "./xsdBuiltins.js";
-import { xsdDecimalCompare } from "./xsdChecks.js";
+import { canonicalDecimalLexical, xsdDecimalCompare } from "./xsdChecks.js";
 import { parseXsdDatatype, writeXsdDatatype, type XsdDatatypeName } from "./xsdDateTime.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
@@ -216,6 +216,12 @@ const XSD_INTEGER_NUMBER_BOUNDS: ReadonlyMap<string, { min?: number; max?: numbe
 // 2^53) by default, bigint on opt-in (exact at any magnitude).
 type IntegersMode = "number" | "bigint";
 
+// Where xs:decimal lands: JS numbers (float64, lossy beyond ~16 significant
+// digits) by default, exact canonical lexical strings on opt-in.
+type DecimalMode = "number" | "string";
+
+type PrimitiveKind = "number" | "bigint" | "boolean" | "string" | "decimalString";
+
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 const nextSeen = (seen: Set<string> | undefined, name: string): Set<string> | undefined => {
@@ -233,8 +239,9 @@ const resolvePrimitiveKind = (
   typeName: QName,
   ir: XsdIr,
   integers: IntegersMode,
+  decimal: DecimalMode,
   seen?: Set<string>,
-): "number" | "bigint" | "boolean" | "string" => {
+): PrimitiveKind => {
   const parts = trySplitClark(typeName);
   if (!parts) {
     return "string";
@@ -242,6 +249,9 @@ const resolvePrimitiveKind = (
   if (parts.ns === XSD_NS) {
     if (XSD_BIGINT_TYPE_NAMES.has(parts.local)) {
       return integers;
+    }
+    if (parts.local === "decimal") {
+      return decimal === "string" ? "decimalString" : "number";
     }
     if (NUMBER_PRIMITIVES.has(parts.local)) {
       return "number";
@@ -262,7 +272,7 @@ const resolvePrimitiveKind = (
       : simple.kind === "list"
         ? simple.itemType
         : simple.memberTypes[0];
-  return base ? resolvePrimitiveKind(base, ir, integers, next) : "string";
+  return base ? resolvePrimitiveKind(base, ir, integers, decimal, next) : "string";
 };
 
 // The XSD builtin local name a (possibly user-defined) simple type derives
@@ -390,11 +400,12 @@ interface PrimitiveEmitCtx {
   usedHelpers: Set<string>;
   structured: boolean;
   integers: IntegersMode;
+  decimal: DecimalMode;
   datatypeCtx: DatatypeEmitCtx | undefined;
 }
 
 const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
-  const { definedTypes, constName, usedHelpers, structured, integers, datatypeCtx } = ctx;
+  const { definedTypes, constName, usedHelpers, structured, integers, decimal, datatypeCtx } = ctx;
   const parts = trySplitClark(typeName);
   if (!parts) {
     return "z.unknown()";
@@ -441,6 +452,13 @@ const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
     return expr;
   }
 
+  if (parts.local === "decimal" && decimal === "string") {
+    usedHelpers.add("xsdDecimalLexical");
+    // Canonicalized by the runtime on parse; the trim makes the schema's own
+    // validation accept surrounding XML whitespace (whiteSpace=collapse).
+    return `z.string().trim().refine(xsdDecimalLexical, { message: 'invalid xs:decimal lexical' })`;
+  }
+
   const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
   if (validator) {
     usedHelpers.add(validator);
@@ -471,7 +489,14 @@ const isBigIntType = (zodExpr: string): boolean => zodExpr.startsWith("z.bigint(
 
 // fixed/default values arrive as XSD lexicals; emit them coerced to the JS type
 // the runtime produces for the field's (resolved) primitive kind.
-const typedLiteral = (kind: "number" | "bigint" | "boolean" | "string", raw: string): string => {
+const typedLiteral = (kind: PrimitiveKind, raw: string): string => {
+  if (kind === "decimalString") {
+    try {
+      return JSON.stringify(canonicalDecimalLexical(raw));
+    } catch {
+      return JSON.stringify(raw);
+    }
+  }
   if (kind === "number") {
     const trimmed = raw.trim();
     // xs:float/xs:double special lexicals: Number() maps all three to NaN.
@@ -515,12 +540,18 @@ const listTokens = (raw: string): string[] => {
 // Typed array literal for a list-typed fixed lexical: one typed item per
 // whitespace-separated token. The runtime substitutes it from the field meta —
 // the schema constrains with a refine, not a z.literal.
-const listLiteral = (typeName: QName, ir: XsdIr, raw: string, integers: IntegersMode): string => {
+const listLiteral = (
+  typeName: QName,
+  ir: XsdIr,
+  raw: string,
+  integers: IntegersMode,
+  decimal: DecimalMode,
+): string => {
   const listItemType = resolveListItemType(typeName, ir);
   if (listItemType === undefined) {
-    return typedLiteral(resolvePrimitiveKind(typeName, ir, integers), raw);
+    return typedLiteral(resolvePrimitiveKind(typeName, ir, integers, decimal), raw);
   }
-  const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
+  const itemKind = resolvePrimitiveKind(listItemType, ir, integers, decimal);
   return `[${listTokens(raw)
     .map((token) => typedLiteral(itemKind, token))
     .join(", ")}]`;
@@ -622,7 +653,7 @@ const applyLengthFacet = (
 const applyOrderFacet = (
   result: string,
   facet: Facet & { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" },
-  kind: "number" | "bigint" | "boolean" | "string",
+  kind: PrimitiveKind,
 ): string => {
   if (isNumberType(result)) {
     const bound = String(Number(facet.value));
@@ -675,7 +706,7 @@ const withFacets = (
   base: string,
   facets: Facet[],
   usage: FacetUsage,
-  kind: "number" | "bigint" | "boolean" | "string",
+  kind: PrimitiveKind,
   builtinLocal: string | undefined,
   structured: boolean,
   usedHelpers: Set<string>,
@@ -725,11 +756,12 @@ const withFacets = (
   const enumViaMeta =
     st === undefined &&
     enumFacets.length > 0 &&
-    (baseStructure !== undefined ||
+    (kind === "decimalString" ||
+      baseStructure !== undefined ||
       (builtinLocal !== undefined && XSD_STRUCTURED_TYPES.has(builtinLocal)));
   if (enumViaMeta) {
     lexical.enumerations = enumFacets.map((f) => f.value);
-    if (baseStructure === undefined && builtinLocal !== undefined) {
+    if (baseStructure === undefined && builtinLocal !== undefined && kind !== "decimalString") {
       lexical.datatype = builtinLocal as XsdDatatypeName;
     }
   }
@@ -746,7 +778,7 @@ const withFacets = (
     { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" }
   > => {
     if (
-      kind !== "number" ||
+      (kind !== "number" && kind !== "decimalString") ||
       (f.kind !== "minInclusive" &&
         f.kind !== "maxInclusive" &&
         f.kind !== "minExclusive" &&
@@ -812,6 +844,10 @@ const withFacets = (
         case "totalDigits":
           if (kind === "bigint") {
             result += `.refine((val) => String(val < 0n ? -val : val).length <= ${facet.value}, { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
+          } else if (kind === "decimalString") {
+            // Exact lexical digits; the string-backed value may carry more
+            // significant digits than a double.
+            lexical.totalDigits = facet.value;
           } else {
             usage.totalDigits = true;
             result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
@@ -820,7 +856,10 @@ const withFacets = (
         case "fractionDigits":
           if (kind === "bigint") {
             result += ` /* facet fractionDigits skipped: vacuous for integer types */`;
-          } else if (builtinLocal === "decimal" && kind === "number") {
+          } else if (
+            builtinLocal === "decimal" &&
+            (kind === "number" || kind === "decimalString")
+          ) {
             // The coerced double loses digits beyond its precision, so the
             // count must happen on the original lexical (same reason as the
             // decimal order facets) — enforced by the runtime.
@@ -856,10 +895,16 @@ const withFacets = (
   // checked schema in a preprocess. 'preserve' is deliberately a no-op.
   if (whiteSpace?.value === "collapse") {
     lexical.whiteSpace = "collapse";
-    result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
+    // The decimal-string base already trims, and a pipe would hide it from
+    // the runtime's decimal detection (canonicalization).
+    if (kind !== "decimalString") {
+      result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
+    }
   } else if (whiteSpace?.value === "replace") {
     lexical.whiteSpace = "replace";
-    result = `z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, ${result})`;
+    if (kind !== "decimalString") {
+      result = `z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, ${result})`;
+    }
   }
   // whiteSpace=collapse is fixed for list types in XSD.
   if (baseStructure === "list" && lexical.whiteSpace === undefined) {
@@ -949,6 +994,15 @@ const mergeLexicalFacets = (
         : Math.min(base.fractionDigits, own.fractionDigits);
   if (fractionDigits !== undefined) {
     merged.fractionDigits = fractionDigits;
+  }
+  const totalDigits =
+    base.totalDigits === undefined
+      ? own.totalDigits
+      : own.totalDigits === undefined
+        ? base.totalDigits
+        : Math.min(base.totalDigits, own.totalDigits);
+  if (totalDigits !== undefined) {
+    merged.totalDigits = totalDigits;
   }
   return merged;
 };
@@ -1054,8 +1108,9 @@ const withCardinality = (
   structured: boolean,
   usedHelpers: Set<string>,
   integers: IntegersMode,
+  decimal: DecimalMode,
 ): string => {
-  const kind = resolvePrimitiveKind(field.typeName, ir, integers);
+  const kind = resolvePrimitiveKind(field.typeName, ir, integers, decimal);
   // Fixed/default literals are values: the type's whiteSpace facet applies to
   // the declared lexical before comparison.
   const ws = kind === "string" ? effectiveWhiteSpace(field.typeName, ir) : undefined;
@@ -1069,6 +1124,10 @@ const withCardinality = (
         // declared lexical decides the value (branch agreement), which only
         // the runtime's coercion knows. The runtime enforces the constraint
         // from the fixedLexical meta.
+      } else if (kind === "decimalString") {
+        // The runtime canonicalizes decimal lexicals after coercion, which the
+        // z.literal def would bypass; compare the canonical forms from the
+        // fixedLexical meta instead (value-space fixed semantics).
       } else {
         // Structured date/time fixed: z.literal compares objects by reference, so
         // constrain by canonical lexical equality instead. The value itself is in
@@ -1097,7 +1156,7 @@ const withCardinality = (
       // cannot deep-compare arrays (zod 4), so constrain the list schema with a
       // refine against the typed array literal.
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-      const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
+      const itemKind = resolvePrimitiveKind(listItemType, ir, integers, decimal);
       const tokens = listTokens(field.fixedValue);
       if (itemSt) {
         usedHelpers.add(itemSt.writeFn);
@@ -1128,7 +1187,7 @@ const withCardinality = (
     // Merged same-qname siblings with per-position fixed constraints: the
     // array carries them (undefined = unconstrained position).
     if (field.positionalFixeds !== undefined) {
-      const itemKind = resolvePrimitiveKind(field.typeName, ir, integers);
+      const itemKind = resolvePrimitiveKind(field.typeName, ir, integers, decimal);
       const lits = field.positionalFixeds.map((fx) =>
         fx === undefined ? "undefined" : typedLiteral(itemKind, wsProcessLiteral(fx, ws)),
       );
@@ -1154,7 +1213,7 @@ const withCardinality = (
       result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, defaultValue)})`;
     } else {
       const itemSt = structured ? structuredType(resolveBuiltinLocal(listItemType, ir)) : undefined;
-      const itemKind = resolvePrimitiveKind(listItemType, ir, integers);
+      const itemKind = resolvePrimitiveKind(listItemType, ir, integers, decimal);
       // A trimmed empty default is an empty list; splitting it would yield a
       // single empty token.
       const trimmed = field.defaultValue.trim();
@@ -1410,6 +1469,7 @@ const fixedValueMetaParts = (
   ir: XsdIr,
   structured: boolean,
   integers: IntegersMode,
+  decimal: DecimalMode,
   root = false,
 ): string[] => {
   const parts: string[] = [];
@@ -1432,7 +1492,7 @@ const fixedValueMetaParts = (
       // the typed array from the meta on absence (attributes) /
       // present-but-empty (elements). An empty fixed lexical is an empty
       // list: the raw "" would split into [""] and fail item validation.
-      parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue, integers)}`);
+      parts.push(`fixedValue: ${listLiteral(typeName, ir, fixedValue, integers, decimal)}`);
     }
   } else if (structured && structuredTypeOfTypeName(typeName, ir)) {
     // Structured fixed values cannot ride a z.literal (reference equality
@@ -1448,7 +1508,7 @@ const fixedValueMetaParts = (
     } else {
       // Plain-typed roots: the schema is the bare type, so the runtime needs
       // the coerced value in the meta (fields read it from z.literal).
-      const kind = resolvePrimitiveKind(typeName, ir, integers);
+      const kind = resolvePrimitiveKind(typeName, ir, integers, decimal);
       parts.push(
         `fixedValue: ${typedLiteral(kind, wsProcessLiteral(fixedValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
       );
@@ -1473,12 +1533,13 @@ const defaultValueMetaParts = (
   ir: XsdIr,
   structured: boolean,
   integers: IntegersMode,
+  decimal: DecimalMode,
 ): string[] => {
   const listItemType = resolveListItemType(typeName, ir);
   const parts =
     listItemType === undefined
       ? (() => {
-          const kind = resolvePrimitiveKind(typeName, ir, integers);
+          const kind = resolvePrimitiveKind(typeName, ir, integers, decimal);
           return [
             `defaultValue: ${typedLiteral(kind, wsProcessLiteral(defaultValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
           ];
@@ -1493,7 +1554,7 @@ const defaultValueMetaParts = (
             const trimmed = defaultValue.trim();
             return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
           }
-          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue, integers)}`];
+          return [`defaultValue: ${listLiteral(typeName, ir, defaultValue, integers, decimal)}`];
         })();
   if (!structured) {
     parts.push(`defaultLexical: ${JSON.stringify(defaultValue)}`);
@@ -1705,6 +1766,7 @@ const fieldsMetaFor = (
   ir: XsdIr,
   structured: boolean,
   integers: IntegersMode,
+  decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = dedupeEmissionFields(type).map((field) => {
@@ -1766,12 +1828,19 @@ const fieldsMetaFor = (
       (field.kind === "element" || (structured && st && field.kind === "attribute"))
     ) {
       parts.push(
-        ...defaultValueMetaParts(field.typeName, field.defaultValue, ir, structured, integers),
+        ...defaultValueMetaParts(
+          field.typeName,
+          field.defaultValue,
+          ir,
+          structured,
+          integers,
+          decimal,
+        ),
       );
     }
     if (field.fixedValue !== undefined) {
       parts.push(
-        ...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured, integers),
+        ...fixedValueMetaParts(field.typeName, field.fixedValue, ir, structured, integers, decimal),
       );
     }
     if (field.positionalFixeds !== undefined) {
@@ -2173,6 +2242,7 @@ const tsTypeOfTypeName = (
   seen: Set<QName>,
   dt: { usedTypes: Set<string> } | undefined,
   integers: IntegersMode,
+  decimal: DecimalMode,
 ): string => {
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -2196,6 +2266,7 @@ const tsTypeOfTypeName = (
       case "boolean":
         return "boolean";
       case "decimal":
+        return decimal === "string" ? "string" : "number";
       case "float":
       case "double":
         return "number";
@@ -2212,11 +2283,11 @@ const tsTypeOfTypeName = (
   }
   seen.add(typeName);
   if (simple.kind === "list") {
-    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen, dt, integers));
+    return tsArrayOf(tsTypeOfTypeName(simple.itemType, ir, ifaceName, seen, dt, integers, decimal));
   }
   if (simple.kind === "union") {
     const members = simple.memberTypes.map((mt) =>
-      tsTypeOfTypeName(mt, ir, ifaceName, seen, dt, integers),
+      tsTypeOfTypeName(mt, ir, ifaceName, seen, dt, integers, decimal),
     );
     const unique = [...new Set(members)];
     return unique.length > 0 ? unique.join(" | ") : "unknown";
@@ -2244,10 +2315,10 @@ const tsTypeOfTypeName = (
     if (XSD_STRUCTURED_TYPES.has(baseParts.local)) {
       return "string";
     }
-    const kind = resolvePrimitiveKind(simple.baseType, ir, integers);
+    const kind = resolvePrimitiveKind(simple.baseType, ir, integers, decimal);
     return enumFacets.map((f) => typedLiteral(kind, f.value)).join(" | ");
   }
-  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt, integers);
+  return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt, integers, decimal);
 };
 
 // Escape `*/` and format a description as a JSDoc block.
@@ -2273,6 +2344,7 @@ const tsFieldLine = (
   forceOptional: boolean,
   dt: { usedTypes: Set<string> } | undefined,
   integers: IntegersMode,
+  decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
   polymorphicSlotType?: (field: IrField) => string | undefined,
 ): string => {
@@ -2281,14 +2353,22 @@ const tsFieldLine = (
   if (polymorphicType !== undefined) {
     type = polymorphicType;
   } else if (field.fixedValue === undefined) {
-    const headType = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers);
+    const headType = tsTypeOfTypeName(
+      field.typeName,
+      ir,
+      ifaceName,
+      new Set(),
+      dt,
+      integers,
+      decimal,
+    );
     const substMembers = membersByHead.get(field.qname) ?? [];
     // The field accepts any substitution-group member: the TS type is the
     // union of the member types and the head type (deduped).
     const types = [
       ...new Set([
         ...substMembers.map((m) =>
-          tsTypeOfTypeName(m.typeName, ir, ifaceName, new Set(), dt, integers),
+          tsTypeOfTypeName(m.typeName, ir, ifaceName, new Set(), dt, integers, decimal),
         ),
         headType,
       ]),
@@ -2302,10 +2382,10 @@ const tsFieldLine = (
       type = st.tsType;
     } else {
       type = typedLiteral(
-        resolvePrimitiveKind(field.typeName, ir, integers),
+        resolvePrimitiveKind(field.typeName, ir, integers, decimal),
         wsProcessLiteral(
           field.fixedValue,
-          resolvePrimitiveKind(field.typeName, ir, integers) === "string"
+          resolvePrimitiveKind(field.typeName, ir, integers, decimal) === "string"
             ? effectiveWhiteSpace(field.typeName, ir)
             : undefined,
         ),
@@ -2314,7 +2394,7 @@ const tsFieldLine = (
   } else {
     // List-typed fixed: the schema keeps the list type (the constraint is a
     // refine, not a literal), so the interface does too.
-    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers);
+    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers, decimal);
   }
   if (field.nillable) {
     type += " | null";
@@ -2382,6 +2462,7 @@ export const TS_TYPE_RESERVED = new Set([
   "xsdTotalDigits",
   "xsdFractionDigits",
   "xsdPattern",
+  "xsdDecimalLexical",
   "XmlMeta",
   "XmlFieldMeta",
   "XmlChoiceMeta",
@@ -2455,6 +2536,9 @@ export type IrToZodOptions = {
   // magnitude but breaks JSON.stringify. Bounds beyond ±MAX_SAFE_INTEGER
   // (long/unsignedLong) are only enforced in "bigint" mode.
   integers?: "number" | "bigint";
+  // Where xs:decimal lands: "number" (default) is float64, lossy beyond ~16
+  // significant digits; "string" keeps the exact canonical decimal lexical.
+  decimal?: "number" | "string";
 };
 
 export const irToZod = (
@@ -2463,6 +2547,7 @@ export const irToZod = (
 ): { schemas: string; warnings: string[] } => {
   const structured = opts?.datatypes === "structured";
   const integers: IntegersMode = opts?.integers ?? "number";
+  const decimal: DecimalMode = opts?.decimal ?? "number";
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([
     ...Object.keys(ir.simpleTypes),
@@ -2527,6 +2612,7 @@ export const irToZod = (
     usedHelpers,
     structured,
     integers,
+    decimal,
     datatypeCtx,
   };
   const sortedSimpleTypes = sortSimpleTypes(ir);
@@ -2708,6 +2794,7 @@ export const irToZod = (
         ir,
         structured,
         integers,
+        decimal,
         membersByHead,
       );
       fieldsEntriesByType.set(t.name, fieldsEntries);
@@ -2933,6 +3020,7 @@ export const irToZod = (
               structured,
               usedHelpers,
               integers,
+              decimal,
             ),
             field.description,
           )}`,
@@ -3032,6 +3120,7 @@ export const irToZod = (
             field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
             datatypeCtx,
             integers,
+            decimal,
             membersByHead,
             (f) =>
               polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
@@ -3083,7 +3172,7 @@ export const irToZod = (
             baseExpr,
             simpleType.facets,
             usage,
-            resolvePrimitiveKind(simpleType.name, ir, integers),
+            resolvePrimitiveKind(simpleType.name, ir, integers, decimal),
             resolveBuiltinLocal(simpleType.name, ir),
             structured,
             usedHelpers,
@@ -3166,6 +3255,7 @@ export const irToZod = (
               structured,
               usedHelpers,
               integers,
+              decimal,
             ),
             field.description,
           )}`,
@@ -3288,7 +3378,14 @@ export const irToZod = (
     }
     if (rootDef.defaultValue !== undefined) {
       rootMeta.push(
-        ...defaultValueMetaParts(rootDef.typeName, rootDef.defaultValue, ir, structured, integers),
+        ...defaultValueMetaParts(
+          rootDef.typeName,
+          rootDef.defaultValue,
+          ir,
+          structured,
+          integers,
+          decimal,
+        ),
       );
     }
     if (rootDef.fixedValue !== undefined) {
@@ -3299,6 +3396,7 @@ export const irToZod = (
           ir,
           structured,
           integers,
+          decimal,
           true,
         ),
       );
