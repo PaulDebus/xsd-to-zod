@@ -41,7 +41,26 @@ export type Cardinality = {
   maxOccurs: number | "unbounded";
 };
 
-export type FieldKind = "attribute" | "element" | "text";
+export type FieldKind = "attribute" | "element" | "text" | "choice";
+
+/** One branch of an ergonomically emitted repeated choice (codegen-only). */
+export type ErgoChoiceBranch = {
+  /** Result-object key of the tagged item (`{ A: value }`). */
+  tag: string;
+  field: IrField;
+};
+
+/**
+ * Codegen-only synthetic field: a repeated xs:choice emitted as one array of
+ * single-key tagged objects. Replaces the per-branch element fields in the
+ * emitted shape; the IR keeps the original fields.
+ */
+export type ErgoChoice = {
+  group: string;
+  /** Result-object key of the array. */
+  key: string;
+  branches: ErgoChoiceBranch[];
+};
 
 export type IrField = Cardinality & {
   kind: FieldKind;
@@ -80,6 +99,8 @@ export type IrField = Cardinality & {
   /** Raw xs:element block lexical ("#all" or a list of extension/restriction/
       substitution), with the file's blockDefault already applied. */
   block?: string;
+  /** Set on the synthetic "choice" field of an ergonomic repeated choice. */
+  ergoChoice?: ErgoChoice;
 };
 
 export type Facet =

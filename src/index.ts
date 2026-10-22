@@ -40,6 +40,8 @@ export type {
   Diagnostic,
   DiagnosticKind,
   ElementDef,
+  ErgoChoice,
+  ErgoChoiceBranch,
   Facet,
   FieldKind,
   IrField,
@@ -48,11 +50,14 @@ export type {
   XsdIr,
 } from "./types.js";
 export type {
+  XmlChoiceArrayMeta,
   XmlChoiceBranchMeta,
+  XmlChoiceFieldMeta,
   XmlChoiceMeta,
   XmlFieldMeta,
   XmlLexicalFacets,
   XmlMeta,
+  XmlWrappedMeta,
 } from "./xmlMeta.js";
 export { xmlRegistry } from "./xmlMeta.js";
 export {

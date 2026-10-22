@@ -1384,9 +1384,13 @@ const readObject = (
   // them belongs to that field, not to a sibling head's substitution group
   // (the exact particle match wins over substitution-group membership).
   const exactElementQNames = new Set(
-    Object.values(fields)
-      .filter((f) => f.kind === "element")
-      .map((f) => f.qname),
+    Object.values(fields).flatMap((f) =>
+      f.kind === "element"
+        ? [f.qname]
+        : f.kind === "choice"
+          ? (f.choice?.branches.map((b) => b.qname) ?? [])
+          : [],
+    ),
   );
   // Null prototype: an XSD element named __proto__ must become an own property,
   // not a silent prototype mutation.
@@ -1395,6 +1399,7 @@ const readObject = (
   const hasTextField = fieldList.some((f) => f.kind === "text");
   const hasAny = fieldList.some((f) => f.kind === "any");
   const hasAnyAttribute = fieldList.some((f) => f.kind === "anyAttribute");
+  const hasChoice = fieldList.some((f) => f.kind === "choice");
   // Recording document order is dead work unless it can differ from schema
   // order: mixed content always takes the schema-order path, and a single
   // element field without wildcards or substitution members replays as its
@@ -1406,6 +1411,7 @@ const readObject = (
     !hasTextField &&
     (forceOrderRecording ||
       hasAny ||
+      hasChoice ||
       fieldList.filter((f) => f.kind === "element").length > 1 ||
       fieldList.some((f) => f.kind === "element" && (f.substitutes?.length ?? 0) > 0));
   const elementReads: ElementRead[] = [];
@@ -1424,7 +1430,11 @@ const readObject = (
       continue;
     }
     const fieldQnames =
-      fieldMeta.kind === "element" ? [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])] : [];
+      fieldMeta.kind === "element"
+        ? [fieldMeta.qname, ...(fieldMeta.substitutes ?? [])]
+        : fieldMeta.kind === "choice"
+          ? (fieldMeta.choice?.branches.map((b) => b.qname) ?? [])
+          : [];
     // A wildcard whose namespace constraint admits this element can claim the
     // occurrences the field does not keep: a preceding one takes everything
     // but the last (from-end), a following one takes everything but the first
@@ -1442,7 +1452,7 @@ const readObject = (
       anyWildcards.some(
         (w) => w.position !== undefined && w.position <= elementOrdinal && admitsField(w),
       );
-    if (fieldMeta.kind === "element") {
+    if (fieldMeta.kind === "element" || fieldMeta.kind === "choice") {
       elementOrdinal++;
     }
     if (claimFromEnd) {
@@ -1451,17 +1461,26 @@ const readObject = (
       }
     }
     const { present, value, lexical, substQNames, qnameNs, claimed, openXsiTypes, nilAttributes } =
-      readField(
-        fieldMeta,
-        fieldSchema,
-        node,
-        namespaceContext,
-        exactElementQNames,
-        childWalk(walk, key),
-        claimFromEnd,
-        wildcardClaimsOverflow,
-        read,
-      );
+      fieldMeta.kind === "choice"
+        ? readChoiceField(
+            fieldMeta,
+            fieldSchema,
+            node,
+            namespaceContext,
+            childWalk(walk, key),
+            read,
+          )
+        : readField(
+            fieldMeta,
+            fieldSchema,
+            node,
+            namespaceContext,
+            exactElementQNames,
+            childWalk(walk, key),
+            claimFromEnd,
+            wildcardClaimsOverflow,
+            read,
+          );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
       elementReads.push({ key, isArray: analyzeField(fieldSchema).isArray, claimed });
     }
@@ -1643,9 +1662,13 @@ const sweepWildcards = (
   },
 ): void => {
   const knownElements = new Set(
-    fieldList
-      .filter((f) => f.kind === "element")
-      .flatMap((f) => [f.qname, ...(f.substitutes ?? [])]),
+    fieldList.flatMap((f) =>
+      f.kind === "element"
+        ? [f.qname, ...(f.substitutes ?? [])]
+        : f.kind === "choice"
+          ? (f.choice?.branches.map((b) => b.qname) ?? [])
+          : [],
+    ),
   );
   const knownAttributes = new Set(
     fieldList.filter((f) => f.kind === "attribute").map((f) => f.qname),
@@ -1796,6 +1819,26 @@ const readOccurrence = (
     if (nilValue === "true" || nilValue === "1") {
       return { value: null, nilAttributes: nilAttributesOf(childNode, childContext) };
     }
+    // Ergonomic wrapper slot: the value is the wrapper's lone attribute, so
+    // read it directly — the slot's schema is the collapsed scalar.
+    if (fieldMeta.wrapped !== undefined) {
+      const wrapped = fieldMeta.wrapped;
+      const raw = findAttributeValue(childNode, wrapped.qname, childContext);
+      if (raw === undefined) {
+        throw new Error(
+          `element "${splitClark(fieldMeta.qname).local}" is missing its required attribute "${splitClark(wrapped.qname).local}"`,
+        );
+      }
+      return {
+        value: coerceFieldLexical(raw, field, {
+          ...fieldMeta,
+          ...(wrapped.datatype === undefined ? {} : { datatype: wrapped.datatype }),
+          ...(wrapped.qnameValue === true ? { qnameValue: true } : {}),
+        }),
+        lexical: String(raw),
+        qnameNs: wrapped.qnameValue ? qnameBindingsOf(String(raw), childContext) : undefined,
+      };
+    }
     const xsiUnion = xsiTypeUnionDef(field.itemSchema);
     if (xsiUnion !== undefined) {
       return {
@@ -1863,6 +1906,11 @@ const readOccurrence = (
   }
 
   // Scalar entry: the parser yields text-only elements as bare strings.
+  if (entry === "" && fieldMeta.wrapped !== undefined) {
+    throw new Error(
+      `element "${splitClark(fieldMeta.qname).local}" is missing its required attribute "${splitClark(fieldMeta.wrapped.qname).local}"`,
+    );
+  }
   if (entry === "") {
     const empty = substituteEmpty(field, fieldMeta, position);
     if (empty.substituted) {
@@ -1919,6 +1967,132 @@ type FieldRead = {
    * produced value(s) — readObject maps them onto document-order positions.
    */
   claimed?: ClaimedOccurrence[];
+};
+
+// Branch property schema of an ergonomic repeated-choice array, keyed by the
+// tagged item's tag. The items are strict objects with one property each, so
+// the branch's own schema is that property's schema.
+const choiceBranchSchema = (fieldSchema: AnySchema, tag: string): AnySchema | undefined => {
+  const arrayDef = defAs<z.core.$ZodArrayDef>(unwrapModifiers(fieldSchema)._zod.def, "array");
+  if (arrayDef === undefined) {
+    return undefined;
+  }
+  const unionDef = unwrapModifiers(arrayDef.element)._zod.def;
+  if (!("options" in unionDef)) {
+    return undefined;
+  }
+  for (const option of (unionDef as z.core.$ZodUnionDef).options) {
+    const schema = objectDefOf(option as AnySchema)?.shape?.[tag];
+    if (schema !== undefined) {
+      return schema as AnySchema;
+    }
+  }
+  return undefined;
+};
+
+// A parsed node's children as individual [rawKey, rawValue] pairs in document
+// order. The parser groups repeated tags under one key, so the tracked
+// attachment order is what preserves `a b a`; hand-built nodes fall back to
+// expanding grouped values in place.
+const orderedNodeEntries = (node: Record<string, unknown>): [string, unknown][] => {
+  const tracked = documentOrderTracker.childOrderOf(node);
+  if (tracked !== undefined) {
+    return tracked;
+  }
+  const entries: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (key.startsWith("@_") || key === "#text" || key === "#cdata") {
+      entries.push([key, value]);
+      continue;
+    }
+    for (const item of toArray(value)) {
+      entries.push([key, item]);
+    }
+  }
+  return entries;
+};
+
+// Read an ergonomic repeated choice: one tagged item per branch occurrence,
+// in document order. Occurrences are claimed like element fields so the
+// serializer can replay the surrounding wildcard/field interleaving.
+const readChoiceField = (
+  fieldMeta: XmlFieldMeta,
+  fieldSchema: AnySchema,
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+  walk?: WalkCtx,
+  read: ReadCtx = NO_LEXICAL_RETENTION,
+): FieldRead => {
+  const choice = fieldMeta.choice;
+  if (choice === undefined) {
+    throw new Error(`choice field "${fieldMeta.qname}" carries no branch metadata`);
+  }
+  const expected = choice.branches.map((branch) => ({
+    branch,
+    clark: splitClark(branch.qname),
+  }));
+  const occurrences: {
+    value: unknown;
+    lexical?: string | undefined;
+    qnameNs?: Record<string, string> | undefined;
+    claimed: ClaimedOccurrence;
+  }[] = [];
+  for (const [rawKey, rawValue] of orderedNodeEntries(node)) {
+    if (rawKey.startsWith("@_") || rawKey === "#text" || rawKey === "#cdata") {
+      continue;
+    }
+    const { prefix, local } = splitQName(rawKey);
+    const namespace = nsForElement(prefix, contextFor(rawValue, namespaceContext));
+    const match = expected.find(
+      ({ clark }) =>
+        clark.local === local &&
+        (namespace === clark.namespace || (clark.namespace === "" && !prefix)),
+    );
+    if (match === undefined) {
+      continue;
+    }
+    const branchSchema = choiceBranchSchema(fieldSchema, match.branch.tag);
+    if (branchSchema === undefined) {
+      throw new Error(
+        `choice field "${fieldMeta.qname}" has no schema for branch "${match.branch.tag}"`,
+      );
+    }
+    const branchMeta: XmlFieldMeta = {
+      kind: "element",
+      qname: match.branch.qname,
+      ...(match.branch.datatype === undefined ? {} : { datatype: match.branch.datatype }),
+      ...(match.branch.qnameValue === true ? { qnameValue: true } : {}),
+    };
+    const occurrence = readOccurrence(
+      analyzeField(branchSchema),
+      branchMeta,
+      rawValue,
+      namespaceContext,
+      childWalk(childWalk(walk, occurrences.length), match.branch.tag),
+      undefined,
+      read,
+    );
+    const item: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    item[match.branch.tag] = occurrence.value;
+    occurrences.push({
+      value: item,
+      lexical: occurrence.lexical,
+      qnameNs: occurrence.qnameNs,
+      claimed: { rawKey, rawValue, index: occurrences.length },
+    });
+  }
+  if (occurrences.length === 0) {
+    return { present: false, value: undefined };
+  }
+  const lexicals = occurrences.map((o) => o.lexical);
+  const qnameNs = occurrences.map((o) => o.qnameNs);
+  return {
+    present: true,
+    value: occurrences.map((o) => o.value),
+    lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
+    qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
+    claimed: occurrences.map((o) => o.claimed),
+  };
 };
 
 const readField = (
@@ -2745,6 +2919,32 @@ const writeObjectFields = (
       const attrStr = nilAttrs.length > 0 ? ` ${nilAttrs.join(" ")}` : "";
       return `<${localName}${attrStr} xsi:nil="true"/>`;
     }
+    if (fieldMeta.wrapped !== undefined) {
+      const wrapped = fieldMeta.wrapped;
+      const storedItem = Array.isArray(stored) ? stored[i] : storedSingle;
+      const leaf = serializeStoredLeaf(
+        {
+          kind: wrapped.kind,
+          qname: wrapped.qname,
+          ...(wrapped.datatype === undefined ? {} : { datatype: wrapped.datatype }),
+          ...(wrapped.qnameValue === true ? { qnameValue: true } : {}),
+        },
+        itemSchema,
+        item,
+        storedItem,
+      );
+      const qnameNs = wrapped.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+      const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+      const declared = declareQNamePrefixes(
+        leaf,
+        typeof bindings === "object" ? bindings : undefined,
+        ctx,
+      );
+      if (wrapped.kind === "text") {
+        return `<${localName}>${declared}</${localName}>`;
+      }
+      return `<${localName} ${elementName(wrapped.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"/>`;
+    }
     if (fieldMeta.open) {
       const inner = openSerialize(item, ctx);
       usesXsi = usesXsi || inner.usesXsi;
@@ -2804,6 +3004,71 @@ const writeObjectFields = (
     return `<${localName}${typeAttr}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
   };
 
+  // Build one ergonomic repeated-choice item (index i into the field's tagged
+  // array): the tag picks the branch element, the single property carries its
+  // value. Object branches recurse through writeObjectFields.
+  const emitChoiceItem = (
+    key: string,
+    fieldMeta: XmlFieldMeta,
+    fieldSchema: AnySchema,
+    i: number,
+  ): string | undefined => {
+    const choice = fieldMeta.choice;
+    if (choice === undefined) {
+      return undefined;
+    }
+    const value = obj[key];
+    if (value === undefined) {
+      return undefined;
+    }
+    const items = Array.isArray(value) ? value : [value];
+    const item = items[i];
+    if (item === undefined) {
+      return undefined;
+    }
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`choice field "${key}" holds an untagged item`);
+    }
+    const record = item as Record<string, unknown>;
+    const tag = Object.keys(record)[0];
+    const branch = choice.branches.find((b) => b.tag === tag);
+    if (tag === undefined || branch === undefined) {
+      throw new Error(`choice field "${key}" item has no known branch tag`);
+    }
+    const branchSchema = choiceBranchSchema(fieldSchema, tag);
+    if (branchSchema === undefined) {
+      throw new Error(`choice field "${key}" has no schema for branch "${tag}"`);
+    }
+    const leafValue = record[tag];
+    const localName = elementName(branch.qname, ctx.prefixMap, ctx.qnameNs);
+    if (leafValue === null) {
+      usesXsi = true;
+      return `<${localName} xsi:nil="true"/>`;
+    }
+    if (hasObjectShape(branchSchema) && typeof leafValue === "object") {
+      const inner = writeObjectFields(branchSchema, leafValue as Record<string, unknown>, ctx);
+      usesXsi = usesXsi || inner.usesXsi;
+      const attrStr = inner.attributes.length > 0 ? ` ${inner.attributes.join(" ")}` : "";
+      return `<${localName}${attrStr}>${inner.elements.join("")}</${localName}>`;
+    }
+    const branchMeta: XmlFieldMeta = {
+      kind: "element",
+      qname: branch.qname,
+      ...(branch.datatype === undefined ? {} : { datatype: branch.datatype }),
+      ...(branch.qnameValue === true ? { qnameValue: true } : {}),
+    };
+    const stored = lexicals?.get(key);
+    const storedItem = Array.isArray(stored) ? stored[i] : undefined;
+    const leaf = serializeStoredLeaf(branchMeta, branchSchema, leafValue, storedItem);
+    const qnameNs = branch.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+    const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+    return `<${localName}>${declareQNamePrefixes(
+      leaf,
+      typeof bindings === "object" ? bindings : undefined,
+      ctx,
+    )}</${localName}>`;
+  };
+
   // Parsed data that still matches its parse-time recording replays the
   // children in document order (wildcard extras included) so interleaved
   // repeated compositors survive the round-trip. Mutated or hand-built data
@@ -2824,6 +3089,18 @@ const writeObjectFields = (
       }
       if (fieldMeta.kind === "attribute") {
         emitAttribute(key, fieldMeta, fieldSchema);
+        continue;
+      }
+      if (fieldMeta.kind === "choice") {
+        const choiceValue = obj[key];
+        if (choiceValue === undefined) {
+          continue;
+        }
+        const choiceItems = Array.isArray(choiceValue) ? choiceValue : [choiceValue];
+        buffered.set(
+          key,
+          choiceItems.map((_, i) => emitChoiceItem(key, fieldMeta, fieldSchema, i)),
+        );
         continue;
       }
       if (fieldMeta.kind !== "element") {
@@ -2868,7 +3145,7 @@ const writeObjectFields = (
     if (!fieldSchema) {
       continue;
     }
-    if (fieldMeta.kind === "element") {
+    if (fieldMeta.kind === "element" || fieldMeta.kind === "choice") {
       // Extras of a wildcard sitting at this ordinal precede the field.
       for (const wildcard of anyWildcards) {
         if (wildcard.position === elementOrdinal) {
@@ -2890,6 +3167,20 @@ const writeObjectFields = (
       const stored = lexicals?.get(key);
       const storedSingle = typeof stored === "string" ? stored : undefined;
       elements.push(serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle));
+      continue;
+    }
+
+    if (fieldMeta.kind === "choice") {
+      if (value === undefined) {
+        continue;
+      }
+      const choiceItems = Array.isArray(value) ? value : [value];
+      for (let i = 0; i < choiceItems.length; i++) {
+        const emitted = emitChoiceItem(key, fieldMeta, fieldSchema, i);
+        if (emitted !== undefined) {
+          elements.push(emitted);
+        }
+      }
       continue;
     }
 

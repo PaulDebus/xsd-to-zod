@@ -239,6 +239,7 @@ type GenerateOptions = {
   datatypes?: string;
   integers?: string;
   decimal?: string;
+  ergonomic?: boolean;
   fetch?: boolean;
   frozen?: boolean;
   offline?: boolean;
@@ -434,7 +435,12 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
   }
   warnUnenforcedConstructs(ir);
 
-  const { schemas, warnings } = irToZod(ir, { datatypes, integers, decimal });
+  const { schemas, warnings } = irToZod(ir, {
+    datatypes,
+    integers,
+    decimal,
+    ergonomic: opts.ergonomic === true,
+  });
   reportWarnings(warnings);
 
   const outDir = resolve(out);
@@ -573,6 +579,10 @@ const program = new Command()
   .option(
     "--decimal <mode>",
     'Mapping for xs:decimal: "number" (default; float64, lossy beyond ~16 significant digits) or "string" (exact canonical decimal lexical)',
+  )
+  .option(
+    "--ergonomic",
+    "Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars and emit repeated choices as one tagged array",
   )
   .option("--fetch", "Resolve remote imports/includes for local schema inputs")
   .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
