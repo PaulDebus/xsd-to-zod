@@ -569,6 +569,54 @@ const toFieldKey = (field: IrField): string => {
   return field.kind === "attribute" ? `@${local}` : local;
 };
 
+type FieldKeyFallback = {
+  typeName: QName;
+  field: IrField;
+  wanted: string;
+  kept: string;
+};
+
+// 1.0 naming (previewed behind --ergonomic): attribute keys lose the
+// structural "@" prefix. An attribute whose bare key would shadow a sibling
+// field keeps its prefixed key — the element wins the bare name — and the
+// fallback is reported as a warning plus a comment at the emitted artifact.
+const ergonomicAttributeKeys = (ir: XsdIr): { ir: XsdIr; fallbacks: FieldKeyFallback[] } => {
+  const fallbacks: FieldKeyFallback[] = [];
+  let changed = false;
+  const complexTypes: Record<string, ComplexTypeDef> = {};
+  for (const [name, type] of Object.entries(ir.complexTypes)) {
+    // Keys an attribute's stripped name must not shadow. The synthetic
+    // ergonomic choice key is allocated later and avoids these too; xsiType is
+    // the runtime's polymorphic discriminant, spread onto variant schemas.
+    const reserved = new Set<string>(["xsiType"]);
+    for (const field of type.fields) {
+      if (field.kind !== "attribute") {
+        reserved.add(toFieldKey(field));
+      }
+    }
+    const fields = type.fields.map((field) => {
+      if (field.kind !== "attribute") {
+        return field;
+      }
+      const kept = toFieldKey(field);
+      const wanted = kept.startsWith("@") ? kept.slice(1) : kept;
+      if (reserved.has(wanted)) {
+        fallbacks.push({ typeName: type.name, field, wanted, kept });
+        return field;
+      }
+      reserved.add(wanted);
+      if (wanted === kept) {
+        return field;
+      }
+      changed = true;
+      return { ...field, fieldKey: wanted };
+    });
+    const typeChanged = fields.some((field, index) => field !== type.fields[index]);
+    complexTypes[name] = typeChanged ? { ...type, fields } : type;
+  }
+  return { ir: changed ? { ...ir, complexTypes } : ir, fallbacks };
+};
+
 // xs:annotation/xs:documentation surfaces as zod .describe() — IDE tooltips and
 // downstream form generators pick it up from the schema.
 const withDescription = (expr: string, description: string | undefined): string =>
@@ -2845,9 +2893,11 @@ export type IrToZodOptions = {
 };
 
 export const irToZod = (
-  ir: XsdIr,
+  irInput: XsdIr,
   opts?: IrToZodOptions,
 ): { schemas: string; warnings: string[] } => {
+  const fieldKeyNaming = opts?.ergonomic === true ? ergonomicAttributeKeys(irInput) : undefined;
+  const ir = fieldKeyNaming?.ir ?? irInput;
   const structured = opts?.datatypes === "structured";
   const integers: IntegersMode = opts?.integers ?? "number";
   const decimal: DecimalMode = opts?.decimal ?? "number";
@@ -3280,8 +3330,31 @@ export const irToZod = (
       ? ""
       : `// Friendly name "${fallback.wanted}" collides with another generated identifier; the synthetic "anonymous_" name is kept.\n`;
   };
+  // Attribute keys that kept their "@" prefix because stripping it would shadow
+  // a sibling field. The interface carries the note at the field; in js mode
+  // (no interfaces) the type const carries it.
+  const fieldKeyComments = new Map<IrField, string>();
+  const typeKeyComments = new Map<QName, string[]>();
+  for (const fallback of fieldKeyNaming?.fallbacks ?? []) {
+    const local = clarkToLocal(fallback.field.qname);
+    fieldKeyComments.set(
+      fallback.field,
+      `Attribute "${local}" keeps the "@" prefix: the bare key "${fallback.wanted}" is already taken in this type.`,
+    );
+    const comments = typeKeyComments.get(fallback.typeName) ?? [];
+    comments.push(
+      `Attribute "${local}" keeps the "@" prefix: the bare key "${fallback.wanted}" is already taken in this type.`,
+    );
+    typeKeyComments.set(fallback.typeName, comments);
+  }
+  const typeKeyComment = (qname: QName): string => {
+    if (opts?.js !== true) {
+      return "";
+    }
+    return (typeKeyComments.get(qname) ?? []).map((comment) => `// ${comment}\n`).join("");
+  };
   const withNamingComment = (qname: QName, line: string): string =>
-    `${namingComment(qname)}${line}`;
+    `${namingComment(qname)}${typeKeyComment(qname)}${line}`;
 
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   // The warning scrolls away; the comment lives with the artifact.
@@ -3541,8 +3614,8 @@ export const irToZod = (
       claimTypeName(complexType.name);
       const multiBranch = choiceOptionalGroups(complexType);
       const props = emissionFields(complexType)
-        .map((field) =>
-          tsFieldLine(
+        .map((field) => {
+          const line = tsFieldLine(
             field,
             ir,
             ifaceName,
@@ -3554,8 +3627,10 @@ export const irToZod = (
             ergonomic,
             (f) =>
               polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
-          ),
-        )
+          );
+          const comment = fieldKeyComments.get(field);
+          return comment === undefined ? line : `  // ${comment}\n${line}`;
+        })
         .join("\n");
       const indexSignature =
         complexType.wildcards && complexType.wildcards.length > 0
@@ -3848,10 +3923,16 @@ export const irToZod = (
     `import { z } from 'zod';\n` +
     `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
 
-  const warnings = [...namingFallbacks].map(
-    ([qname, f]) =>
-      `[naming-collision] ${qname}: friendly name "${f.wanted}" is already taken in the generated module; kept the synthetic name "${f.kept}"`,
-  );
+  const warnings = [
+    ...[...namingFallbacks].map(
+      ([qname, f]) =>
+        `[naming-collision] ${qname}: friendly name "${f.wanted}" is already taken in the generated module; kept the synthetic name "${f.kept}"`,
+    ),
+    ...(fieldKeyNaming?.fallbacks ?? []).map(
+      (f) =>
+        `[naming-collision] ${f.typeName}: attribute "${clarkToLocal(f.field.qname)}" keeps its "@" key because the bare key "${f.wanted}" is already taken in the type`,
+    ),
+  ];
   return { schemas: `${schemaLines.join("\n")}\n`, warnings };
 };
 

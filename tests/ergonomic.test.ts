@@ -49,6 +49,12 @@ describe("--ergonomic output shape", () => {
     expect(source).not.toContain(`"count": ValueType;`);
   });
 
+  it("drops the @ prefix from attribute keys", async () => {
+    const source = await generatedFor(true);
+    expect(source).toContain(`"text": number;`);
+    expect(source).not.toContain(`"@text"`);
+  });
+
   it("keeps the wrapper object without the flag", async () => {
     const source = await generatedFor(false);
     expect(source).toContain(`"count": ValueType;`);
@@ -175,5 +181,83 @@ describe("--ergonomic output shape (optional and object branches)", () => {
     const parsed = parseXml(schema, `<root><w text="1.50"/><w text="2.25"/></root>`);
     expect(parsed).toEqual({ w: ["1.50", "2.25"] });
     expect(serializeXml(schema, parsed)).toBe(`<root><w text="1.50"/><w text="2.25"/></root>`);
+  });
+});
+
+const ATTRIBUTE_NAMING_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="Item">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="xs:string"/>
+    <xs:attribute name="xsiType" type="xs:string"/>
+    <xs:attribute name="id" type="xs:string" use="required"/>
+  </xs:complexType>
+  <xs:element name="root" type="Item"/>
+</xs:schema>`;
+
+const WILDCARD_ATTRIBUTE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="Item">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:string"/>
+    <xs:anyAttribute namespace="##any" processContents="lax"/>
+  </xs:complexType>
+  <xs:element name="root" type="Item"/>
+</xs:schema>`;
+
+describe("--ergonomic attribute keys", () => {
+  it("keeps @ on an attribute whose bare key collides with an element", async () => {
+    let source = "";
+    let warnings: string[] = [];
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, ATTRIBUTE_NAMING_XSD);
+      const result = irToZod(await parseXsd([file]), { ergonomic: true });
+      source = result.schemas;
+      warnings = result.warnings;
+    });
+    expect(source).toContain(`"id": string;`);
+    expect(source).toContain(`"name": string;`);
+    expect(source).toContain(`"@name"?: string | undefined;`);
+    expect(source).toContain(`"@xsiType"?: string | undefined;`);
+    expect(source).toContain(`// Attribute "name" keeps the "@" prefix`);
+    expect(warnings.some((w) => w.includes(`[naming-collision]`) && w.includes(`"name"`))).toBe(
+      true,
+    );
+  });
+
+  it("round-trips a colliding attribute and a clean attribute", async () => {
+    let mod: Record<string, unknown> = {};
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, ATTRIBUTE_NAMING_XSD);
+      mod = await generateAndImport([file], { ergonomic: true });
+    });
+    const schema = mod["rootSchema"] as never;
+    const xml = `<root name="attr" xsiType="t" id="x"><name>elem</name></root>`;
+    const parsed = parseXml(schema, xml);
+    expect(parsed).toEqual({ name: "elem", "@name": "attr", "@xsiType": "t", id: "x" });
+    expect(serializeXml(schema, parsed)).toBe(xml);
+  });
+
+  it("keeps @ on wildcard-captured attributes", async () => {
+    let mod: Record<string, unknown> = {};
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, WILDCARD_ATTRIBUTE_XSD);
+      mod = await generateAndImport([file], { ergonomic: true });
+    });
+    const schema = mod["rootSchema"] as never;
+    const xml = `<root id="1" extra="yes"><name>x</name></root>`;
+    const parsed = parseXml(schema, xml);
+    expect(parsed).toEqual({ name: "x", id: "1", "@extra": "yes" });
+    const serialized = serializeXml(schema, parsed);
+    expect(serialized).toContain('id="1"');
+    expect(serialized).toContain('extra="yes"');
+    expect(parseXml(schema, serialized)).toEqual(parsed);
   });
 });
