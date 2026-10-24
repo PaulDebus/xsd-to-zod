@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { IrToZodOptions } from "../src/index.js";
 import { parseXsd } from "../src/parseXsd.js";
 import { parseXml, safeParseXml, serializeXml } from "../src/runtime.js";
 import { findRootSchema, generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
@@ -9,12 +10,12 @@ import { findRootSchema, generateAndImport, onlyRootSchema, withTempDirAsync } f
 // Identity constraints (xs:key / xs:keyref / xs:unique): enforced by the zod
 // tier from 1.0, on by default, surfaced as ZodError issues.
 
-const schemaFor = async (xsd: string, xml?: string): Promise<z.ZodType> => {
+const schemaFor = async (xsd: string, xml?: string, opts?: IrToZodOptions): Promise<z.ZodType> => {
   let schema: z.ZodType | undefined;
   await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, xsd);
-    const mod = await generateAndImport([file]);
+    const mod = await generateAndImport([file], opts);
     schema = xml === undefined ? onlyRootSchema(mod) : findRootSchema(mod, xml);
   });
   if (schema === undefined) {
@@ -882,5 +883,109 @@ describe("identity constraints", () => {
     expect(
       expectFailure(safeParseXml(schema, `<root><row id="1"/><row id="1"/></root>`)),
     ).toContain('xs:key "rowKey"');
+  });
+});
+
+describe("identity constraints with the ergonomic output shape", () => {
+  const WRAPPER_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="IdValue">
+    <xs:attribute name="id" type="xs:int" use="required"/>
+  </xs:complexType>
+  <xs:element name="catalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" type="IdValue" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="itemUnique">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>`;
+
+  const CHOICE_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="a" type="xs:int"/>
+        <xs:element name="b" type="xs:string"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:unique name="aUnique">
+      <xs:selector xpath="a"/>
+      <xs:field xpath="."/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>`;
+
+  it("navigates a collapsed wrapper slot as its element occurrence", async () => {
+    const schema = await schemaFor(WRAPPER_XSD, undefined, { ergonomic: true });
+    const parsed = parseXml(schema, `<catalog><item id="1"/><item id="2"/></catalog>`);
+    expect(parsed).toEqual({ item: [1, 2] });
+    // Value-space comparison still applies across the collapsed scalars.
+    expect(
+      expectFailure(safeParseXml(schema, `<catalog><item id="1"/><item id="01"/></catalog>`)),
+    ).toContain('xs:unique "itemUnique"');
+  });
+
+  it("navigates a repeated choice array by branch tag", async () => {
+    const schema = await schemaFor(CHOICE_XSD, undefined, { ergonomic: true });
+    const parsed = parseXml(schema, `<root><a>1</a><b>x</b><a>2</a></root>`);
+    expect(parsed).toEqual({ _choice: [{ a: 1 }, { b: "x" }, { a: 2 }] });
+    expect(expectFailure(safeParseXml(schema, `<root><a>1</a><b>x</b><a>1</a></root>`))).toContain(
+      'xs:unique "aUnique"',
+    );
+  });
+
+  it("still evaluates constraints nested inside a choice branch", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="a">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="group">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="item" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="id" type="xs:string" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+                <xs:unique name="itemUnique">
+                  <xs:selector xpath="item"/>
+                  <xs:field xpath="@id"/>
+                </xs:unique>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="b" type="xs:string"/>
+      </xs:choice>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      undefined,
+      { ergonomic: true },
+    );
+    expect(
+      safeParseXml(
+        schema,
+        `<root><a><group><item id="1"/><item id="2"/></group></a><b>x</b></root>`,
+      ).success,
+    ).toBe(true);
+    expect(
+      expectFailure(
+        safeParseXml(schema, `<root><a><group><item id="1"/><item id="1"/></group></a></root>`),
+      ),
+    ).toContain('xs:unique "itemUnique"');
   });
 });

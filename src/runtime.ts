@@ -14,7 +14,14 @@ import {
 import { splitClark, splitQName, trySplitClark } from "./qname.js";
 import type { IdentityConstraint, IdentityPath, QName } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
-import { type XmlFieldMeta, type XmlLexicalFacets, type XmlMeta, xmlRegistry } from "./xmlMeta.js";
+import {
+  type XmlChoiceFieldMeta,
+  type XmlFieldMeta,
+  type XmlLexicalFacets,
+  type XmlMeta,
+  type XmlWrappedMeta,
+  xmlRegistry,
+} from "./xmlMeta.js";
 import { XSD_BIGINT_TYPE_NAMES, XSD_SAFE_INTEGER_TYPE_NAMES } from "./xsdBuiltins.js";
 import {
   canonicalDecimalLexical,
@@ -3284,6 +3291,12 @@ type IdentityNode = {
   xsiType?: string | undefined;
   /** Attributes of a nil occurrence — nil collapses content, not attributes. */
   nilAttributes?: NilAttr[] | undefined;
+  /**
+   * Set when this element occurrence is a collapsed value wrapper: the node
+   * stands for the wrapper element, and `value` is its single attribute's
+   * scalar (see XmlWrappedMeta).
+   */
+  wrapped?: XmlWrappedMeta | undefined;
 };
 
 // One element occurrence's identity-constraint table: per constraint name,
@@ -3404,6 +3417,28 @@ const identityStepMatches = (
   return stepNs === undefined || splitClark(qname ?? "{}").namespace === stepNs;
 };
 
+// One item of an ergonomic repeated-choice array read as its branch
+// occurrence: the tag present on the item selects the branch qname/schema,
+// exactly as the parse walk built it.
+const identityChoiceBranch = (
+  fieldSchema: AnySchema,
+  branch: XmlChoiceFieldMeta,
+  item: Record<string, unknown>,
+): { value: unknown; schema: AnySchema | undefined } | undefined => {
+  if (!(branch.tag in item)) {
+    return undefined;
+  }
+  const value = item[branch.tag];
+  let schema = choiceBranchSchema(fieldSchema, branch.tag);
+  if (schema !== undefined) {
+    const union = xsiTypeUnionDef(schema);
+    if (union !== undefined) {
+      schema = identityXsiMember(union.options as readonly AnySchema[], value, schema);
+    }
+  }
+  return { value, schema };
+};
+
 // Element children of a data node: declared fields via the fields meta, plus
 // open-shape extras, which are keyed by their Clark qname already. Filter by
 // exact step qname, or by namespace for an `ns:*` step (both undefined: all
@@ -3430,17 +3465,43 @@ const identityChildren = (
     const substRecord = substQNameStore.get(obj);
     for (const [key, fieldMeta] of Object.entries(fields)) {
       declaredKeys.add(key);
-      if (fieldMeta.kind !== "element") {
-        continue;
-      }
       const fieldValue = obj[key];
       const fieldSchema = shape[key];
       if (fieldValue === undefined || fieldSchema === undefined) {
         continue;
       }
+      const bindings = qnameNsRecord?.get(key);
+      if (fieldMeta.kind === "choice") {
+        const choice = fieldMeta.choice;
+        if (choice === undefined || !Array.isArray(fieldValue)) {
+          continue;
+        }
+        fieldValue.forEach((item, i) => {
+          if (item === null || typeof item !== "object" || Array.isArray(item)) {
+            return;
+          }
+          const tagged = item as Record<string, unknown>;
+          for (const branch of choice.branches) {
+            const occurrence = identityChoiceBranch(fieldSchema, branch, tagged);
+            if (occurrence === undefined || !matches(branch.qname)) {
+              continue;
+            }
+            out.push({
+              value: occurrence.value,
+              schema: occurrence.schema,
+              qname: branch.qname,
+              path: [...node.path, key, i],
+              qnameNs: Array.isArray(bindings) ? bindings[i] : bindings,
+            });
+          }
+        });
+        continue;
+      }
+      if (fieldMeta.kind !== "element") {
+        continue;
+      }
       const isArray = Array.isArray(fieldValue);
       const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
-      const bindings = qnameNsRecord?.get(key);
       const storedTags = substRecord?.get(key);
       occurrences.forEach((occ, i) => {
         const effectiveQName = ((Array.isArray(storedTags) ? storedTags[i] : storedTags) ??
@@ -3456,6 +3517,7 @@ const identityChildren = (
           qnameNs: Array.isArray(bindings) ? bindings[i] : bindings,
           xsiType: occurrenceAt<string>(openXsiTypeStore, obj, key, i),
           nilAttributes: occurrenceAt<NilAttr[]>(nilAttributeStore, obj, key, i),
+          wrapped: fieldMeta.wrapped,
         });
       });
     }
@@ -3483,6 +3545,18 @@ const identityChildren = (
 };
 
 const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode | undefined => {
+  if (node.wrapped !== undefined) {
+    if (node.wrapped.kind !== "attribute" || node.wrapped.qname !== qname) {
+      return undefined;
+    }
+    return {
+      value: node.value,
+      schema: node.schema,
+      qname,
+      path: node.path,
+      qnameNs: node.qnameNs,
+    };
+  }
   const { value } = node;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     // A nil element's attributes survive the collapse to null in the side
@@ -3552,6 +3626,20 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
 const identityAttributeNodes = (node: IdentityNode, namespace?: string): IdentityNode[] => {
   const inNamespace = (clark: string): boolean =>
     namespace === undefined || splitClark(clark).namespace === namespace;
+  if (node.wrapped !== undefined) {
+    if (node.wrapped.kind !== "attribute" || !inNamespace(node.wrapped.qname)) {
+      return [];
+    }
+    return [
+      {
+        value: node.value,
+        schema: node.schema,
+        qname: node.wrapped.qname,
+        path: node.path,
+        qnameNs: node.qnameNs,
+      },
+    ];
+  }
   const { value } = node;
   // value === null holds only for xsi:nil=true occurrences (see readOccurrence),
   // so the implicit xsi:nil attribute below cannot leak onto non-nil nodes.
@@ -3718,6 +3806,11 @@ const xsdIdentityFamily = (typeQName: string): string => {
 // with complex content is COMPLEX (a violation, §3.11.4); a nil/absent one
 // is ABSENT.
 const identitySimpleValue = (node: IdentityNode): unknown => {
+  // A collapsed value wrapper is still an element with complex content; only
+  // the attribute reached through identityAttributeNode is simple.
+  if (node.wrapped !== undefined && node.wrapped.kind === "attribute") {
+    return IDENTITY_COMPLEX;
+  }
   const { value } = node;
   if (value === null || value === undefined) {
     return IDENTITY_ABSENT;
@@ -3997,12 +4090,41 @@ const walkIdentity = (
       const shape = objectDefOf(schema)?.shape ?? {};
       const obj = value as Record<string, unknown>;
       for (const [key, fieldMeta] of Object.entries(fields)) {
-        if (fieldMeta.kind !== "element") {
-          continue;
-        }
         const fieldValue = obj[key];
         const fieldSchema = shape[key];
         if (fieldValue === undefined || fieldSchema === undefined) {
+          continue;
+        }
+        if (fieldMeta.kind === "choice") {
+          const choice = fieldMeta.choice;
+          if (choice === undefined || !Array.isArray(fieldValue)) {
+            continue;
+          }
+          fieldValue.forEach((item, i) => {
+            if (item === null || typeof item !== "object" || Array.isArray(item)) {
+              return;
+            }
+            const tagged = item as Record<string, unknown>;
+            for (const branch of choice.branches) {
+              const occurrence = identityChoiceBranch(fieldSchema, branch, tagged);
+              if (occurrence === undefined) {
+                continue;
+              }
+              // Ergonomic choices exclude branches that declare constraints
+              // themselves, so only nested tables propagate from here.
+              const childTable = walkIdentity(
+                occurrence.schema,
+                occurrence.value,
+                [...path, key, i, branch.tag],
+                [],
+                state,
+              );
+              mergeIdentityTable(own, childTable);
+            }
+          });
+          continue;
+        }
+        if (fieldMeta.kind !== "element") {
           continue;
         }
         const isArray = Array.isArray(fieldValue);

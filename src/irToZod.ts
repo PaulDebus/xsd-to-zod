@@ -2928,10 +2928,10 @@ export const irToZod = (
       t.fields.some((f) => (f.identityConstraints?.length ?? 0) > 0),
     );
 
-  // Ergonomic output. Identity constraints navigate the parsed object by
-  // field key, so their document paths would no longer line up after a
-  // collapse — keep the plain shape whenever a module declares any.
-  const ergonomic = opts?.ergonomic === true && !moduleHasIdentity;
+  // Ergonomic output. The identity pass understands collapsed wrapper slots
+  // and synthetic choice arrays, so the shape does not depend on whether the
+  // module declares an identity constraint.
+  const ergonomic = opts?.ergonomic === true;
 
   // Emitted fields per complex type: eligible repeated choices collapse their
   // branch fields into one synthetic "choice" field, placed where the first
