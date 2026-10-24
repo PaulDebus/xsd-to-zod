@@ -36,12 +36,12 @@ export {
 } from "./runtime.js";
 export type {
   Cardinality,
+  ChoiceArrayBranch,
+  ChoiceArrayField,
   ComplexTypeDef,
   Diagnostic,
   DiagnosticKind,
   ElementDef,
-  ErgoChoice,
-  ErgoChoiceBranch,
   Facet,
   FieldKind,
   IrField,

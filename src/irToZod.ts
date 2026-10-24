@@ -1,9 +1,9 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
 import type {
+  ChoiceArrayField,
   ComplexTypeDef,
   ElementDef,
-  ErgoChoice,
   Facet,
   IrField,
   QName,
@@ -709,7 +709,7 @@ const wrapperTargetFor = (field: IrField, ir: XsdIr, ergonomic: boolean): IrFiel
   return wrapperFieldOf(field.typeName, ir, ergonomic);
 };
 
-type ErgoChoiceGroup = { group: string; branches: { tag: string; field: IrField }[] };
+type ChoiceArrayGroup = { group: string; branches: { tag: string; field: IrField }[] };
 
 /**
  * Repeated choices that can become one tagged array: flat (one element field
@@ -720,7 +720,7 @@ const ergonomicChoiceGroups = (
   type: ComplexTypeDef,
   ir: XsdIr,
   ergonomic: boolean,
-): ErgoChoiceGroup[] => {
+): ChoiceArrayGroup[] => {
   if (!ergonomic) {
     return [];
   }
@@ -738,7 +738,7 @@ const ergonomicChoiceGroups = (
       .map((element) => element.substitutionGroup)
       .filter((qname): qname is QName => qname !== undefined),
   );
-  const result: ErgoChoiceGroup[] = [];
+  const result: ChoiceArrayGroup[] = [];
   for (const group of groupIds) {
     const card = type.choiceGroups?.[group];
     if (card === undefined || (card.maxOccurs !== "unbounded" && card.maxOccurs <= 1)) {
@@ -2042,9 +2042,9 @@ const fieldsMetaFor = (
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = fields.map((field) => {
     if (field.kind === "choice") {
-      const choice = field.ergoChoice;
+      const choice = field.choiceArray;
       if (choice === undefined) {
-        throw new Error("choice field without ergonomic branch metadata");
+        throw new Error("choice field without choice-array branch metadata");
       }
       const branches = choice.branches.map((branch) => {
         const branchParts = [
@@ -2665,9 +2665,9 @@ const tsFieldLine = (
   let type: string;
   const polymorphicType = field.fixedValue === undefined ? polymorphicSlotType?.(field) : undefined;
   if (field.kind === "choice") {
-    const choice = field.ergoChoice;
+    const choice = field.choiceArray;
     if (choice === undefined) {
-      throw new Error("choice field without ergonomic branch metadata");
+      throw new Error("choice field without choice-array branch metadata");
     }
     const union = choice.branches
       .map(
@@ -2936,20 +2936,20 @@ export const irToZod = (
   // Emitted fields per complex type: eligible repeated choices collapse their
   // branch fields into one synthetic "choice" field, placed where the first
   // branch sat so hand-built data serializes in content-model order.
-  const ergoEmission = new Map<QName, { choices: ErgoChoice[]; fields: IrField[] }>();
-  const ergoFor = (type: ComplexTypeDef): { choices: ErgoChoice[]; fields: IrField[] } => {
+  const ergoEmission = new Map<QName, { choices: ChoiceArrayField[]; fields: IrField[] }>();
+  const ergoFor = (type: ComplexTypeDef): { choices: ChoiceArrayField[]; fields: IrField[] } => {
     const cached = ergoEmission.get(type.name);
     if (cached !== undefined) {
       return cached;
     }
     const base = dedupeEmissionFields(type);
     const groups = ergonomicChoiceGroups(type, ir, ergonomic);
-    let built: { choices: ErgoChoice[]; fields: IrField[] };
+    let built: { choices: ChoiceArrayField[]; fields: IrField[] };
     if (groups.length === 0) {
       built = { choices: [], fields: base };
     } else {
       const usedKeys = new Set(base.map((field) => toFieldKey(field)));
-      const choices: ErgoChoice[] = groups.map((group) => {
+      const choices: ChoiceArrayField[] = groups.map((group) => {
         let key = "_choice";
         let suffix = 2;
         while (usedKeys.has(key)) {
@@ -2959,7 +2959,7 @@ export const irToZod = (
         usedKeys.add(key);
         return { group: group.group, key, branches: group.branches };
       });
-      const branchToChoice = new Map<string, ErgoChoice>();
+      const branchToChoice = new Map<string, ChoiceArrayField>();
       for (const choice of choices) {
         for (const branch of choice.branches) {
           branchToChoice.set(toFieldKey(branch.field), choice);
@@ -2985,7 +2985,7 @@ export const irToZod = (
           minOccurs: card?.minOccurs ?? 0,
           maxOccurs: card?.maxOccurs ?? "unbounded",
           fieldKey: choice.key,
-          ergoChoice: choice,
+          choiceArray: choice,
         });
       }
       built = { choices, fields };
@@ -2997,7 +2997,7 @@ export const irToZod = (
     return built;
   };
   const emissionFields = (type: ComplexTypeDef): IrField[] => ergoFor(type).fields;
-  const ergoChoicesFor = (type: ComplexTypeDef): ErgoChoice[] => ergoFor(type).choices;
+  const choiceArraysFor = (type: ComplexTypeDef): ChoiceArrayField[] => ergoFor(type).choices;
 
   // xsi:type polymorphism. variantSets maps a polymorphic declared type
   // (abstract, or with known derived types) to [declared, ...derivedClosure].
@@ -3213,7 +3213,7 @@ export const irToZod = (
     const fieldsEntriesByType = new Map<QName, string[]>();
     const choicesBodyByType = new Map<QName, string>();
     for (const t of Object.values(ir.complexTypes)) {
-      const ergoChoices = ergoChoicesFor(t);
+      const choiceArrays = choiceArraysFor(t);
       const { fieldsEntries, choicesBody } = fieldsMetaFor(
         t,
         emissionFields(t),
@@ -3223,7 +3223,7 @@ export const irToZod = (
         integers,
         decimal,
         membersByHead,
-        new Set(ergoChoices.map((choice) => choice.group)),
+        new Set(choiceArrays.map((choice) => choice.group)),
       );
       fieldsEntriesByType.set(t.name, fieldsEntries);
       if (choicesBody !== undefined) {
@@ -3426,9 +3426,9 @@ export const irToZod = (
   // const is lazy-wrapped so declaration order and recursion cannot bite.
   const fieldTypeExpr = (field: IrField, eager: boolean): string => {
     if (field.kind === "choice") {
-      const choice = field.ergoChoice;
+      const choice = field.choiceArray;
       if (choice === undefined) {
-        throw new Error("choice field without ergonomic branch metadata");
+        throw new Error("choice field without choice-array branch metadata");
       }
       const items = choice.branches
         .map(
@@ -3551,7 +3551,7 @@ export const irToZod = (
         }
         for (const field of emissionFields(def)) {
           if (field.kind === "choice") {
-            for (const branch of field.ergoChoice?.branches ?? []) {
+            for (const branch of field.choiceArray?.branches ?? []) {
               for (const dep of typeRefDeps(branch.field.typeName)) {
                 out.add(dep);
               }
