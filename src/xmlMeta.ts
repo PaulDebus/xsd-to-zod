@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { type $ZodRegistry, registry } from "zod/v4/core";
 import type { IdentityConstraint, QName } from "./types.js";
 import type { XsdDatatypeName } from "./xsdDateTime.js";
 
@@ -154,11 +154,11 @@ export type XmlMeta = {
 
 /** Typed registry — globalThis singleton so generated modules and runtime share the instance. */
 const globalStore = globalThis as {
-  __xsd_to_zod_xmlRegistry__?: z.core.$ZodRegistry<XmlMeta>;
+  __xsd_to_zod_xmlRegistry__?: $ZodRegistry<XmlMeta>;
 };
 
-export const xmlRegistry: z.core.$ZodRegistry<XmlMeta> =
-  globalStore.__xsd_to_zod_xmlRegistry__ ?? z.registry<XmlMeta>();
+export const xmlRegistry: $ZodRegistry<XmlMeta> =
+  globalStore.__xsd_to_zod_xmlRegistry__ ?? registry<XmlMeta>();
 if (!globalStore.__xsd_to_zod_xmlRegistry__) {
   globalStore.__xsd_to_zod_xmlRegistry__ = xmlRegistry;
 }
