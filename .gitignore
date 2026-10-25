@@ -3,3 +3,5 @@ dist/
 coverage/
 *.log
 .xsd-to-zod-tests/
+.xsd-to-zod-bench/
+bench/out/
