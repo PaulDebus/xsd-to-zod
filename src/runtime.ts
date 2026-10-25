@@ -619,22 +619,18 @@ const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
     if (local === "boolean") {
       return coerceBoolean(lexical);
     }
-    if (XSD_BIGINT_TYPE_NAMES.has(local)) {
-      return coerceBigInt(lexical);
-    }
-    if (XSD_SAFE_INTEGER_TYPE_NAMES.has(local)) {
+    if (XSD_BIGINT_TYPE_NAMES.has(local) || XSD_SAFE_INTEGER_TYPE_NAMES.has(local)) {
       const trimmed = lexical.trim();
       if (!INTEGER_LEXICAL.test(trimmed)) {
         throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(lexical)}`);
       }
-      return Number(trimmed);
+      // The whole decimal family shares one exact, canonical representation so
+      // equal values of different family members key the same (unsignedByte 1
+      // equals decimal 1) and Number() rounding never collapses distinct ones.
+      return canonicalDecimalLexical(trimmed);
     }
     if (local === "decimal") {
-      const trimmed = lexical.trim();
-      if (!FLOAT_LEXICAL.test(trimmed)) {
-        throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
-      }
-      return Number(trimmed);
+      return canonicalDecimalLexical(lexical);
     }
     if (local === "float" || local === "double") {
       return coerceNumberValue(lexical.trim());
@@ -770,8 +766,9 @@ const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>
 
 // Attributes of xsi:nil occurrences: the nil collapse to null drops them, but
 // XSD still evaluates attribute key fields on nil elements — container object
-// → field key → per-occurrence [Clark qname, lexical] pairs.
-type NilAttr = [clark: string, lexical: string];
+// → field key → per-occurrence [Clark qname, lexical, QName bindings] tuples.
+// The bindings mirror the non-nil path so QName-typed keys resolve prefixes.
+type NilAttr = [clark: string, lexical: string, qnameNs: Record<string, string> | undefined];
 const nilAttributeStore = new WeakMap<object, Map<string, (NilAttr[] | undefined)[]>>();
 
 // Prefixes used by a QName lexical (one per whitespace-separated token for
@@ -1794,10 +1791,11 @@ const substituteEmpty = (
   return { substituted: false };
 };
 
-// Attributes of a nil element, as [Clark qname, lexical] pairs: the nil
-// collapse to null drops them from the value, but identity-constraint field
-// evaluation still sees them (XSD §3.11.4 — xsi:nil affects the element's
-// content, not its attributes).
+// Attributes of a nil element, as [Clark qname, lexical, QName bindings]
+// tuples: the nil collapse to null drops them from the value, but
+// identity-constraint field evaluation still sees them (XSD §3.11.4 —
+// xsi:nil affects the element's content, not its attributes). The bindings
+// cover every attribute lexical and are only consulted for QName-typed fields.
 const nilAttributesOf = (
   node: Record<string, unknown>,
   namespaceContext: Record<string, string>,
@@ -1813,7 +1811,8 @@ const nilAttributesOf = (
     if (namespace === XSI_NS) {
       continue;
     }
-    attributes.push([`{${namespace}}${local}`, String(raw)]);
+    const lexical = String(raw);
+    attributes.push([`{${namespace}}${local}`, lexical, qnameBindingsOf(lexical, context)]);
   }
   return attributes.length === 0 ? undefined : attributes;
 };
@@ -3544,6 +3543,28 @@ const identityChildren = (
   return out;
 };
 
+// The declared attribute field for a qname, with its value schema. Nil and
+// non-nil attribute lookups share this scan.
+const findAttributeMeta = (
+  schema: AnySchema | undefined,
+  qname: QName,
+): { key: string; fieldMeta: XmlFieldMeta; schema: AnySchema | undefined } | undefined => {
+  if (schema === undefined) {
+    return undefined;
+  }
+  const fields = findFieldsMeta(schema);
+  if (fields === undefined) {
+    return undefined;
+  }
+  const shape = objectDefOf(schema)?.shape ?? {};
+  for (const [key, fieldMeta] of Object.entries(fields)) {
+    if (fieldMeta.kind === "attribute" && fieldMeta.qname === qname) {
+      return { key, fieldMeta, schema: shape[key] };
+    }
+  }
+  return undefined;
+};
+
 const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode | undefined => {
   if (node.wrapped !== undefined) {
     if (node.wrapped.kind !== "attribute" || node.wrapped.qname !== qname) {
@@ -3566,51 +3587,49 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
       return undefined;
     }
     // Typed key fields compare in value space like the non-nil path (int "01"
-    // is int "1"); QName-typed attributes keep the lexical since the side
-    // channel doesn't retain their prefix bindings.
-    const nilFields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
+    // is int "1"); QName-typed attributes resolve their prefixes against the
+    // bindings retained next to the nil lexical.
+    const meta = findAttributeMeta(node.schema, qname);
     let nilSchema: AnySchema | undefined;
-    if (nilFields !== undefined) {
-      const nilShape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
-      for (const [key, fieldMeta] of Object.entries(nilFields)) {
-        if (fieldMeta.kind === "attribute" && fieldMeta.qname === qname) {
-          if (fieldMeta.qnameValue !== true) {
-            nilSchema = nilShape[key];
+    let nilValue: unknown = found[1];
+    let nilQNameNs: Record<string, string> | undefined;
+    if (meta !== undefined) {
+      if (meta.fieldMeta.qnameValue === true) {
+        nilQNameNs = found[2];
+      } else {
+        nilSchema = meta.schema;
+        if (nilSchema !== undefined) {
+          try {
+            nilValue = coerceLexical(found[1], nilSchema);
+          } catch {
+            nilValue = found[1];
           }
-          break;
         }
       }
     }
-    let nilValue: unknown = found[1];
-    if (nilSchema !== undefined) {
-      try {
-        nilValue = coerceLexical(found[1], nilSchema);
-      } catch {
-        nilValue = found[1];
-      }
-    }
-    return { value: nilValue, schema: nilSchema, qname, path: node.path };
+    return {
+      value: nilValue,
+      schema: nilSchema,
+      qname,
+      path: node.path,
+      ...(nilQNameNs === undefined ? {} : { qnameNs: nilQNameNs }),
+    };
   }
   const obj = value as Record<string, unknown>;
-  const fields = node.schema === undefined ? undefined : findFieldsMeta(node.schema);
-  if (fields !== undefined) {
-    const shape = node.schema === undefined ? {} : (objectDefOf(node.schema)?.shape ?? {});
-    for (const [key, fieldMeta] of Object.entries(fields)) {
-      if (fieldMeta.kind === "attribute" && fieldMeta.qname === qname) {
-        const attrValue = obj[key];
-        if (attrValue === undefined) {
-          return undefined;
-        }
-        const bindings = qnameNsStore.get(obj)?.get(key);
-        return {
-          value: attrValue,
-          schema: shape[key],
-          qname,
-          path: node.path,
-          qnameNs: Array.isArray(bindings) ? undefined : bindings,
-        };
-      }
+  const meta = findAttributeMeta(node.schema, qname);
+  if (meta !== undefined) {
+    const attrValue = obj[meta.key];
+    if (attrValue === undefined) {
+      return undefined;
     }
+    const bindings = qnameNsStore.get(obj)?.get(meta.key);
+    return {
+      value: attrValue,
+      schema: meta.schema,
+      qname,
+      path: node.path,
+      qnameNs: Array.isArray(bindings) ? undefined : bindings,
+    };
   }
   // Open shape: attributes are keyed '@' + clark (no-namespace: '@local').
   const clark = splitClark(qname);
@@ -3646,12 +3665,16 @@ const identityAttributeNodes = (node: IdentityNode, namespace?: string): Identit
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     const out: IdentityNode[] = (node.nilAttributes ?? [])
       .filter(([clark]) => inNamespace(clark))
-      .map(([clark, lexical]) => ({
-        value: lexical,
-        schema: undefined,
-        qname: clark as QName,
-        path: node.path,
-      }));
+      .map(([clark, lexical, qnameNs]) => {
+        const meta = findAttributeMeta(node.schema, clark as QName);
+        return {
+          value: lexical,
+          schema: undefined,
+          qname: clark as QName,
+          path: node.path,
+          ...(meta?.fieldMeta.qnameValue === true && qnameNs !== undefined ? { qnameNs } : {}),
+        };
+      });
     if (value === null && inNamespace(`{${XSI_NS}}nil`)) {
       out.push({
         value: "true",
