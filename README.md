@@ -116,10 +116,10 @@ const xml = serializeXml(orderSchema, data);
 ## Install
 
 ```sh
-npm install xsd-to-zod
+npm install xsd-to-zod zod
 ```
 
-`zod` v4 ships as a regular dependency. For the optional conformance tier (`xsd-to-zod/validate`), also install:
+`zod` v4 is a **peer dependency**: generated modules import it directly and the runtime parses against that same copy, so install it alongside `xsd-to-zod` (`zod@^4.4.3`). For the optional conformance tier (`xsd-to-zod/validate`), also install:
 
 ```sh
 npm install libxml2-wasm
