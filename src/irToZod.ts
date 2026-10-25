@@ -3166,7 +3166,6 @@ export const irToZod = (
       allocFamilyUnions(name);
     }
   }
-
   // Hoisted registry metadata: extension-derived types repeat their base
   // type's fields entries verbatim (extension prepends the merged base
   // fields), and a polymorphic family type registers the same meta on up to
@@ -3184,6 +3183,13 @@ export const irToZod = (
     }
     usedTypes.add(typeName);
     return typeName === "XmlMeta" ? ": XmlMeta" : `: Record<string, ${typeName}>`;
+  };
+  const metaGroupAnnotation = (): string => {
+    if (opts?.js) {
+      return "";
+    }
+    usedTypes.add("XmlChoiceMeta");
+    return ": XmlChoiceMeta";
   };
   // Hoisting invariants: every complex type owns a meta body and a hoisted
   // lines slot; every family member owns a meta const. Fail loudly — a
@@ -3274,35 +3280,107 @@ export const irToZod = (
       }
       processed.push(t.name);
     }
-    // Choices sharing: identical choices bodies (inherited down an extension
-    // chain) become one const referenced by each type.
-    const choicesConstByBody = new Map<string, string>();
-    const choicesUseCount = new Map<string, number>();
-    for (const body of choicesBodyByType.values()) {
-      choicesUseCount.set(body, (choicesUseCount.get(body) ?? 0) + 1);
-    }
-    const choicesExprByType = new Map<QName, string>();
+    // Choices sharing: extension chains repeat whole groups, so hoist a group
+    // body used by two or more types, then let a type with a shared top-level
+    // map spread its base map instead of repeating the prefix.
+    const parsedChoices = new Map<QName, Array<readonly [string, string]>>();
+    const groupUseCount = new Map<string, number>();
     for (const t of Object.values(ir.complexTypes)) {
       const body = choicesBodyByType.get(t.name);
       if (body === undefined) {
         continue;
       }
-      if ((choicesUseCount.get(body) ?? 0) < 2) {
-        choicesExprByType.set(t.name, body);
+      const groups = JSON.parse(body) as Record<string, XmlChoiceMeta>;
+      const entries = Object.entries(groups).map(
+        ([id, value]) => [id, JSON.stringify(value)] as const,
+      );
+      parsedChoices.set(t.name, entries);
+      for (const [, groupBody] of entries) {
+        groupUseCount.set(groupBody, (groupUseCount.get(groupBody) ?? 0) + 1);
+      }
+    }
+    const groupConstByBody = new Map<string, string>();
+    const choiceEntriesByType = new Map<QName, string[]>();
+    const groupSharedByType = new Set<QName>();
+    for (const t of Object.values(ir.complexTypes)) {
+      const groups = parsedChoices.get(t.name);
+      if (groups === undefined) {
         continue;
       }
-      let choicesConst = choicesConstByBody.get(body);
-      if (choicesConst === undefined) {
-        choicesConst = alloc(`${effectiveBaseLocal(t.name)}Choices`);
-        choicesConstByBody.set(body, choicesConst);
-        hoistedLinesFor(t.name).push(
-          `const ${choicesConst}${metaConstAnnotation("XmlChoiceMeta")} = ${body};`,
+      choiceEntriesByType.set(
+        t.name,
+        groups.map(([id, groupBody]) => {
+          if ((groupUseCount.get(groupBody) ?? 0) < 2) {
+            return `${JSON.stringify(id)}: ${groupBody}`;
+          }
+          groupSharedByType.add(t.name);
+          let groupConst = groupConstByBody.get(groupBody);
+          if (groupConst === undefined) {
+            const suffix = id.replace(/[^A-Za-z0-9_]/g, "_");
+            groupConst = alloc(`${effectiveBaseLocal(t.name)}Choice${suffix}`);
+            groupConstByBody.set(groupBody, groupConst);
+            hoistedLinesFor(t.name).push(
+              `const ${groupConst}${metaGroupAnnotation()} = ${groupBody};`,
+            );
+          }
+          return `${JSON.stringify(id)}: ${groupConst}`;
+        }),
+      );
+    }
+    const choicesConstByType = new Map<QName, string>();
+    const choicesExprByType = new Map<QName, string>();
+    const choicesProcessed: QName[] = [];
+    for (const t of Object.values(ir.complexTypes)) {
+      const entries = choiceEntriesByType.get(t.name);
+      if (entries === undefined) {
+        continue;
+      }
+      let best: QName | undefined;
+      let bestLength = 0;
+      for (const prev of choicesProcessed) {
+        const prevEntries = choiceEntriesByType.get(prev) ?? [];
+        if (prevEntries.length === 0 || prevEntries.length > entries.length) {
+          continue;
+        }
+        if (prevEntries.length <= bestLength) {
+          continue;
+        }
+        if (prevEntries.every((entry, i) => entry === entries[i])) {
+          best = prev;
+          bestLength = prevEntries.length;
+        }
+      }
+      if (best === undefined) {
+        // Keep the parser's exact serialization when no group was hoisted;
+        // only reconstruction needs a fresh object literal.
+        const raw = choicesBodyByType.get(t.name);
+        choicesExprByType.set(
+          t.name,
+          !groupSharedByType.has(t.name) && raw !== undefined ? raw : `{ ${entries.join(", ")} }`,
+        );
+      } else {
+        let choicesConst = choicesConstByType.get(best);
+        if (choicesConst === undefined) {
+          choicesConst = alloc(`${effectiveBaseLocal(best)}Choices`);
+          choicesConstByType.set(best, choicesConst);
+          const baseExpr = choicesExprByType.get(best);
+          if (baseExpr === undefined) {
+            throw new Error(`Missing choices expression for base type ${best}`);
+          }
+          hoistedLinesFor(best).push(
+            `const ${choicesConst}${metaConstAnnotation("XmlChoiceMeta")} = ${baseExpr};`,
+          );
+        }
+        const rest = entries.slice(bestLength);
+        choicesExprByType.set(
+          t.name,
+          rest.length === 0 ? choicesConst : `{ ...${choicesConst}, ${rest.join(", ")} }`,
         );
       }
-      choicesExprByType.set(t.name, choicesConst);
+      choicesProcessed.push(t.name);
     }
     for (const t of Object.values(ir.complexTypes)) {
-      const choicesExpr = choicesExprByType.get(t.name);
+      const choicesExpr = choicesConstByType.get(t.name) ?? choicesExprByType.get(t.name);
       // A type whose fields were hoisted as a prefix source references its
       // own const rather than repeating the block inline.
       const ownExpr = fieldsExprByType.get(t.name);
@@ -3506,21 +3584,98 @@ export const irToZod = (
     );
   };
 
-  // Object shape properties of a complex type. Eager mode is for the family
-  // object consts; the main consts wrap their shape in z.lazy as before.
-  const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string => {
+  // Object shape properties of a complex type, one emitted entry per field.
+  // Eager mode is for the standalone object consts (their fields lazy-wrap
+  // complex/union references); the main consts wrap their shape in z.lazy.
+  const propEntryCache = new Map<string, string[]>();
+  const objectPropEntries = (complexType: ComplexTypeDef, eager: boolean): string[] => {
+    const cacheKey = `${complexType.name} ${eager ? "eager" : "lazy"}`;
+    const cached = propEntryCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
     const multiBranch = choiceOptionalGroups(complexType);
-    return emissionFields(complexType)
-      .map(
-        (field) =>
-          `${JSON.stringify(toFieldKey(field))}: ${fieldPropExpr(
-            field,
-            eager,
-            field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-          )}`,
-      )
-      .join(", ");
+    const entries = emissionFields(complexType).map(
+      (field) =>
+        `${JSON.stringify(toFieldKey(field))}: ${fieldPropExpr(
+          field,
+          eager,
+          field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
+        )}`,
+    );
+    propEntryCache.set(cacheKey, entries);
+    return entries;
   };
+  const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string =>
+    objectPropEntries(complexType, eager).join(", ");
+
+  // Which extension-derived types can emit `.extend({ own props })` over the
+  // base shape. The merge flattens extension into one field list, so prove
+  // the derived list is exactly the base list plus own fields: property
+  // expressions equal on the shared prefix, own keys disjoint, and the same
+  // unknown-key policy. Anything else keeps the flattened object shape.
+  const extendableBase = new Map<QName, QName>();
+  for (const type of Object.values(ir.complexTypes)) {
+    const baseName = type.baseType;
+    if (baseName === undefined || baseName === type.name) {
+      continue;
+    }
+    const base = ir.complexTypes[baseName];
+    if (base === undefined) {
+      continue;
+    }
+    const baseLoose = (base.wildcards?.length ?? 0) > 0;
+    const derivedLoose = (type.wildcards?.length ?? 0) > 0;
+    if (baseLoose !== derivedLoose) {
+      continue;
+    }
+    const baseEntries = objectPropEntries(base, true);
+    const derivedEntries = objectPropEntries(type, true);
+    if (baseEntries.length === 0 || baseEntries.length > derivedEntries.length) {
+      continue;
+    }
+    if (!baseEntries.every((entry, i) => entry === derivedEntries[i])) {
+      continue;
+    }
+    const baseKeys = new Set(emissionFields(base).map(toFieldKey));
+    const ownFields = emissionFields(type).slice(baseEntries.length);
+    if (ownFields.some((field) => baseKeys.has(toFieldKey(field)))) {
+      continue;
+    }
+    extendableBase.set(type.name, baseName);
+  }
+  // Only types in an accepted extension chain need a standalone shape const.
+  const shapeTypeNames = new Set<QName>();
+  for (const [derived, base] of extendableBase) {
+    shapeTypeNames.add(derived);
+    shapeTypeNames.add(base);
+  }
+  for (const type of Object.values(ir.complexTypes)) {
+    if (shapeTypeNames.has(type.name) && !objectConstName.has(type.name)) {
+      objectConstName.set(type.name, alloc(`${effectiveBaseLocal(type.name)}ObjectSchema`));
+    }
+  }
+
+  // Shape consts are emitted before the lazy wrappers, so a base shape must
+  // initialize before the derived shape that extends it.
+  const shapeOrder: QName[] = [];
+  const shapeVisited = new Set<QName>();
+  const visitShape = (name: QName): void => {
+    if (shapeVisited.has(name)) {
+      return;
+    }
+    shapeVisited.add(name);
+    const baseName = extendableBase.get(name);
+    if (baseName !== undefined) {
+      visitShape(baseName);
+    }
+    shapeOrder.push(name);
+  };
+  for (const type of Object.values(ir.complexTypes)) {
+    if (shapeTypeNames.has(type.name)) {
+      visitShape(type.name);
+    }
+  }
 
   // Inference dependency graph between complex-type consts: an edge A → B
   // means A's emitted expression references B's schema const with no explicit
@@ -3610,47 +3765,93 @@ export const irToZod = (
   // erases the input side — no alias is emitted for them rather than one
   // that degrades to unknown.
   if (!opts?.js) {
+    const ifaceLineCache = new Map<QName, string[]>();
+    const ifaceFieldLines = (complexType: ComplexTypeDef): string[] => {
+      const cached = ifaceLineCache.get(complexType.name);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const multiBranch = choiceOptionalGroups(complexType);
+      const lines = emissionFields(complexType).map((field) =>
+        tsFieldLine(
+          field,
+          ir,
+          ifaceName,
+          field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
+          datatypeCtx,
+          integers,
+          decimal,
+          membersByHead,
+          ergonomic,
+          (f) =>
+            polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
+        ),
+      );
+      ifaceLineCache.set(complexType.name, lines);
+      return lines;
+    };
+    // Same prefix proof as the object shapes: an extension-derived interface
+    // can `extends` its base instead of repeating the inherited properties.
+    const interfaceBase = new Map<QName, QName>();
+    for (const complexType of Object.values(ir.complexTypes)) {
+      const baseName = complexType.baseType;
+      if (baseName === undefined || baseName === complexType.name || !ifaceName.has(baseName)) {
+        continue;
+      }
+      const base = ir.complexTypes[baseName];
+      if (base === undefined) {
+        continue;
+      }
+      const baseLines = ifaceFieldLines(base);
+      const derivedLines = ifaceFieldLines(complexType);
+      if (baseLines.length === 0 || baseLines.length > derivedLines.length) {
+        continue;
+      }
+      if (!baseLines.every((line, i) => line === derivedLines[i])) {
+        continue;
+      }
+      const baseKeys = new Set(emissionFields(base).map(toFieldKey));
+      const ownFields = emissionFields(complexType).slice(baseLines.length);
+      if (ownFields.some((field) => baseKeys.has(toFieldKey(field)))) {
+        continue;
+      }
+      interfaceBase.set(complexType.name, baseName);
+    }
     for (const complexType of Object.values(ir.complexTypes)) {
       claimTypeName(complexType.name);
-      const multiBranch = choiceOptionalGroups(complexType);
-      const props = emissionFields(complexType)
-        .map((field) => {
-          const line = tsFieldLine(
-            field,
-            ir,
-            ifaceName,
-            field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-            datatypeCtx,
-            integers,
-            decimal,
-            membersByHead,
-            ergonomic,
-            (f) =>
-              polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
-          );
+      const baseName = interfaceBase.get(complexType.name);
+      const base = baseName === undefined ? undefined : ir.complexTypes[baseName];
+      const inherited =
+        baseName === undefined || base === undefined ? 0 : emissionFields(base).length;
+      const fields = emissionFields(complexType);
+      const lines = ifaceFieldLines(complexType);
+      const props = fields
+        .slice(inherited)
+        .map((field, i) => {
+          const line = lines[inherited + i] ?? "";
           const comment = fieldKeyComments.get(field);
           return comment === undefined ? line : `  // ${comment}\n${line}`;
         })
         .join("\n");
+      const baseHasWildcards = base !== undefined && (base.wildcards?.length ?? 0) > 0;
       const indexSignature =
-        complexType.wildcards && complexType.wildcards.length > 0
+        !baseHasWildcards && complexType.wildcards && complexType.wildcards.length > 0
           ? "\n  [key: string]: unknown;"
           : "";
       const jsDoc = complexType.description ? `${formatJsDoc(complexType.description, 0)}\n` : "";
       const iface = ifaceName.get(complexType.name);
+      const inheritance = baseName === undefined ? "" : ` extends ${ifaceName.get(baseName)}`;
       // Recursive consts keep the explicit z.ZodType annotation, which pins
       // z.input to unknown — emitting an In alias would lie about the shape,
       // so the alias is omitted with the reason recorded in the artifact.
       const inputAlias = recursiveTypes.has(complexType.name)
         ? `// No ${iface}In alias: ${iface}Schema keeps an explicit z.ZodType annotation to break circular inference, so z.input would degrade to unknown.`
         : `export type ${alloc(`${iface}In`)} = z.input<typeof ${constName.get(complexType.name)}>;`;
-      schemaLines.push(
-        withNamingComment(
-          complexType.name,
-          `${jsDoc}export interface ${iface} {\n${props}${indexSignature}\n}`,
-        ),
-        inputAlias,
-      );
+      const declaration =
+        inheritance !== "" && props.length === 0 && indexSignature.length === 0
+          ? `${jsDoc}export interface ${iface}${inheritance} {}`
+          : `${jsDoc}export interface ${iface}${inheritance} {\n${props}${indexSignature}\n}`;
+      schemaLines.push(withNamingComment(complexType.name, declaration), inputAlias);
     }
   }
 
@@ -3712,18 +3913,45 @@ export const irToZod = (
     );
   }
 
-  // Eager object consts for polymorphic-family types: discriminatedUnion
-  // options must be object schemas, so the family members' shapes exist as
-  // standalone consts (their fields lazy-wrap complex/union references).
-  for (const complexType of Object.values(ir.complexTypes)) {
-    if (!familyTypes.has(complexType.name)) {
-      continue;
+  // Eager object consts for polymorphic families (discriminatedUnion options
+  // must be object schemas) and for every type in an extension chain (a
+  // derived shape extends its base shape). Their fields lazy-wrap complex and
+  // union references, so declaration order and recursion cannot bite.
+  const emittedShapes = new Set<QName>();
+  const emitShape = (complexType: ComplexTypeDef): void => {
+    emittedShapes.add(complexType.name);
+    const baseName = extendableBase.get(complexType.name);
+    if (baseName !== undefined) {
+      const base = ir.complexTypes[baseName];
+      if (base === undefined) {
+        throw new Error(`Missing base shape type ${baseName}`);
+      }
+      const inherited = objectPropEntries(base, true).length;
+      const ownProps = objectPropEntries(complexType, true).slice(inherited);
+      const baseShape = objectConstName.get(baseName);
+      schemaLines.push(
+        ownProps.length === 0
+          ? `const ${objectConstName.get(complexType.name)} = ${baseShape};`
+          : `const ${objectConstName.get(complexType.name)} = ${baseShape}.extend({${ownProps.join(", ")}});`,
+      );
+      return;
     }
     const objectCtor =
       complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object";
     schemaLines.push(
-      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}})${optionalUnitsCheck(complexType, opts?.js === true)};`,
+      `const ${objectConstName.get(complexType.name)} = ${objectCtor}({${objectPropsExpr(complexType, true)}});`,
     );
+  };
+  for (const name of shapeOrder) {
+    const complexType = ir.complexTypes[name];
+    if (complexType !== undefined) {
+      emitShape(complexType);
+    }
+  }
+  for (const complexType of Object.values(ir.complexTypes)) {
+    if (familyTypes.has(complexType.name) && !emittedShapes.has(complexType.name)) {
+      emitShape(complexType);
+    }
   }
 
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -3732,14 +3960,19 @@ export const irToZod = (
       opts?.js || !recursiveTypes.has(complexType.name)
         ? ""
         : `: z.ZodType<${ifaceName.get(complexType.name)}>`;
+    const check = optionalUnitsCheck(complexType, opts?.js === true);
+    const shapeName = objectConstName.get(complexType.name);
     if (familyTypes.has(complexType.name)) {
+      if (shapeName === undefined) {
+        throw new Error(`Missing family object const for type ${complexType.name}`);
+      }
       // Family member: the object shape lives in its own const (shared with
       // the xsiType variant below); the named const stays a lazy wrapper.
       schemaLines.push(
         withNamingComment(
           complexType.name,
           `const ${constName.get(complexType.name)}${annotation} = ${registered(
-            `z.lazy(() => ${objectConstName.get(complexType.name)})`,
+            `z.lazy(() => ${shapeName}${check})`,
             complexType.description,
             metaConstFor(complexType.name),
           )};`,
@@ -3747,23 +3980,16 @@ export const irToZod = (
       );
       continue;
     }
-    const multiBranch = choiceOptionalGroups(complexType);
-    const props = emissionFields(complexType)
-      .map(
-        (field) =>
-          `${JSON.stringify(toFieldKey(field))}: ${fieldPropExpr(
-            field,
-            false,
-            field.choiceGroup !== undefined && multiBranch.has(field.choiceGroup),
-          )}`,
-      )
-      .join(", ");
+    const shape =
+      shapeName === undefined
+        ? `${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${objectPropsExpr(complexType, false)}})${check}`
+        : `${shapeName}${check}`;
 
     schemaLines.push(
       withNamingComment(
         complexType.name,
         `const ${constName.get(complexType.name)}${annotation} = ${registered(
-          `z.lazy(() => ${complexType.wildcards && complexType.wildcards.length > 0 ? "z.looseObject" : "z.object"}({${props}})${optionalUnitsCheck(complexType, opts?.js === true)})`,
+          `z.lazy(() => ${shape})`,
           complexType.description,
           `{ ${metaBodyFor(complexType.name)} }`,
         )};`,
@@ -3790,7 +4016,7 @@ export const irToZod = (
     }
     const discriminant = JSON.stringify(complexType.name);
     schemaLines.push(
-      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) }).register(xmlRegistry, ${metaConstFor(complexType.name)});`,
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) })${optionalUnitsCheck(complexType, opts?.js === true)}.register(xmlRegistry, ${metaConstFor(complexType.name)});`,
     );
   }
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -3804,7 +4030,7 @@ export const irToZod = (
       ? `z.literal(${discriminant}).default(${discriminant})`
       : `z.literal(${discriminant}).optional()`;
     schemaLines.push(
-      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} }).register(xmlRegistry, ${metaConstFor(typeName)});`,
+      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} })${optionalUnitsCheck(complexType, opts?.js === true)}.register(xmlRegistry, ${metaConstFor(typeName)});`,
     );
     const derived = variants
       .slice(1)
