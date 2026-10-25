@@ -166,8 +166,9 @@ fs.mkdirSync(outDir, { recursive: true });
 const runnerPath = path.join(outDir, "runner.mjs");
 fs.writeFileSync(runnerPath, runnerSource);
 
-const tsx = path.join(root, "node_modules", ".bin", "tsx");
-const nodeArgs = ["--expose-gc", tsx, runnerPath];
+// The runner only imports compiled JS from dist/, so plain node suffices
+// (and --cpu-prof then profiles the actual work instead of a tsx wrapper).
+const nodeArgs = ["--expose-gc", runnerPath];
 if (profile) {
   nodeArgs.unshift(
     "--cpu-prof",
