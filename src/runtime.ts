@@ -173,22 +173,55 @@ const collectNamespaceDeclarations = (node: Record<string, unknown>): Record<str
 const withNamespaceContext = (
   baseContext: Record<string, string>,
   node: Record<string, unknown>,
-): Record<string, string> => ({
-  xml: XML_NS,
-  ...baseContext,
-  ...collectNamespaceDeclarations(node),
-});
+): Record<string, string> => {
+  // Fast path: nodes rarely declare namespaces; when they don't, the merged
+  // context would be a fresh copy of the base on every element visit. Base
+  // contexts built through this function always carry the xml prefix, so
+  // returning the base unchanged is behavior-identical and allocation-free.
+  if (node["@_xmlns"] === undefined && !hasXmlnsPrefix(node)) {
+    return baseContext["xml"] === XML_NS ? baseContext : { ...baseContext, xml: XML_NS };
+  }
+  return {
+    xml: XML_NS,
+    ...baseContext,
+    ...collectNamespaceDeclarations(node),
+  };
+};
 
-const escapeXml = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;")
-    // A literal CR never survives a parse round-trip (line-ending
-    // normalization maps it to LF) — it must be a character reference.
-    .replaceAll("\r", "&#xD;");
+// Any `@_xmlns:<prefix>` entry present?
+const hasXmlnsPrefix = (node: Record<string, unknown>): boolean => {
+  for (const key of Object.keys(node)) {
+    if (key.startsWith("@_xmlns:") && key !== "@_xmlns:") {
+      return true;
+    }
+  }
+  return false;
+};
+
+const escapeXmlPattern = /[&<>"'\r]/g;
+const escapeXmlChar = (ch: string): string => {
+  switch (ch) {
+    case "&":
+      return "&amp;";
+    case "<":
+      return "&lt;";
+    case ">":
+      return "&gt;";
+    case '"':
+      return "&quot;";
+    case "'":
+      return "&apos;";
+    case "\r":
+      // A literal CR never survives a parse round-trip (line-ending
+      // normalization maps it to LF), so it must become a character reference.
+      return "&#xD;";
+    default:
+      return ch;
+  }
+};
+// Single pass over the string (the six sequential replaceAll passes scanned it
+// six times).
+const escapeXml = (value: string): string => value.replace(escapeXmlPattern, escapeXmlChar);
 
 // Attribute-value normalization additionally maps literal TAB and LF to
 // spaces, so attribute text needs those as character references too. Applied
@@ -242,9 +275,12 @@ const defAs = <T extends AnyDef>(def: AnyDef, type: T["type"]): T | undefined =>
 // returns the input unchanged when it is not a wrapper.
 const peelOnce = (schema: AnySchema): AnySchema => {
   const def = schema._zod.def;
-  const lazy = defAs<z.core.$ZodLazyDef>(def, "lazy");
-  if (lazy) {
-    return lazy.getter();
+  if (def.type === "lazy") {
+    // Read zod's cached inner type instead of calling the getter: generated
+    // code wraps every type in a z.lazy whose getter builds the whole object
+    // literal, so calling it on each peel would reconstruct the schema (and
+    // all its field schemas) per element occurrence.
+    return (schema as z.core.$ZodLazy)._zod.innerType;
   }
   const wrapper =
     defAs<z.core.$ZodOptionalDef>(def, "optional") ??
@@ -274,19 +310,45 @@ const objectDefOf = (schema: AnySchema): z.core.$ZodObjectDef | undefined =>
 const hasObjectShape = (schema: AnySchema): boolean => objectDefOf(schema) !== undefined;
 
 const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta | undefined => {
-  let current = schema;
-  for (;;) {
-    const meta = xmlRegistry.get(current);
-    if (meta !== undefined && pick(meta)) {
+  // The meta chain per schema is walked repeatedly on the hot path (per
+  // element occurrence); collect the complete chain once and pick from the
+  // cached chain. The walk must always run to the end — a chain cached
+  // truncated at one pick's match would hide deeper metas from other picks.
+  let chain = metaChainCache.get(schema);
+  if (chain === undefined) {
+    chain = [];
+    let current = schema;
+    for (;;) {
+      const meta = xmlRegistry.get(current);
+      if (meta !== undefined) {
+        chain.push(meta);
+      }
+      const next = peelOnce(current);
+      if (next === current || chain.length >= META_CHAIN_LIMIT) {
+        // Only cache terminating chains; a cycle (self-recursive lazy wrapper)
+        // must not poison the cache with a bounded prefix.
+        if (next === current) {
+          metaChainCache.set(schema, chain);
+        }
+        break;
+      }
+      current = next;
+    }
+  }
+  for (const meta of chain) {
+    const picked = pick(meta);
+    if (picked !== undefined && picked !== false) {
       return meta;
     }
-    const next = peelOnce(current);
-    if (next === current) {
-      return undefined;
-    }
-    current = next;
   }
+  return undefined;
 };
+
+// Cache for the registry-meta chain walked by findMeta, keyed on the schema
+// the walk started from. Chains in real schemas are a few wrappers deep; the
+// cap only guards pathological lazy cycles that never terminate.
+const META_CHAIN_LIMIT = 64;
+const metaChainCache = new WeakMap<AnySchema, XmlMeta[]>();
 
 const findRootMeta = (schema: AnySchema): XmlMeta | undefined => findMeta(schema, (m) => m.root);
 const findObjectMeta = (schema: AnySchema): XmlMeta | undefined =>
@@ -328,6 +390,12 @@ type FieldAnalysis = {
 };
 
 const analyzeField = (schema: AnySchema): FieldAnalysis => {
+  // Pure function of the schema; called per field per element occurrence on
+  // the parse hot path. Memoize by schema identity.
+  const cached = analyzeFieldCache.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
   let current = schema;
   let isArray = false;
   let hasDefault = false;
@@ -370,9 +438,20 @@ const analyzeField = (schema: AnySchema): FieldAnalysis => {
       hasFixed = true;
       fixedValue = lit.values[0];
     }
-    return { itemSchema: current, isArray, hasDefault, defaultValue, hasFixed, fixedValue };
+    const analysis: FieldAnalysis = {
+      itemSchema: current,
+      isArray,
+      hasDefault,
+      defaultValue,
+      hasFixed,
+      fixedValue,
+    };
+    analyzeFieldCache.set(schema, analysis);
+    return analysis;
   }
 };
+
+const analyzeFieldCache = new WeakMap<AnySchema, FieldAnalysis>();
 
 // ---------------------------------------------------------------------------
 // Schema-driven lexical coercion — the single coercion point. The schema's own
