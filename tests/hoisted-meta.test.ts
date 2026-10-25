@@ -110,3 +110,73 @@ describe("hoisted registry metadata", () => {
     expect(parseXml(schema, out)).toEqual(data);
   });
 });
+
+const EXTENSION_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:extend" xmlns:t="urn:extend" elementFormDefault="qualified">
+  <xs:complexType name="ConceptType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:choice minOccurs="0">
+        <xs:element name="note" type="xs:string"/>
+        <xs:element name="remark" type="xs:string"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ProductType">
+    <xs:complexContent>
+      <xs:extension base="t:ConceptType">
+        <xs:sequence>
+          <xs:element name="price" type="xs:decimal"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="AliasType">
+    <xs:complexContent>
+      <xs:extension base="t:ConceptType"/>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="SpecialType">
+    <xs:complexContent>
+      <xs:extension base="t:ConceptType">
+        <xs:sequence>
+          <xs:choice>
+            <xs:element name="special" type="xs:string"/>
+            <xs:element name="other" type="xs:string"/>
+          </xs:choice>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="concept" type="t:ConceptType"/>
+</xs:schema>`;
+
+const generateExtension = async (): Promise<string> => {
+  let schemas = "";
+  await withTempDirAsync(async (dir) => {
+    const file = path.join(dir, "schema.xsd");
+    fs.writeFileSync(file, EXTENSION_XSD);
+    schemas = irToZod(await parseXsd([file])).schemas;
+  });
+  return schemas;
+};
+
+describe("shared generated shapes", () => {
+  it("extends the base object shape and interface for extension-derived types", async () => {
+    const schemas = await generateExtension();
+    expect(schemas).toContain("const ProductTypeObjectSchema = ConceptTypeObjectSchema.extend(");
+    expect(schemas).toContain("export interface ProductType extends ConceptType {");
+    expect(schemas).toContain("const AliasTypeObjectSchema = ConceptTypeObjectSchema;");
+    expect(schemas).toContain("export interface AliasType extends ConceptType {}");
+  });
+
+  it("hoists a repeated choice group and spreads the inherited choices map", async () => {
+    const schemas = await generateExtension();
+    expect(schemas).toContain("const ConceptTypeChoice0: XmlChoiceMeta =");
+    expect(schemas).toContain(
+      'const ConceptTypeChoices: Record<string, XmlChoiceMeta> = { "0": ConceptTypeChoice0 };',
+    );
+    expect(occurrences(schemas, "choices: ConceptTypeChoices")).toBeGreaterThanOrEqual(2);
+    expect(schemas).toContain("choices: { ...ConceptTypeChoices,");
+  });
+});

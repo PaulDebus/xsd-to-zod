@@ -350,19 +350,17 @@ export interface PublicationType {
   "Title": string;
 }
 export type PublicationTypeIn = z.input<typeof PublicationTypeSchema>;
-export interface BookType {
-  "Title": string;
+export interface BookType extends PublicationType {
   "Author": string;
 }
 export type BookTypeIn = z.input<typeof BookTypeSchema>;
-export interface MagazineType {
-  "Title": string;
+export interface MagazineType extends PublicationType {
   "Issue": string;
 }
 export type MagazineTypeIn = z.input<typeof MagazineTypeSchema>;
 const PublicationTypeObjectSchema = z.object({"Title": z.string()});
-const BookTypeObjectSchema = z.object({"Title": z.string(), "Author": z.string()});
-const MagazineTypeObjectSchema = z.object({"Title": z.string(), "Issue": z.string()});
+const BookTypeObjectSchema = PublicationTypeObjectSchema.extend({"Author": z.string()});
+const MagazineTypeObjectSchema = PublicationTypeObjectSchema.extend({"Issue": z.string()});
 const LibraryTypeSchema = z.lazy(() => z.object({"Publication": z.array(z.union([z.lazy(() => BookTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Book" }), z.lazy(() => MagazineTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Magazine" }), z.lazy(() => PublicationTypeSchema).register(xmlRegistry, { substElement: "{urn:substitution-groups}Publication" })])).min(1), "comment": z.union([z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}editorNote" }), z.lazy(() => z.string()).register(xmlRegistry, { substElement: "{urn:substitution-groups}comment" })]).optional()})).register(xmlRegistry, { qname: "{urn:substitution-groups}anonymous_Library_Type", fields: { "Publication": { kind: "element", qname: "{urn:substitution-groups}Publication", substitutes: ["{urn:substitution-groups}Book","{urn:substitution-groups}Magazine"] }, "comment": { kind: "element", qname: "{urn:substitution-groups}comment", substitutes: ["{urn:substitution-groups}editorNote"] } } });
 const PublicationTypeMeta: XmlMeta = { qname: "{urn:substitution-groups}PublicationType", fields: { "Title": { kind: "element", qname: "{urn:substitution-groups}Title" } } };
 const PublicationTypeSchema = z.lazy(() => PublicationTypeObjectSchema).register(xmlRegistry, PublicationTypeMeta);
