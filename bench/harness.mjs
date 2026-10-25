@@ -1,15 +1,19 @@
-// Performance harness: measure parseXml / safeParseXml / serializeXml
-// against a real UBL Invoice document + schema. Reports per-phase timings and
-// heap deltas, with an optional V8 CPU profile dump. Run with:
+// Performance harness: measure parseXsd / irToZod / parseXml / safeParseXml /
+// serializeXml. Defaults to the UBL Invoice 2.4 schema + example document.
+// Reports per-phase timings and heap deltas, with an optional V8 CPU profile
+// dump. Run with:
 //
-//   node bench/harness.mjs [--iterations N] [--copies N] [--only PHASES]
-//                           [--profile] [--out DIR]
+//   node bench/harness.mjs [--xsd FILES] [--xml FILE] [--root QNAME]
+//                           [--repeat-tag TAG] [--iterations N] [--copies N]
+//                           [--only PHASES] [--profile] [--out DIR]
 //
+// --xsd is a comma-separated XSD file list (resolved against the repo root).
+// --repeat-tag names the element replicated to amplify the document, so the
+// generated schema stays fixed while runtime cost scales (default InvoiceLine;
+// copies of a block get unique GUID attributes so xs:key stays satisfied).
 // --only accepts a comma-separated subset of the timed phases (parseXsdOnce,
 // irToZodOnce, parseXml, safeParseXml, serializeXml); use it to scope a
-// --profile run to one phase. The document is amplified by replicating the
-// (maxOccurs unbounded) InvoiceLine children, so the generated schema stays
-// fixed while runtime cost scales.
+// --profile run to one phase.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +32,11 @@ const iterations = Number(argOf("--iterations", "20"));
 const copies = Number(argOf("--copies", "200"));
 const profile = argv.includes("--profile");
 const outDir = argOf("--out", path.join(root, "bench", "out"));
+const repeatTag = argOf("--repeat-tag", "InvoiceLine");
+const xsdArg = argOf("--xsd", "");
+const xmlArg = argOf("--xml", "");
+const rootQNameArg = argOf("--root", "");
+const resolveRepoPath = (p) => (path.isAbsolute(p) ? p : path.join(root, p));
 const ALL_PHASES = ["parseXsdOnce", "irToZodOnce", "parseXml", "safeParseXml", "serializeXml"];
 const only = new Set(
   argOf("--only", "")
@@ -42,7 +51,7 @@ for (const phase of only) {
 }
 
 const XSD_DIR = path.join(root, "testdata", "upstream", "oasis-ubl-2.4", "xsdrt");
-const XML_FILE = path.join(
+const DEFAULT_XML_FILE = path.join(
   root,
   "testdata",
   "upstream",
@@ -51,7 +60,7 @@ const XML_FILE = path.join(
   "UBL-Invoice-2.1-Example.xml",
 );
 
-const XSD_FILES = [
+const DEFAULT_XSD_FILES = [
   "maindoc/UBL-Invoice-2.4.xsd",
   "common/UBL-CommonAggregateComponents-2.4.xsd",
   "common/UBL-CommonBasicComponents-2.4.xsd",
@@ -65,7 +74,12 @@ const XSD_FILES = [
   "common/BDNDR-UnqualifiedDataTypes-1.1.xsd",
 ].map((p) => path.join(XSD_DIR, p));
 
-const ROOT_QNAME = "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}Invoice";
+const XSD_FILES = xsdArg
+  ? xsdArg.split(",").map((p) => resolveRepoPath(p.trim()))
+  : DEFAULT_XSD_FILES;
+const XML_FILE = xmlArg ? resolveRepoPath(xmlArg) : DEFAULT_XML_FILE;
+const ROOT_QNAME =
+  rootQNameArg || "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}Invoice";
 const INDEX_FILE = path.join(root, "dist", "index.js");
 
 // The runner is written to bench/out and executed with plain node (it imports
@@ -90,6 +104,7 @@ const xmlFile = ${JSON.stringify(XML_FILE)};
 const copies = ${JSON.stringify(copies)};
 const iterations = ${JSON.stringify(iterations)};
 const rootQName = ${JSON.stringify(ROOT_QNAME)};
+const repeatTag = ${JSON.stringify(repeatTag)};
 const only = new Set(${JSON.stringify([...only])});
 
 function importGenerated(schemasCode) {
@@ -112,16 +127,36 @@ const cleaned = base
   .replace(/<!DOCTYPE[^>\[]*(\[[\s\S]*?\])?[^>]*>/i, "")
   .replace(/<!--[\s\S]*?-->/g, "");
 
-// Replicate the (maxOccurs unbounded) InvoiceLine children to amplify
-// runtime cost while keeping the document valid against the fixed schema.
-const lineSource = "<cac:InvoiceLine[\\s\\S]*?<\\/cac:InvoiceLine>";
-const lineRe = new RegExp(lineSource, "g");
-const invoiceLines = cleaned.match(lineRe) ?? [];
-if (invoiceLines.length === 0) throw new Error("no InvoiceLine elements found");
-const doc = cleaned.replace(
-  new RegExp("(?:" + lineSource + ")+"),
-  invoiceLines.join("").repeat(copies),
-);
+// Replicate the chosen element block to amplify runtime cost while keeping the
+// document valid against the fixed schema. The original run is preserved so
+// references to its GUIDs stay valid; extra copies get fresh GUID attributes
+// (only where the block has one) to satisfy xs:key uniqueness.
+const blockSource = "<((?:[\\w.-]+:)?" + repeatTag + ")\\b[\\s\\S]*?</\\1>";
+const blockRe = new RegExp(blockSource, "g");
+const blocks = copies > 1 ? (cleaned.match(blockRe) ?? []) : [];
+if (copies > 1 && blocks.length === 0) {
+  throw new Error("no <" + repeatTag + "> elements found");
+}
+const withUniqueGuid = (block, n) =>
+  block.replace(/(?:[A-Za-z_][\\w.-]*:)?GUID="[^"]*"/, (attr) =>
+    attr.replace(
+      /"[^"]*"/,
+      '"00000000-0000-4000-8000-' + n.toString(16).padStart(12, "0") + '"',
+    ),
+  );
+const runRe = new RegExp("(?:" + blockSource + ")+", "g");
+let extraIndex = 0;
+const doc =
+  copies > 1
+    ? cleaned.replace(runRe, (run) => {
+        const runBlocks = run.match(blockRe) ?? [run];
+        let out = run;
+        for (let i = 1; i < copies; i++) {
+          for (const block of runBlocks) out += withUniqueGuid(block, extraIndex++);
+        }
+        return out;
+      })
+    : cleaned;
 
 // heapDeltaBytes is *retained* memory: GC runs on both sides so the value
 // excludes garbage the phase produced and already collected. Allocation churn
@@ -181,7 +216,8 @@ console.log(JSON.stringify({
   meta: {
     documentBytes: Buffer.byteLength(doc),
     serializedBytes: Buffer.byteLength(serialized),
-    invoiceLines: invoiceLines.length * copies,
+    repeatedTag: copies > 1 ? repeatTag : null,
+    repeatedElements: copies > 1 ? blocks.length * copies : 0,
     copies,
     iterations,
     phases: Object.keys(results),
