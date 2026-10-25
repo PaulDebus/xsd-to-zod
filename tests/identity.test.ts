@@ -988,4 +988,89 @@ describe("identity constraints with the ergonomic output shape", () => {
       ),
     ).toContain('xs:unique "itemUnique"');
   });
+
+  it("compares high-precision decimal-family keys exactly, not through Number()", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="uid" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="uuid">
+      <xs:selector xpath=".//uid"/>
+      <xs:field xpath="."/>
+    </xs:unique>
+  </xs:element>
+  <xs:element name="uid" type="xs:anyType"/>
+</xs:schema>`,
+      `<root><uid>1</uid></root>`,
+    );
+    const decl = `xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // Digits past double precision would collapse both values to 1.
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${decl}><uid xsi:type="xs:decimal">1.0000000000000000001</uid><uid xsi:type="xs:decimal">1.0000000000000000002</uid></root>`,
+      ).success,
+    ).toBe(true);
+    // xs:long values beyond Number.MAX_SAFE_INTEGER stay distinct too.
+    expect(
+      safeParseXml(
+        schema,
+        `<root ${decl}><uid xsi:type="xs:long">9223372036854775806</uid><uid xsi:type="xs:long">9223372036854775807</uid></root>`,
+      ).success,
+    ).toBe(true);
+    // Different lexicals for one value remain a duplicate.
+    const dup = safeParseXml(
+      schema,
+      `<root ${decl}><uid xsi:type="xs:decimal">1.00000000000000000010</uid><uid xsi:type="xs:decimal">1.0000000000000000001</uid></root>`,
+    );
+    expect(expectFailure(dup)).toContain('xs:unique "uuid"');
+  });
+
+  it("compares QName-typed key fields of nil elements by resolved value", async () => {
+    const schema = await schemaFor(
+      `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element ref="row" maxOccurs="unbounded"/>
+      </xs:choice>
+    </xs:complexType>
+    <xs:key name="rowKey">
+      <xs:selector xpath=".//row"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="row" nillable="true">
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="id" type="xs:QName"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`,
+      `<root><row id="a:one"/></root>`,
+    );
+    const xsi = `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`;
+    // Different prefixes for the same QName value are a duplicate.
+    const dup = safeParseXml(
+      schema,
+      `<root xmlns:a="urn:ids" xmlns:b="urn:ids" ${xsi}><row id="a:one" xsi:nil="true"/><row id="b:one" xsi:nil="true"/></root>`,
+    );
+    expect(expectFailure(dup)).toContain("duplicate key value");
+    // Same lexical, different namespace: distinct key values.
+    expect(
+      safeParseXml(
+        schema,
+        `<root xmlns:a="urn:ids" xmlns:b="urn:other" ${xsi}><row id="a:one" xsi:nil="true"/><row id="b:one" xsi:nil="true"/></root>`,
+      ).success,
+    ).toBe(true);
+  });
 });
