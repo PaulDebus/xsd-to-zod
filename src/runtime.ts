@@ -199,19 +199,29 @@ const hasXmlnsPrefix = (node: Record<string, unknown>): boolean => {
 };
 
 const escapeXmlPattern = /[&<>"'\r]/g;
-const escapeXmlReplacements: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&apos;",
-  "\r": "&#xD;",
+const escapeXmlChar = (ch: string): string => {
+  switch (ch) {
+    case "&":
+      return "&amp;";
+    case "<":
+      return "&lt;";
+    case ">":
+      return "&gt;";
+    case '"':
+      return "&quot;";
+    case "'":
+      return "&apos;";
+    case "\r":
+      // A literal CR never survives a parse round-trip (line-ending
+      // normalization maps it to LF), so it must become a character reference.
+      return "&#xD;";
+    default:
+      return ch;
+  }
 };
 // Single pass over the string (the six sequential replaceAll passes scanned it
-// six times) — a literal CR must still become a character reference because it
-// never survives a parse round-trip (line-ending normalization maps it to LF).
-const escapeXml = (value: string): string =>
-  value.replace(escapeXmlPattern, (ch) => escapeXmlReplacements[ch]!);
+// six times).
+const escapeXml = (value: string): string => value.replace(escapeXmlPattern, escapeXmlChar);
 
 // Attribute-value normalization additionally maps literal TAB and LF to
 // spaces, so attribute text needs those as character references too. Applied
@@ -265,9 +275,12 @@ const defAs = <T extends AnyDef>(def: AnyDef, type: T["type"]): T | undefined =>
 // returns the input unchanged when it is not a wrapper.
 const peelOnce = (schema: AnySchema): AnySchema => {
   const def = schema._zod.def;
-  const lazy = defAs<z.core.$ZodLazyDef>(def, "lazy");
-  if (lazy) {
-    return lazy.getter();
+  if (def.type === "lazy") {
+    // Read zod's cached inner type instead of calling the getter: generated
+    // code wraps every type in a z.lazy whose getter builds the whole object
+    // literal, so calling it on each peel would reconstruct the schema (and
+    // all its field schemas) per element occurrence.
+    return (schema as z.core.$ZodLazy)._zod.innerType;
   }
   const wrapper =
     defAs<z.core.$ZodOptionalDef>(def, "optional") ??

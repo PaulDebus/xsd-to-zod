@@ -1,12 +1,15 @@
-// IRE-59 performance harness: measure parseXml / safeParseXml / serializeXml
+// Performance harness: measure parseXml / safeParseXml / serializeXml
 // against a real UBL Invoice document + schema. Reports per-phase timings and
 // heap deltas, with an optional V8 CPU profile dump. Run with:
 //
-//   node bench/harness.mjs [--iterations N] [--copies N] [--profile] [--out DIR]
+//   node bench/harness.mjs [--iterations N] [--copies N] [--only PHASES]
+//                           [--profile] [--out DIR]
 //
-// The document is amplified by replicating the (maxOccurs unbounded)
-// InvoiceLine children, so the generated schema stays fixed while runtime
-// cost scales.
+// --only accepts a comma-separated subset of the timed phases (parseXsdOnce,
+// irToZodOnce, parseXml, safeParseXml, serializeXml); use it to scope a
+// --profile run to one phase. The document is amplified by replicating the
+// (maxOccurs unbounded) InvoiceLine children, so the generated schema stays
+// fixed while runtime cost scales.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +28,18 @@ const iterations = Number(argOf("--iterations", "20"));
 const copies = Number(argOf("--copies", "200"));
 const profile = argv.includes("--profile");
 const outDir = argOf("--out", path.join(root, "bench", "out"));
+const ALL_PHASES = ["parseXsdOnce", "irToZodOnce", "parseXml", "safeParseXml", "serializeXml"];
+const only = new Set(
+  argOf("--only", "")
+    .split(",")
+    .map((phase) => phase.trim())
+    .filter(Boolean),
+);
+for (const phase of only) {
+  if (!ALL_PHASES.includes(phase)) {
+    throw new Error(`unknown --only phase "${phase}" (expected ${ALL_PHASES.join(", ")})`);
+  }
+}
 
 const XSD_DIR = path.join(root, "testdata", "upstream", "oasis-ubl-2.4", "xsdrt");
 const XML_FILE = path.join(
@@ -53,8 +68,9 @@ const XSD_FILES = [
 const ROOT_QNAME = "{urn:oasis:names:specification:ubl:schema:xsd:Invoice-2}Invoice";
 const INDEX_FILE = path.join(root, "dist", "index.js");
 
-// The runner is written to bench/out and executed with tsx; regex backslashes
-// inside the template below are preserved verbatim via String.raw.
+// The runner is written to bench/out and executed with plain node (it imports
+// compiled JS from dist/); regex backslashes inside the template below are
+// preserved verbatim via String.raw.
 const runnerSource = String.raw`
 import fs from "node:fs";
 import path from "node:path";
@@ -74,6 +90,7 @@ const xmlFile = ${JSON.stringify(XML_FILE)};
 const copies = ${JSON.stringify(copies)};
 const iterations = ${JSON.stringify(iterations)};
 const rootQName = ${JSON.stringify(ROOT_QNAME)};
+const only = new Set(${JSON.stringify([...only])});
 
 function importGenerated(schemasCode) {
   const base = path.join(process.cwd(), ".xsd-to-zod-bench");
@@ -106,12 +123,18 @@ const doc = cleaned.replace(
   invoiceLines.join("").repeat(copies),
 );
 
+// heapDeltaBytes is *retained* memory: GC runs on both sides so the value
+// excludes garbage the phase produced and already collected. Allocation churn
+// shows up as GC samples in a --profile run rather than in this delta.
 function timed(name, fn) {
+  globalThis.gc?.();
   fn(); // warmup
+  globalThis.gc?.();
   const heapBefore = process.memoryUsage().heapUsed;
   const t0 = performance.now();
   for (let i = 0; i < iterations; i++) fn();
   const t1 = performance.now();
+  globalThis.gc?.();
   const heapAfter = process.memoryUsage().heapUsed;
   return {
     totalMs: +(t1 - t0).toFixed(2),
@@ -136,13 +159,19 @@ if (rootSchema === undefined) {
 const parsed = parseXml(rootSchema, doc);
 const serialized = serializeXml(rootSchema, parsed);
 
-const results = {
-  parseXsdOnce: timed("parseXsdOnce", () => parseXsd(xsdFiles)),
-  irToZodOnce: timed("irToZodOnce", () => irToZod(schema, {})),
-  parseXml: timed("parseXml", () => parseXml(rootSchema, doc)),
-  safeParseXml: timed("safeParseXml", () => safeParseXml(rootSchema, doc)),
-  serializeXml: timed("serializeXml", () => serializeXml(rootSchema, parsed)),
+const phaseRuns = {
+  parseXsdOnce: () => parseXsd(xsdFiles),
+  irToZodOnce: () => irToZod(schema, {}),
+  parseXml: () => parseXml(rootSchema, doc),
+  safeParseXml: () => safeParseXml(rootSchema, doc),
+  serializeXml: () => serializeXml(rootSchema, parsed),
 };
+
+const selected = (phase) => only.size === 0 || only.has(phase);
+const results = {};
+for (const [phase, run] of Object.entries(phaseRuns)) {
+  if (selected(phase)) results[phase] = timed(phase, run);
+}
 
 // round-trip sanity: re-parse the serialized output once and re-serialize
 const reparsed = parseXml(rootSchema, serialized);
@@ -155,6 +184,7 @@ console.log(JSON.stringify({
     invoiceLines: invoiceLines.length * copies,
     copies,
     iterations,
+    phases: Object.keys(results),
     roundTripStable,
     node: process.version,
   },
