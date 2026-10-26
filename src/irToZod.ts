@@ -147,6 +147,22 @@ const XSD_COLLAPSE_STRING_BUILTINS: ReadonlySet<string> = new Set([
   "ENTITIES",
 ]);
 
+// String-derived builtins XSD orders by codepoint. The list-valued builtins
+// (NMTOKENS/IDREFS/ENTITIES) and the non-string primitives (anyURI, QName,
+// hexBinary, …) have no order relation in XSD 1.0.
+const XSD_ORDERED_STRING_BUILTINS: ReadonlySet<string> = new Set([
+  "string",
+  "normalizedString",
+  "token",
+  "language",
+  "Name",
+  "NCName",
+  "ID",
+  "IDREF",
+  "ENTITY",
+  "NMTOKEN",
+]);
+
 // Value-space processing of a fixed/default/enum lexical: the whiteSpace facet
 // applies to the literal itself, so the emitted JS literal is the processed
 // value (NMTOKENS fixed="&#x9; X" means the value "X").
@@ -908,10 +924,25 @@ const applyLengthFacet = (
   return `${result}.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${kind.value}, { message: 'length constraint violated' })`;
 };
 
+// The ordered builtin a type derives from: the date/time family (including
+// duration) or a codepoint-ordered string-derived builtin.
+const orderDatatypeOf = (builtinLocal: string | undefined): string | undefined => {
+  if (builtinLocal === undefined) {
+    return undefined;
+  }
+  if (XSD_STRUCTURED_TYPES.has(builtinLocal)) {
+    return builtinLocal;
+  }
+  return XSD_ORDERED_STRING_BUILTINS.has(builtinLocal) ? "string" : undefined;
+};
+
 const applyOrderFacet = (
   result: string,
   facet: Facet & { kind: "minInclusive" | "maxInclusive" | "minExclusive" | "maxExclusive" },
   kind: PrimitiveKind,
+  builtinLocal: string | undefined,
+  whiteSpace: "collapse" | "replace" | undefined,
+  usedHelpers: Set<string>,
 ): string => {
   if (isNumberType(result)) {
     const bound = String(Number(facet.value));
@@ -949,6 +980,24 @@ const applyOrderFacet = (
     const bound =
       kind === "bigint" ? typedLiteral("bigint", facet.value) : String(Number(facet.value));
     return `${result}.refine((val) => val ${op} ${bound}, { message: 'value out of range' })`;
+  }
+  const datatype = orderDatatypeOf(builtinLocal);
+  if (datatype !== undefined) {
+    usedHelpers.add("xsdOrderCompare");
+    const op =
+      facet.kind === "minInclusive"
+        ? ">="
+        : facet.kind === "maxInclusive"
+          ? "<="
+          : facet.kind === "minExclusive"
+            ? ">"
+            : "<";
+    // String facet values are values too: the type's whiteSpace facet applies
+    // to them before comparison. Structured datatype boundaries carry their own
+    // whitespace handling in the parser.
+    const boundary =
+      datatype === "string" ? wsProcessLiteral(facet.value, whiteSpace) : facet.value;
+    return `${result}.refine((val) => { const cmp = xsdOrderCompare(${JSON.stringify(datatype)}, val, ${JSON.stringify(boundary)}); return !Number.isNaN(cmp) && cmp ${op} 0; }, { message: 'value out of range' })`;
   }
   return `${result} /* facet ${facet.kind} skipped: order facets unsupported on non-numeric types */`;
 };
@@ -1097,7 +1146,7 @@ const withFacets = (
         case "maxInclusive":
         case "minExclusive":
         case "maxExclusive":
-          result = applyOrderFacet(result, facet, kind);
+          result = applyOrderFacet(result, facet, kind, builtinLocal, enumWhiteSpace, usedHelpers);
           break;
         case "totalDigits":
           if (kind === "bigint") {
@@ -2810,6 +2859,7 @@ export const TS_TYPE_RESERVED = new Set([
   "xsdFractionDigits",
   "xsdPattern",
   "xsdDecimalLexical",
+  "xsdOrderCompare",
   "XmlMeta",
   "XmlFieldMeta",
   "XmlChoiceMeta",

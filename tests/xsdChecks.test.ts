@@ -5,8 +5,10 @@ import {
   countTotalDigits,
   xsdDecimalCompare,
   xsdFractionDigits,
+  xsdOrderCompare,
   xsdTotalDigits,
 } from "../src/xsdChecks.js";
+import { parseXsdDatatype } from "../src/xsdDateTime.js";
 
 // Direct unit tests for the digit-count checks: generated code imports these
 // from the installed 'xsd-to-zod' package (dist/), so only direct src imports
@@ -114,5 +116,54 @@ describe("xsdDecimalCompare", () => {
         expect(result, bad).toBe(false);
       }
     }
+  });
+});
+
+describe("xsdOrderCompare", () => {
+  it("orders strings by codepoint", () => {
+    expect(xsdOrderCompare("string", "a", "b")).toBe(-1);
+    expect(xsdOrderCompare("string", "b", "a")).toBe(1);
+    expect(xsdOrderCompare("string", "ab", "ab")).toBe(0);
+    expect(xsdOrderCompare("string", "ab", "a")).toBe(1);
+    // U+10000 is a single codepoint above U+E000, though its UTF-16
+    // surrogate sorts before it.
+    expect(xsdOrderCompare("string", "\u{10000}", "\uE000")).toBe(1);
+  });
+
+  it("compares date/time values in value space", () => {
+    expect(xsdOrderCompare("date", "2002-06-01", "2002-01-01")).toBe(1);
+    expect(xsdOrderCompare("date", "2002-01-01Z", "2002-01-01")).toBe(Number.NaN);
+    expect(xsdOrderCompare("date", "2002-01-03Z", "2002-01-01")).toBe(1);
+    expect(xsdOrderCompare("dateTime", "2002-10-10T12:00:00-05:00", "2002-10-10T17:00:00Z")).toBe(
+      0,
+    );
+    // Fractional seconds order by value, not by lexical length.
+    expect(xsdOrderCompare("dateTime", "2002-01-01T00:00:00.5", "2002-01-01T00:00:00.50")).toBe(0);
+    expect(xsdOrderCompare("time", "12:00:00+01:00", "10:30:00Z")).toBe(1);
+    expect(xsdOrderCompare("gYear", "2002", "2001")).toBe(1);
+    expect(xsdOrderCompare("gYearMonth", "2002-02", "2002-01")).toBe(1);
+    expect(xsdOrderCompare("gMonth", "--02", "--01")).toBe(1);
+    expect(xsdOrderCompare("gMonthDay", "--02-01", "--01-31")).toBe(1);
+    expect(xsdOrderCompare("gDay", "---02", "---01")).toBe(1);
+  });
+
+  it("accepts an already parsed structured value", () => {
+    expect(xsdOrderCompare("date", parseXsdDatatype("date", "2002-06-01"), "2002-01-01")).toBe(1);
+  });
+
+  it("follows duration's partial order", () => {
+    expect(xsdOrderCompare("duration", "PT6S", "PT5.999999999S")).toBe(1);
+    expect(xsdOrderCompare("duration", "PT6S", "PT6.000S")).toBe(0);
+    expect(xsdOrderCompare("duration", "P1M", "P30D")).toBe(Number.NaN);
+    expect(xsdOrderCompare("duration", "P1M", "P32D")).toBe(-1);
+    expect(xsdOrderCompare("duration", "P1Y", "P367D")).toBe(-1);
+    expect(xsdOrderCompare("duration", "P1Y", "P364D")).toBe(1);
+    expect(xsdOrderCompare("duration", "-P1D", "PT0S")).toBe(-1);
+  });
+
+  it("returns NaN for invalid lexicals", () => {
+    expect(xsdOrderCompare("date", "not-a-date", "2002-01-01")).toBe(Number.NaN);
+    expect(xsdOrderCompare("duration", "P1D", "nope")).toBe(Number.NaN);
+    expect(xsdOrderCompare("string", 42 as unknown as string, "a")).toBe(Number.NaN);
   });
 });

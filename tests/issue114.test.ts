@@ -34,7 +34,7 @@ describe("facet codegen on incompatible Zod types", () => {
     expect(code).toContain('facets: {"patterns":[["[0-9]{5}"]],"whiteSpace":"collapse"}');
   });
 
-  it("skips order facets on string-typed bases (no .gt/.lt/NaN emission)", async () => {
+  it("emits order facets on date-typed bases through the value-space compare", async () => {
     const code = await codeFor(`<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:simpleType name="Window">
@@ -44,9 +44,28 @@ describe("facet codegen on incompatible Zod types", () => {
     </xs:restriction>
   </xs:simpleType>
 </xs:schema>`);
-    expect(code).not.toMatch(/\.(gt|lt|min|max)\(/);
-    expect(code).not.toContain("NaN");
-    // Skipped facets must leave a diagnostic in the generated code.
+    expect(code).toContain(
+      'xsdOrderCompare("date", val, "2002-01-01"); return !Number.isNaN(cmp) && cmp >= 0;',
+    );
+    expect(code).toContain(
+      'xsdOrderCompare("date", val, "2003-01-01"); return !Number.isNaN(cmp) && cmp < 0;',
+    );
+    expect(code).toContain("xsdOrderCompare");
+    expect(code).not.toContain("facet minInclusive skipped");
+    expect(code).not.toContain("facet maxExclusive skipped");
+  });
+
+  it("keeps skipping order facets on types with no order relation", async () => {
+    const code = await codeFor(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="Binary">
+    <xs:restriction base="xs:hexBinary">
+      <xs:minInclusive value="00"/>
+      <xs:maxExclusive value="FF"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>`);
+    expect(code).not.toContain("xsdOrderCompare");
     expect(code).toContain("facet minInclusive skipped");
     expect(code).toContain("facet maxExclusive skipped");
   });

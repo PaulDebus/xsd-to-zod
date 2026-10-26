@@ -4,6 +4,22 @@
 // 'e'/'-' nor leading/trailing zeros count — and 1.19 is not rejected for
 // failing a float multipleOf(0.01).
 
+import {
+  parseXsdDatatype,
+  writeXsdDatatype,
+  type XsdDatatypeName,
+  type XsdDate,
+  type XsdDateTime,
+  type XsdDuration,
+  type XsdGDay,
+  type XsdGMonth,
+  type XsdGMonthDay,
+  type XsdGYear,
+  type XsdGYearMonth,
+  type XsdStructuredValue,
+  type XsdTime,
+} from "./xsdDateTime.js";
+
 const canonicalParts = (value: number): { digits: string; exponent: number } => {
   const abs = Math.abs(value);
   if (abs === 0) {
@@ -141,4 +157,295 @@ export const xsdDecimalCompare = (valueLexical: string, boundaryLexical: string)
   const cmp = vScaled > bScaled ? 1 : vScaled < bScaled ? -1 : 0;
   // Guard the sign flip: -cmp would yield -0 for an exact match.
   return vNeg && cmp !== 0 ? -cmp : cmp;
+};
+
+// ---------------------------------------------------------------------------
+// Order comparison for the ordered non-numeric builtins.
+//
+// The date/time family orders by value space (XSD 1.0 Part 2 §3.2.7.4): a
+// present timezone is normalized to UTC, and a timezone-present value is
+// compared against a timezone-absent one through the ±14:00 window, so
+// genuinely indeterminate pairs reject. xs:duration follows its four
+// reference-date partial order (§3.2.6.2). Strings compare by Unicode
+// codepoint, not by UTF-16 code unit.
+//
+// Generated schemas call this from a refine; the value is either the original
+// lexical (datatypes: "string") or the parsed object (datatypes: "structured"),
+// so both shapes are accepted.
+// ---------------------------------------------------------------------------
+
+export type XsdOrderDatatype = XsdDatatypeName | "string";
+
+const codepointCompare = (a: string, b: string): number => {
+  const left = Array.from(a);
+  const right = Array.from(b);
+  const length = Math.min(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const l = left[i]?.codePointAt(0) ?? 0;
+    const r = right[i]?.codePointAt(0) ?? 0;
+    if (l !== r) {
+      return l < r ? -1 : 1;
+    }
+  }
+  return left.length === right.length ? 0 : left.length < right.length ? -1 : 1;
+};
+
+const fractionCompare = (a: string | undefined, b: string | undefined): number => {
+  const left = a ?? "";
+  const right = b ?? "";
+  const length = Math.max(left.length, right.length);
+  const paddedLeft = left.padEnd(length, "0");
+  const paddedRight = right.padEnd(length, "0");
+  return paddedLeft < paddedRight ? -1 : paddedLeft > paddedRight ? 1 : 0;
+};
+
+const fieldCompare = (
+  a: readonly (number | undefined)[],
+  b: readonly (number | undefined)[],
+): number => {
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i] ?? 0;
+    const right = b[i] ?? 0;
+    if (left !== right) {
+      return left < right ? -1 : 1;
+    }
+  }
+  return 0;
+};
+
+const hasTimezone = (value: XsdStructuredValue): boolean =>
+  (value as { tzOffset?: number }).tzOffset !== undefined;
+
+// Add the given timezone to a timezone-absent value by round-tripping through
+// its canonical lexical (write never emits a timezone here, so the suffix is
+// unambiguous). Parsing normalizes the result to UTC, like every explicit tz.
+const withTimezone = (
+  datatype: XsdDatatypeName,
+  value: XsdStructuredValue,
+  offset: "+14:00" | "-14:00",
+): XsdStructuredValue =>
+  parseXsdDatatype(datatype, `${writeXsdDatatype(datatype, value)}${offset}`);
+
+const compareFields = (
+  datatype: XsdDatatypeName,
+  a: XsdStructuredValue,
+  b: XsdStructuredValue,
+): number => {
+  switch (datatype) {
+    case "date": {
+      const x = a as XsdDate;
+      const y = b as XsdDate;
+      return fieldCompare([x.year, x.month, x.day], [y.year, y.month, y.day]);
+    }
+    case "dateTime": {
+      const x = a as XsdDateTime;
+      const y = b as XsdDateTime;
+      const date = fieldCompare(
+        [x.year, x.month, x.day, x.hour, x.minute, x.second],
+        [y.year, y.month, y.day, y.hour, y.minute, y.second],
+      );
+      return date === 0 ? fractionCompare(x.fraction, y.fraction) : date;
+    }
+    case "time": {
+      const x = a as XsdTime;
+      const y = b as XsdTime;
+      const time = fieldCompare([x.hour, x.minute, x.second], [y.hour, y.minute, y.second]);
+      return time === 0 ? fractionCompare(x.fraction, y.fraction) : time;
+    }
+    case "gYear": {
+      const x = a as XsdGYear;
+      const y = b as XsdGYear;
+      return fieldCompare([x.year], [y.year]);
+    }
+    case "gYearMonth": {
+      const x = a as XsdGYearMonth;
+      const y = b as XsdGYearMonth;
+      return fieldCompare([x.year, x.month], [y.year, y.month]);
+    }
+    case "gMonth": {
+      const x = a as XsdGMonth;
+      const y = b as XsdGMonth;
+      return fieldCompare([x.month], [y.month]);
+    }
+    case "gMonthDay": {
+      const x = a as XsdGMonthDay;
+      const y = b as XsdGMonthDay;
+      return fieldCompare([x.month, x.day], [y.month, y.day]);
+    }
+    case "gDay": {
+      const x = a as XsdGDay;
+      const y = b as XsdGDay;
+      return fieldCompare([x.day], [y.day]);
+    }
+    case "duration":
+      return compareDurations(a as XsdDuration, b as XsdDuration);
+  }
+};
+
+const compareDateTimeLike = (
+  datatype: Exclude<XsdDatatypeName, "duration">,
+  a: XsdStructuredValue,
+  b: XsdStructuredValue,
+): number => {
+  const aHasTimezone = hasTimezone(a);
+  const bHasTimezone = hasTimezone(b);
+  if (aHasTimezone === bHasTimezone) {
+    return compareFields(datatype, a, b);
+  }
+  if (aHasTimezone) {
+    // a is timezoned, b is not: b's real instant spans [b+14:00, b-14:00].
+    const earliest = withTimezone(datatype, b, "+14:00");
+    const latest = withTimezone(datatype, b, "-14:00");
+    if (compareFields(datatype, a, earliest) < 0) {
+      return -1;
+    }
+    if (compareFields(datatype, a, latest) > 0) {
+      return 1;
+    }
+    return Number.NaN;
+  }
+  // a is not timezoned, b is: a's real instant spans [a-14:00, a+14:00].
+  const earliest = withTimezone(datatype, a, "+14:00");
+  const latest = withTimezone(datatype, a, "-14:00");
+  if (compareFields(datatype, latest, b) < 0) {
+    return -1;
+  }
+  if (compareFields(datatype, earliest, b) > 0) {
+    return 1;
+  }
+  return Number.NaN;
+};
+
+const astroYear = (year: bigint): bigint => (year < 0n ? year + 1n : year);
+
+const floorDiv = (a: bigint, b: bigint): bigint => {
+  const quotient = a / b;
+  return a % b !== 0n && a < 0n !== b < 0n ? quotient - 1n : quotient;
+};
+
+// Proleptic Gregorian day number (Howard Hinnant's civil_from_days inverse).
+const daysFromCivil = (year: bigint, month: bigint, day: bigint): bigint => {
+  const shiftedYear = month <= 2n ? year - 1n : year;
+  const era = floorDiv(shiftedYear, 400n);
+  const yearOfEra = shiftedYear - era * 400n;
+  const shiftedMonth = month > 2n ? month - 3n : month + 9n;
+  const dayOfYear = (153n * shiftedMonth + 2n) / 5n + day - 1n;
+  const dayOfEra = yearOfEra * 365n + yearOfEra / 4n - yearOfEra / 100n + dayOfYear;
+  return era * 146097n + dayOfEra;
+};
+
+// The four reference dates from XSD 1.0 Part 2 §3.2.6.2.
+const DURATION_REFERENCES: ReadonlyArray<readonly [bigint, bigint]> = [
+  [1696n, 9n],
+  [1697n, 2n],
+  [1903n, 3n],
+  [1903n, 7n],
+];
+
+interface DurationParts {
+  months: bigint;
+  seconds: bigint;
+  scale: number;
+}
+
+const durationParts = (value: XsdDuration): DurationParts => {
+  const sign = BigInt(value.sign);
+  const months = BigInt((value.years ?? 0) * 12 + (value.months ?? 0));
+  const wholeSeconds =
+    BigInt(value.days ?? 0) * 86400n +
+    BigInt(value.hours ?? 0) * 3600n +
+    BigInt(value.minutes ?? 0) * 60n +
+    BigInt(value.seconds ?? 0);
+  const fractionDigits = value.fraction ?? "";
+  const factor = 10n ** BigInt(fractionDigits.length);
+  const fraction = fractionDigits === "" ? 0n : BigInt(fractionDigits);
+  return {
+    months: sign * months,
+    seconds: sign * (wholeSeconds * factor + fraction),
+    scale: fractionDigits.length,
+  };
+};
+
+const scaledSeconds = (parts: DurationParts, scale: number): bigint =>
+  parts.seconds * 10n ** BigInt(scale - parts.scale);
+
+// Add the duration to a reference date (day 1) and express the result as an
+// exact instant: whole days times 86400 plus the duration's seconds.
+const durationInstant = (
+  parts: DurationParts,
+  commonScale: number,
+  referenceYear: bigint,
+  referenceMonth: bigint,
+): bigint => {
+  const totalMonths = referenceYear * 12n + (referenceMonth - 1n) + parts.months;
+  const year = floorDiv(totalMonths, 12n);
+  const month = totalMonths - year * 12n + 1n;
+  const dayNumber = daysFromCivil(astroYear(year), month, 1n);
+  const factor = 10n ** BigInt(commonScale);
+  return dayNumber * 86400n * factor + scaledSeconds(parts, commonScale);
+};
+
+const compareDurations = (a: XsdDuration, b: XsdDuration): number => {
+  const left = durationParts(a);
+  const right = durationParts(b);
+  const commonScale = Math.max(left.scale, right.scale);
+  let allLess = true;
+  let allGreater = true;
+  let allEqual = true;
+  for (const [year, month] of DURATION_REFERENCES) {
+    const leftInstant = durationInstant(left, commonScale, year, month);
+    const rightInstant = durationInstant(right, commonScale, year, month);
+    allLess &&= leftInstant < rightInstant;
+    allGreater &&= leftInstant > rightInstant;
+    allEqual &&= leftInstant === rightInstant;
+  }
+  // The spec orders x < y only when every reference agrees strictly: a single
+  // equal or opposite result is the indeterminate case (P1M vs P31D).
+  return allLess ? -1 : allGreater ? 1 : allEqual ? 0 : Number.NaN;
+};
+
+const boundaryCache = new Map<string, XsdStructuredValue | undefined>();
+
+const parsedBoundary = (
+  datatype: XsdDatatypeName,
+  boundary: string,
+): XsdStructuredValue | undefined => {
+  const key = `${datatype}\u0000${boundary}`;
+  if (boundaryCache.has(key)) {
+    return boundaryCache.get(key);
+  }
+  let parsed: XsdStructuredValue | undefined;
+  try {
+    parsed = parseXsdDatatype(datatype, boundary);
+  } catch {
+    parsed = undefined;
+  }
+  boundaryCache.set(key, parsed);
+  return parsed;
+};
+
+// Negative/zero/positive as the instance value compares to the boundary;
+// NaN when either side is invalid or the XSD partial order is indeterminate.
+export const xsdOrderCompare = (
+  datatype: XsdOrderDatatype,
+  value: string | XsdStructuredValue,
+  boundary: string,
+): number => {
+  if (datatype === "string") {
+    return typeof value === "string" ? codepointCompare(value, boundary) : Number.NaN;
+  }
+  const parsed = parsedBoundary(datatype, boundary);
+  if (parsed === undefined) {
+    return Number.NaN;
+  }
+  let instance: XsdStructuredValue;
+  try {
+    instance = typeof value === "string" ? parseXsdDatatype(datatype, value) : value;
+  } catch {
+    return Number.NaN;
+  }
+  if (datatype === "duration") {
+    return compareDurations(instance as XsdDuration, parsed as XsdDuration);
+  }
+  return compareDateTimeLike(datatype, instance, parsed);
 };
