@@ -3970,7 +3970,7 @@ export const irToZod = (
         schemaLines.push(
           withNamingComment(
             simpleType.name,
-            `const ${constName.get(simpleType.name)} = ${registered(
+            `export const ${constName.get(simpleType.name)} = ${registered(
               expr,
               simpleType.description,
               `{ qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)} }`,
@@ -3983,7 +3983,7 @@ export const irToZod = (
     schemaLines.push(
       withNamingComment(
         simpleType.name,
-        `const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)} }`)};`,
+        `export const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)} }`)};`,
       ),
     );
   }
@@ -4046,7 +4046,7 @@ export const irToZod = (
       schemaLines.push(
         withNamingComment(
           complexType.name,
-          `const ${constName.get(complexType.name)}${annotation} = ${registered(
+          `export const ${constName.get(complexType.name)}${annotation} = ${registered(
             `z.lazy(() => ${shapeName}${check})`,
             complexType.description,
             metaConstFor(complexType.name),
@@ -4063,7 +4063,7 @@ export const irToZod = (
     schemaLines.push(
       withNamingComment(
         complexType.name,
-        `const ${constName.get(complexType.name)}${annotation} = ${registered(
+        `export const ${constName.get(complexType.name)}${annotation} = ${registered(
           `z.lazy(() => ${shape})`,
           complexType.description,
           `{ ${metaBodyFor(complexType.name)} }`,
