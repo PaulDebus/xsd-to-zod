@@ -1,6 +1,7 @@
 // Known anomalies for the full-corpus invalid-schema suite, keyed by
 // `<testSet-relative-path>/<testGroup>`. An anomaly is a schema the suite
-// marks INVALID (for XSD 1.0) that both the zod tier and libxml2 accept.
+// marks INVALID (for XSD 1.0) that both the zod tier and libxml2 accept — a
+// case our tier rejects is not an anomaly, even when libxml2 accepts it.
 // Entries run as `it.fails` — a fix that makes a case pass turns the suite
 // red; move the entry to the other list or remove it in the same PR.
 

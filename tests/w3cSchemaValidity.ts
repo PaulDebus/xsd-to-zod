@@ -1,9 +1,14 @@
 import { parseXsd, readXmlFile } from "../src/index.js";
 import type { W3cInvalidSchemaCase } from "./w3cDriver.js";
 
-// Schema-validity outcome: both tiers reject (pass), the zod tier accepts while
-// libxml2 rejects (documented leniency), or libxml2 accepts a schema the suite
-// marks invalid (anomaly — pinned).
+// Schema-validity outcome for a schema the suite marks invalid (XSD 1.0):
+//   rejected — the zod tier rejects the schema (a pass). libxml2 may reject it
+//              too or let it through; either way our tier matches the suite.
+//   lenient  — the zod tier accepts while libxml2 (the conformance authority)
+//              rejects: a codegen gap other tools catch, recorded for the report.
+//   anomaly  — both tiers accept the schema: pinned as `it.fails` until fixed.
+// A libxml2 accept combined with a zod-tier reject is therefore a pass, not an
+// anomaly.
 export type SchemaValidityOutcome = "rejected" | "lenient" | "anomaly";
 
 // libxml2 (the conformance authority) rejects the schema when any document of
@@ -32,10 +37,12 @@ export const evaluateInvalidSchemaCase = async (
 ): Promise<SchemaValidityOutcome> => {
   const libxmlAccepts = await libxmlAcceptsSchema(c.xsdFiles);
   const codegenRejects = await codegenRejectsSchema(c.xsdFiles);
-  if (libxmlAccepts) {
-    return "anomaly";
+  if (codegenRejects) {
+    return "rejected";
   }
-  return codegenRejects ? "rejected" : "lenient";
+  // The zod tier let a suite-invalid schema through: libxml2 catching it is a
+  // documented leniency, both tiers accepting it is an anomaly.
+  return libxmlAccepts ? "anomaly" : "lenient";
 };
 
 export interface SchemaValidityTally {

@@ -175,10 +175,11 @@ export const discoverCorpusInvalidSchemas = (testSetFiles: string[]): W3cInvalid
 
 // Register the invalid-schema tests for a slice of the corpus. The suite marks
 // the schema invalid (for XSD 1.0); libxml2 is the conformance authority. A
-// libxml2 reject passes; a zod-tier reject where libxml2 also rejects passes;
-// a zod accept with a libxml2 reject is recorded as leniency; a libxml2 accept
-// is an anomaly pinned as `it.fails`. Each shard writes its own report; the
-// merge script publishes all shards together.
+// zod-tier reject passes — libxml2 may reject the schema too or accept it, in
+// which case our tier still matches the suite. A zod accept with a libxml2
+// reject is recorded as leniency; a schema both tiers accept is an anomaly
+// pinned as `it.fails`. Each shard writes its own report; the merge script
+// publishes all shards together.
 export const registerCorpusSchemaValidityTests = (label: string, testSetFiles: string[]): void => {
   const cases = discoverCorpusInvalidSchemas(testSetFiles);
   const slicePrefixes = testSetFiles.map((f) => `${path.relative(W3C_DIR, f)}/`);
