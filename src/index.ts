@@ -60,12 +60,14 @@ export type {
   XmlWrappedMeta,
 } from "./xmlMeta.js";
 export { xmlRegistry } from "./xmlMeta.js";
+export type { XsdOrderDatatype } from "./xsdChecks.js";
 export {
   countFractionDigits,
   countTotalDigits,
   xsdDecimalCompare,
   xsdDecimalLexical,
   xsdFractionDigits,
+  xsdOrderCompare,
   xsdTotalDigits,
 } from "./xsdChecks.js";
 export type {

@@ -138,6 +138,15 @@ describe("xsdDateTime parsers and canonical writers", () => {
     expect(writeXsdTime(parseXsdTime("12:00:00-05:00"))).toBe("17:00:00Z");
     // Wraps within the day.
     expect(writeXsdTime(parseXsdTime("00:30:00+01:00"))).toBe("23:30:00Z");
+    // The canonical form is the wrapped time of day, so the day the
+    // normalization landed on is carried separately (and only when nonzero).
+    expect(parseXsdTime("00:30:00+01:00")).toEqual({
+      hour: 23,
+      minute: 30,
+      second: 0,
+      tzOffset: 0,
+      dayOffset: -1,
+    });
     // 24:00:00 is the same value as 00:00:00; canonical midnight is 00:00:00.
     expect(fixedPoint(parseXsdTime, writeXsdTime, "24:00:00")).toEqual({
       hour: 0,

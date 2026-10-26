@@ -5,7 +5,8 @@
 // validators already collapse without storing).
 //
 // Normalization at parse time (so that write(parse(x)) is the XSD canonical
-// lexical form and parse(write(parse(x))) deep-equals parse(x)):
+// lexical form and parse(write(parse(x))) deep-equals parse(x), except for
+// xs:time's order-only `dayOffset`, which the canonical lexical cannot carry):
 // - a present timezone is converted to UTC and kept as tzOffset: 0 ("Z",
 //   "+00:00" and "-00:00" collapse); tzOffset absent means floating. The
 //   shift follows the interval interpretation of the date/g* types (their
@@ -28,12 +29,19 @@ export type XsdDateTime = {
   fraction?: string;
   tzOffset?: number;
 };
+// xs:time has no date, so UTC normalization wraps within the day. The offset
+// is still needed for ordering: a timezoned value is compared against a
+// floating one through the ±14:00 window, which recurs daily, so the day the
+// normalization landed on has to survive modulo 24h. Present (and nonzero)
+// only when a timezone is given and the normalization crossed midnight; the
+// canonical lexical form stays the wrapped time of day.
 export type XsdTime = {
   hour: number;
   minute: number;
   second: number;
   fraction?: string;
   tzOffset?: number;
+  dayOffset?: number;
 };
 export type XsdGYear = { year: number; tzOffset?: number };
 export type XsdGYearMonth = { year: number; month: number; tzOffset?: number };
@@ -165,14 +173,19 @@ const toUtc = (
   return { year: y, month: m, day: d, hour: Math.floor(total / 60), minute: total % 60 };
 };
 
-// Minutes-of-day shift for xs:time, which wraps within the day.
+// Minutes-of-day shift for xs:time, which wraps within the day. The wrapped
+// clock fields are the value's canonical form; dayOffset carries how many days
+// the normalization moved (hour 24 normalizes to 00:00 of the same day, so it
+// does not count).
 const toUtcTime = (
   hour: number,
   minute: number,
   offsetMinutes: number,
-): { hour: number; minute: number } => {
-  const total = (((hour * 60 + minute - offsetMinutes) % 1440) + 1440) % 1440;
-  return { hour: Math.floor(total / 60), minute: total % 60 };
+): { hour: number; minute: number; dayOffset: number } => {
+  const total = (hour % 24) * 60 + minute - offsetMinutes;
+  const dayOffset = Math.floor(total / 1440);
+  const within = total - dayOffset * 1440;
+  return { hour: Math.floor(within / 60), minute: within % 60, dayOffset };
 };
 
 export const parseXsdDate = (value: string): XsdDate => {
@@ -242,6 +255,9 @@ export const parseXsdTime = (value: string): XsdTime => {
   }
   if (offset !== undefined) {
     result.tzOffset = 0;
+    if (utc.dayOffset !== 0) {
+      result.dayOffset = utc.dayOffset;
+    }
   }
   return result;
 };
