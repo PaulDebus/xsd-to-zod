@@ -326,17 +326,19 @@ Run it locally (`npm run test:quick` runs the dev-loop subset without the heavy 
 npm test
 ```
 
-**Test matrix** (~2,580 tests):
+The 0.4.0 release gate is `npm run test:release` — lint, the full suite with coverage thresholds, and the full W3C corpus. `test:quick` is for the dev loop only.
+
+**Test matrix** (full suite: 4,939 passing, 39 expected failures, 2 skipped; the nightly corpus adds 13,899 cases):
 
 | Category | Count | What it covers |
 |----------|------:|----------------|
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
 | W3C Boeing | 12 (12 ✅) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule |
-| W3C sun/ms/nist selection | 2,615 (2,600 ✅, 15 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
-| W3C negative (invalid instances) | 1,529 (1,523 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
+| W3C sun/ms/nist selection | 2,614 (2,581 ✅, 33 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
+| W3C negative (invalid instances) | 1,609 (1,603 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
 | W3C full corpus (main + weekly) | 13,899 (13,879 ✅, 20 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
-| Pipeline / CLI / runtime | 90+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
+| Pipeline / CLI / runtime | 680+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
 

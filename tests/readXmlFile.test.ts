@@ -90,4 +90,17 @@ describe("readXmlFile", () => {
       expect(readXmlFile(filePath)).toBe(body);
     });
   });
+
+  it("sniffs UTF-16BE without a BOM from the leading NUL-<", () => {
+    const body = `<root>menù</root>`;
+    withTempFile("utf16be-nobom.xml", iconv.encode(body, "utf16-be"), (filePath) => {
+      expect(readXmlFile(filePath)).toBe(body);
+    });
+  });
+
+  it("falls back to UTF-8 for a file shorter than the UTF-16 sniff window", () => {
+    withTempFile("short.xml", Buffer.from("<"), (filePath) => {
+      expect(readXmlFile(filePath)).toBe("<");
+    });
+  });
 });
