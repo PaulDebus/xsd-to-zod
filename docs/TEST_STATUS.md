@@ -75,7 +75,7 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 **License:** W3C Document License — from [w3.org](https://www.w3.org/XML/2004/xml-schema-test-suite/)
 
-Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels; a broader valid-instance-only selection (`tests/roundtrip-w3c-extended.test.ts`: 18 sun/ms test sets, the ms schema-composition/annotation sets, and a group-filtered nist datatype pilot) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`. Invalid-instance (negative) tests (`tests/roundtrip-w3c-negative.test.ts`) assert the zod tier rejects what the suite marks invalid; where the zod tier is intentionally lenient, the libxml2 tier is the conformance authority and the leniency is recorded in `.xsd-to-zod-tests/w3c-negative-conformance.json`.
+Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels; a broader valid-instance-only selection (`tests/roundtrip-w3c-extended.test.ts`: 18 sun/ms test sets, the ms schema-composition/annotation sets, and every NIST datatype family — atomic, list and union) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`. The NIST families generate in the exact integer mapping (`integers: "bigint"`) so 64-bit boundary lexicals round-trip instead of hitting the default number mapping's ±2⁵³ ceiling. Invalid-instance (negative) tests (`tests/roundtrip-w3c-negative.test.ts`) assert the zod tier rejects what the suite marks invalid; where the zod tier is intentionally lenient, the libxml2 tier is the conformance authority and the leniency is recorded in `.xsd-to-zod-tests/w3c-negative-conformance.json`.
 
 Note: the pre-errata sun tests use relative namespace URIs (e.g. `targetNamespace="SType/ST_facets"`), which libxml2 refuses to load — for those cases the libxml2 cross-validation of the serialized XML is skipped (the zod-tier round-trip still runs in full).
 
@@ -102,15 +102,15 @@ Features tested include:
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,614 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,581 passing, 33 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
-- [x] W3C invalid-instance (negative) tests (1,609 cases: the zod tier rejects what the suite marks invalid or libxml2 confirms the leniency, recorded in the negative conformance report, 6 pinned)
+- [x] W3C sun/ms selection + NIST datatypes (13,035 valid-instance cases from 22 test sets, including every NIST datatype family — atomic, list and union; 13,002 passing, 33 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C invalid-instance (negative) tests (10,026 cases, including every NIST datatype family — atomic, list and union: the zod tier rejects what the suite marks invalid or libxml2 confirms the leniency, recorded in the negative conformance report, 6 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
 ## Phase 2 — Extended suite (future)
 
 - [x] Triage the pinned W3C known failures — remaining buckets and their dispositions are tracked in #122. Done so far: `xs:any` wildcards (position-aware extras), `xs:anyType` content, lexical preservation (lexical-space facets enforced by the runtime, lexicals re-emitted on serialize), XSD regex translation (class subtraction, `\p{IsBlock}`), occurrence-aware nested choice, substitution groups (#183), QName-value namespace declarations + repeated-particle merges (#186), XML attribute-value normalization (#187), XML-namespace attributes without a declaration (`xml:base`/`xml:space`; the harness supplies the standard declarations to libxml2) + `xs:list` attribute defaults (#122 `undefinedValue` bucket), root-element `xs:list` `default`/`fixed` values (stZ072), xsi:type derived-type polymorphism (discriminated-union dispatch in codegen + runtime, lossless capture fallback for unknown QNames; cleared `ctA002`/`ctA003`/`ctL022`), simpleContent extension via `simpleContent` derivation (cleared `basetd00101m2`), whitespace-only text nodes survive the parse (cleared `xsd001`, the `reG`/`reI`/`reJ`/`reO`/`reP`/`reQ`/`reR` regex whitespace cases), XML 1.0 line-ending normalization (`errC001`), declared default/fixed lexicals retained on substitution (`valueConstraint00501m*`, `valueConstraint00601m7`), whiteSpace-processed fixed/enum literals (`attO009`–`attO011`), value-space fixed-lexical emission (`stE065`/`stE066`), union memberTypes + inline members (`particlesZ005`/`particlesZ012`), OR-within-step patterns (`p16`/`p17`/`p20`), XSD-regex block-name normalization + full block coverage (`reL*`/`LatinExtended-*`/`ArabicPresentationForms-*`/`reDF*`), per-position fixed constraints for merged same-name siblings (`isDefault079`), same-qname emission dedupe with merged cardinality + document order (`mgO006`/`mgQ003`/`particlesQ030`/`particlesQ032`), position-aware wildcard/field occurrence claiming (`QFE1700c2`), simpleContent text-type resolution across forward-declared bases (`basetd00101m1`), xsi:type preservation on open content (`idF012`–`idF014`).
-- [ ] Broader W3C subset (more nistData datatype groups via the group filter; remaining msData Regex/Notations when those features land)
+- [ ] Broader W3C subset (remaining msData Regex/Notations when those features land)
 - [ ] UBL CreditNote round-trip
 - [ ] Import-resolution failure cases
 
@@ -148,11 +148,12 @@ features:
 
 ### Corpus coverage notes
 
-- **Widen the NIST datatype pilot in the PR-level suites.** The full corpus
-  already runs every NIST valid-instance family on merge and weekly, so
-  widening the PR selection would add ~38k cases to every push without adding
-  release signal. The negative pilot stays decimal-only; the corpus-wide
-  negative suite covers the rest.
+- **NIST datatype families match the corpus integer mapping.** The PR-level
+  NIST datatype selection (positive and negative) covers every family. The
+  positive side generates in the exact integer mapping (`integers: "bigint"`),
+  as the corpus does, so 64-bit boundary lexicals round-trip instead of hitting
+  the default number mapping's ±2⁵³ ceiling. The default mapping's boundary
+  divergences stay pinned for the sun/ms selection cases that exercise it.
 - **Invalid-schema harness mode.** Its deliverable is a leniency map, not a
   conformance fix; codegen currently accepts most invalid schemas by design.
   It should share discovery/reporting with the corpus negative mode.
@@ -199,9 +200,9 @@ xsi:type preservation on open content. What remains is entirely won't-fix:
   assessment); the generated artifact has no root schema to parse with.
 - **`beyondSafeInteger` (18 selection + 0 corpus)** — the instance carries
   integers beyond ±2⁵³; the default number mapping rejects out-of-safe-range
-  lexicals rather than rounding them. The full corpus generates in the exact
-  mapping (`integers: "bigint"`), so the bucket exists only in the selection
-  suite, which exercises the default.
+  lexicals rather than rounding them. The full corpus and the NIST datatype
+  selection generate in the exact mapping (`integers: "bigint"`), so the
+  bucket exists only for sun/ms selection cases, which exercise the default.
 
 ## Definition of done
 

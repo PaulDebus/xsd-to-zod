@@ -1,16 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { IrToZodOptions } from "../src/irToZod.js";
 import { runRoundTrip } from "./helpers.js";
 import { discoverValidCases, type W3cTestSetRef } from "./w3cDriver.js";
 import { W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
+const NIST_TEST_SET = "nistMeta/NISTXMLSchemaDatatypes.testSet";
 
 // Targeted selection of sun/ms test sets exercising supported features
 // (complexType, simpleType, elements, attributes, groups),
-// extended with the ms schema-composition/annotation sets and a
-// nist datatype pilot (group-filtered: the nist testSet is one giant file).
+// extended with the ms schema-composition/annotation sets and every NIST
+// datatype family — atomic, list and union (group-filtered: the nist testSet
+// is one giant file).
+// The NIST families generate in the exact integer mapping (integers: bigint):
+// the value-space cases include 64-bit boundary lexicals beyond ±2^53, which
+// the default number mapping rejects by design.
 // The IdConstrDefs/Wildcard/IdentityConstraint/Notation sets are covered by
 // the full-corpus suite instead (tests/corpus/, runs on main).
 const TEST_SETS: W3cTestSetRef[] = [
@@ -37,8 +43,8 @@ const TEST_SETS: W3cTestSetRef[] = [
   "msMeta/Annotations_w3c.xml",
   "msMeta/Errata10_w3c.xml",
   {
-    file: "nistMeta/NISTXMLSchemaDatatypes.testSet",
-    groupFilter: /^atomic-decimal-/,
+    file: NIST_TEST_SET,
+    groupFilter: /^(?:atomic|list|union)-/,
   },
 ];
 
@@ -80,7 +86,9 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
         {
           generated: new Date().toISOString(),
           testSets: TEST_SETS.map((ref) =>
-            typeof ref === "string" ? ref : `${ref.file} (groups: ${ref.groupFilter})`,
+            typeof ref === "string"
+              ? ref
+              : `${ref.file} (groups: ${ref.groupFilter}; exact integer mapping)`,
           ),
           totalCases: cases.length,
           knownFailures: W3C_KNOWN_FAILURES.size,
@@ -107,16 +115,18 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
     const anchors = c.specRefs.length > 0 ? ` [${c.specRefs.join(", ")}]` : "";
     const title = `round-trips W3C ${key}${anchors}`;
     const reason = W3C_KNOWN_FAILURES.get(key);
+    const opts: IrToZodOptions | undefined =
+      c.testSet === path.join(W3C_DIR, NIST_TEST_SET) ? { integers: "bigint" } : undefined;
     if (reason) {
       // Known failures run as it.fails: a fix that makes one pass turns the
       // suite red ("expected test to fail"), forcing the entry's removal in
       // the same PR that lands the fix.
       it.fails(`${title} — KNOWN FAILURE: ${reason}`, async () => {
-        await runRoundTrip(c.xsdFiles, c.xmlFile);
+        await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, opts);
       }, 30_000);
     } else {
       it(title, async () => {
-        await runRoundTrip(c.xsdFiles, c.xmlFile);
+        await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, opts);
       }, 30_000);
     }
   }
