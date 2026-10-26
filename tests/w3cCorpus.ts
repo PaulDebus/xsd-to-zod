@@ -38,9 +38,9 @@ export const corpusKeyOf = (testSet: string, name: string): string =>
 // removed — same mechanics as the selection suite. The stale-key guard only
 // checks entries belonging to this slice's testSets (the pin file is shared).
 // The corpus measures value-space conformance, so it generates in the exact
-// integer mapping (integers: bigint); the default number mapping's
-// divergences are pinned in the PR-level selection suite instead — hundreds
-// of NIST boundary cases exceed ±2^53 by design there.
+// integer mapping (integers: bigint). The PR-level NIST datatype selection
+// uses the same mapping; the rest of the selection suite exercises the default
+// number mapping, whose boundary divergences are pinned there.
 export const registerCorpusTests = (label: string, testSetFiles: string[]): void => {
   const cases = discoverCorpusCases(testSetFiles);
   const slicePrefixes = testSetFiles.map((f) => `${path.relative(W3C_DIR, f)}/`);
