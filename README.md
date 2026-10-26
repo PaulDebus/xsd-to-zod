@@ -328,7 +328,7 @@ npm test
 
 The 0.4.0 release gate is `npm run test:release` — lint, the full suite with coverage thresholds, and the full W3C corpus. `test:quick` is for the dev loop only.
 
-**Test matrix** (full suite: 4,939 passing, 39 expected failures, 2 skipped; the nightly corpus adds 13,899 cases):
+**Test matrix** (full suite: 4,939 passing, 39 expected failures, 2 skipped; the nightly corpus adds 13,899 valid-instance and 10,942 invalid-instance cases):
 
 | Category | Count | What it covers |
 |----------|------:|----------------|
@@ -338,6 +338,7 @@ The 0.4.0 release gate is `npm run test:release` — lint, the full suite with c
 | W3C sun/ms/nist selection | 2,614 (2,581 ✅, 33 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
 | W3C negative (invalid instances) | 1,609 (1,603 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
 | W3C full corpus (main + weekly) | 13,899 (13,879 ✅, 20 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
+| W3C full-corpus negative (main + weekly) | 10,942 (10,916 ✅, 26 ⚠️) | Invalid instances across all XSD 1.0 test sets; the zod tier rejects or libxml2 confirms the leniency, recorded in the merged negative conformance report; anomalies pinned in `tests/w3cCorpusNegativeKnownAnomalies.ts` |
 | Pipeline / CLI / runtime | 680+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |

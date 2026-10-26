@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { runRoundTrip } from "./helpers.js";
 import { W3C_CORPUS_KNOWN_FAILURES } from "./w3cCorpusKnownFailures.js";
-import { discoverValidCases, parseSuiteIndex, type W3cCase } from "./w3cDriver.js";
+import { W3C_CORPUS_NEGATIVE_KNOWN_ANOMALIES } from "./w3cCorpusNegativeKnownAnomalies.js";
+import {
+  discoverInvalidCases,
+  discoverValidCases,
+  parseSuiteIndex,
+  type W3cCase,
+} from "./w3cDriver.js";
+import { evaluateNegativeCase, type NegativeTally, tallyNegative } from "./w3cNegative.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
@@ -59,6 +66,80 @@ export const registerCorpusTests = (label: string, testSetFiles: string[]): void
       it(title, async () => {
         await runRoundTrip(c.xsdFiles, c.xmlFile, undefined, { integers: "bigint" });
       }, 30_000);
+    }
+  }
+};
+
+// Register the invalid-instance tests for a slice of the corpus. Mechanics
+// match the PR-level negative suite: a zod reject passes, a zod accept is
+// checked against libxml2 (the conformance authority) and recorded as
+// leniency, and a case both tiers accept is an anomaly pinned as `it.fails`.
+// Each shard writes its own leniency report; the corpus workflow publishes
+// all shards together.
+export const registerCorpusNegativeTests = (label: string, testSetFiles: string[]): void => {
+  const cases = discoverInvalidCases(testSetFiles);
+  const slicePrefixes = testSetFiles.map((f) => `${path.relative(W3C_DIR, f)}/`);
+  const inSlice = (key: string): boolean => slicePrefixes.some((p) => key.startsWith(p));
+
+  it(`has no stale W3C corpus negative KNOWN_ANOMALIES entries (${label})`, () => {
+    const discovered = new Set(cases.map((c) => corpusKeyOf(c.testSet, c.name)));
+    const stale = [...W3C_CORPUS_NEGATIVE_KNOWN_ANOMALIES.keys()]
+      .filter(inSlice)
+      .filter((k) => !discovered.has(k));
+    expect(stale).toEqual([]);
+  });
+
+  const stats = new Map<string, NegativeTally>();
+  const lenientCases: string[] = [];
+  const anomalyCases: string[] = [];
+
+  afterAll(() => {
+    const reportDir = path.resolve(".xsd-to-zod-tests");
+    fs.mkdirSync(reportDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(reportDir, `w3c-negative-corpus-${label}.json`),
+      JSON.stringify(
+        {
+          generated: new Date().toISOString(),
+          label,
+          testSets: testSetFiles.map((f) => path.relative(W3C_DIR, f)),
+          totalCases: cases.length,
+          knownAnomalies: [...W3C_CORPUS_NEGATIVE_KNOWN_ANOMALIES.keys()].filter(inSlice).length,
+          bySpecSection: Object.fromEntries(
+            [...stats.entries()].sort(([a], [b]) => a.localeCompare(b)),
+          ),
+          lenientCases: lenientCases.sort(),
+          anomalyCases: anomalyCases.sort(),
+        },
+        null,
+        2,
+      ),
+    );
+  });
+
+  for (const c of cases) {
+    const key = corpusKeyOf(c.testSet, c.name);
+    const anchors = c.specRefs.length > 0 ? c.specRefs : ["(no spec reference)"];
+    const anchorsSuffix = c.specRefs.length > 0 ? ` [${c.specRefs.join(", ")}]` : "";
+    const title = `rejects W3C ${key}${anchorsSuffix}`;
+    const reason = W3C_CORPUS_NEGATIVE_KNOWN_ANOMALIES.get(key);
+
+    const body = async () => {
+      const outcome = await evaluateNegativeCase(c);
+      if (outcome === "lenient") {
+        lenientCases.push(key);
+      }
+      if (outcome === "anomaly") {
+        anomalyCases.push(key);
+      }
+      tallyNegative(stats, anchors, outcome);
+      expect(outcome).not.toBe("anomaly");
+    };
+
+    if (reason) {
+      it.fails(`${title} — KNOWN ANOMALY: ${reason}`, body, 30_000);
+    } else {
+      it(title, body, 30_000);
     }
   }
 };
