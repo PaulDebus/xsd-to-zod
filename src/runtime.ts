@@ -1468,6 +1468,48 @@ const extractRoot = (
 // constraint is value-space, so the canonical form is valid.
 const lexicalRequired = (schema: AnySchema): boolean => findFacetsMeta(schema) !== undefined;
 
+// Remaining claim capacity of one wildcard in a content model. An unbounded
+// wildcard absorbs any number of overflow occurrences; a bounded one spends
+// `remaining` down as the fields it admits overflow onto it.
+type WildcardClaimBudget = { unbounded: boolean; remaining: number };
+
+const wildcardClaimBudget = (maxOccurs: number | "unbounded"): WildcardClaimBudget =>
+  maxOccurs === "unbounded"
+    ? { unbounded: true, remaining: 0 }
+    : { unbounded: false, remaining: maxOccurs };
+
+// Occurrence budget of a scalar element field: its own declared capacity plus
+// the overflow the content model's wildcards can still claim for it.
+type OccurrenceBudget = {
+  capacity: number | "unbounded";
+  wildcardOverflow?: readonly WildcardClaimBudget[] | undefined;
+};
+
+// Charge `overflow` occurrences against the admitting wildcards' remaining
+// capacity, spending the first wildcards that still have room. Returns whether
+// the overflow fits, plus the capacity available at claim time for the error
+// message. An unbounded admitting wildcard absorbs any overflow and leaves the
+// bounded wildcards' capacity untouched.
+const claimWildcardOverflow = (
+  overflow: number,
+  budgets: readonly WildcardClaimBudget[],
+): { fits: boolean; available: number } => {
+  if (budgets.some((budget) => budget.unbounded)) {
+    return { fits: true, available: Number.POSITIVE_INFINITY };
+  }
+  const available = budgets.reduce((sum, budget) => sum + budget.remaining, 0);
+  if (overflow > available) {
+    return { fits: false, available };
+  }
+  let need = overflow;
+  for (const budget of budgets) {
+    const take = Math.min(need, budget.remaining);
+    budget.remaining -= take;
+    need -= take;
+  }
+  return { fits: true, available };
+};
+
 const readObject = (
   schema: AnySchema,
   node: Record<string, unknown>,
@@ -1520,6 +1562,13 @@ const readObject = (
   // validated).
   const targetNamespace = splitClark(findObjectMeta(schema)?.qname ?? "{}").namespace;
   const anyWildcards = fieldList.filter((f) => f.kind === "any");
+  // Claim capacity of each wildcard, shared by every field it admits: a
+  // wildcard's maxOccurs bounds how many elements it can claim in the content
+  // model as a whole, so one claim is spent for all consumers — see readField.
+  const wildcardBudgets = anyWildcards.map((wildcard) => ({
+    wildcard,
+    claim: wildcardClaimBudget(wildcard.maxOccurs ?? 1),
+  }));
   const scalarFromEnd = new Set<string>();
   let elementOrdinal = 0;
   for (const [key, fieldMeta] of Object.entries(fields)) {
@@ -1543,6 +1592,16 @@ const readObject = (
         wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
       );
     const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
+    // Occurrence budget: the field keeps its declared capacity (a scalar
+    // particle, or the same-qname particles collapsed into one key), and the
+    // overflow is the admitting wildcards' to claim — each charged against its
+    // own remaining capacity, which the whole content model shares.
+    const occurrenceBudget: OccurrenceBudget = {
+      capacity: fieldMeta.occurrenceCapacity ?? 1,
+      wildcardOverflow: wildcardClaimsOverflow
+        ? wildcardBudgets.filter((budget) => admitsField(budget.wildcard)).map((b) => b.claim)
+        : undefined,
+    };
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
@@ -1576,7 +1635,7 @@ const readObject = (
             exactElementQNames,
             childWalk(walk, key),
             claimFromEnd,
-            wildcardClaimsOverflow,
+            occurrenceBudget,
             read,
           );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
@@ -2203,7 +2262,7 @@ const readField = (
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
   claimFromEnd = false,
-  wildcardClaimsOverflow = false,
+  occurrenceBudget: OccurrenceBudget = { capacity: 1 },
   read: ReadCtx = NO_LEXICAL_RETENTION,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
@@ -2294,14 +2353,24 @@ const readField = (
       }
     }
   }
-  // A scalar element (maxOccurs=1) occurs at most once. Extra occurrences are
-  // a duplicate error unless a wildcard in the same content model claims them
-  // — a preceding wildcard owns everything but the last, a following one
-  // everything but the first (see readObject / sweepWildcards).
-  if (!field.isArray && matched.length > 1 && !wildcardClaimsOverflow) {
-    throw new Error(
-      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most 1`,
-    );
+  // A scalar field keeps its declared occurrences; extra occurrences are the
+  // overflow the content model's wildcards claim (see sweepWildcards), so they
+  // are a duplicate error only once the admitting wildcards are out of
+  // capacity. That capacity is spent for the content model as a whole, so one
+  // bounded wildcard cannot back the overflow of two fields.
+  if (!field.isArray && occurrenceBudget.capacity !== "unbounded") {
+    const capacity = occurrenceBudget.capacity;
+    const overflow = matched.length - capacity;
+    if (overflow > 0) {
+      const claim = claimWildcardOverflow(overflow, occurrenceBudget.wildcardOverflow ?? []);
+      if (!claim.fits) {
+        throw new Error(
+          `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most ${
+            capacity + claim.available
+          }`,
+        );
+      }
+    }
   }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
   // claimed the earlier ones); only that occurrence is read — the content of

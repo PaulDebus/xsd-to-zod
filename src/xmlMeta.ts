@@ -70,6 +70,11 @@ export type XmlFieldMeta = {
   substitutes?: QName[];
   position?: number;
   namespaceConstraint?: string;
+  /** Effective maxOccurs of an "any" wildcard particle. Absent means 1. */
+  maxOccurs?: number | "unbounded";
+  /** Declared occurrence capacity of the same-qname particles collapsed into
+      this element field. Absent means 1 (a plain scalar field). */
+  occurrenceCapacity?: number | "unbounded";
   qnameValue?: boolean;
   /** Identity constraints declared on this element particle (scoped per occurrence). */
   identity?: IdentityConstraint[];

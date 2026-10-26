@@ -2017,6 +2017,17 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
     return merged;
   };
 
+  // Same-key particles that must stay separate fields (a wildcard owns the
+  // occurrences between them) still collapse to one emitted object key. The
+  // surviving field records their combined capacity so the runtime can budget
+  // overflow occurrences.
+  const collapsedCapacity = new Map<string, number | "unbounded">();
+  for (const [key, members] of byKey) {
+    if (members.length > 1) {
+      collapsedCapacity.set(key, mergeGroup(members).maxOccurs);
+    }
+  }
+
   const out: IrField[] = [];
   const emitted = new Set<string>();
   for (const field of type.fields) {
@@ -2036,7 +2047,12 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
         return prev === undefined || !separatedByWildcard(prev, f);
       });
     if (!mergeable) {
-      out.push(field);
+      const capacity = collapsedCapacity.get(key);
+      out.push(
+        capacity === undefined || capacity === 1
+          ? field
+          : { ...field, occurrenceCapacity: capacity },
+      );
       continue;
     }
     if (emitted.has(key)) {
@@ -2113,6 +2129,9 @@ const fieldsMetaFor = (
       return `${JSON.stringify(toFieldKey(field))}: { kind: "choice", qname: ${JSON.stringify(firstQName)}, choice: { branches: [${branches.join(", ")}], minOccurs: ${field.minOccurs}, maxOccurs: ${JSON.stringify(field.maxOccurs)} } }`;
     }
     const parts = [`kind: ${JSON.stringify(field.kind)}`, `qname: ${JSON.stringify(field.qname)}`];
+    if (field.occurrenceCapacity !== undefined) {
+      parts.push(`occurrenceCapacity: ${JSON.stringify(field.occurrenceCapacity)}`);
+    }
     if (field.kind === "element") {
       const wrapped = wrapperTargetFor(field, ir, ergonomic);
       if (wrapped !== undefined && (membersByHead.get(field.qname)?.length ?? 0) === 0) {
@@ -2223,6 +2242,9 @@ const fieldsMetaFor = (
     const parts = [`kind: "any"`, `qname: "{}*"`];
     if (wildcard.position !== undefined) {
       parts.push(`position: ${wildcard.position}`);
+    }
+    if (wildcard.maxOccurs !== undefined) {
+      parts.push(`maxOccurs: ${JSON.stringify(wildcard.maxOccurs)}`);
     }
     parts.push(`namespaceConstraint: ${JSON.stringify(wildcard.namespaceConstraint)}`);
     entries.push(`${JSON.stringify(i === 0 ? "*" : `*${i + 1}`)}: { ${parts.join(", ")} }`);
