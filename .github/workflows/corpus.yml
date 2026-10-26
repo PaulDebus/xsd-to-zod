@@ -26,5 +26,7 @@ jobs:
         if: always()
         with:
           name: w3c-conformance-report
-          path: .xsd-to-zod-tests/w3c-conformance.json
+          path: |
+            .xsd-to-zod-tests/w3c-conformance.json
+            .xsd-to-zod-tests/w3c-negative-corpus*.json
           if-no-files-found: ignore

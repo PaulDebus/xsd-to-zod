@@ -28,7 +28,7 @@
     "lint": "biome check src tests && tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run test:release && npm run build",
     "pretest:corpus": "node scripts/require-w3c-corpus.mjs && npm run build",
-    "test:corpus": "vitest run --config vitest.corpus.config.ts",
+    "test:corpus": "vitest run --config vitest.corpus.config.ts && node scripts/merge-negative-reports.mjs",
     "test:release": "npm run lint && npm run test:coverage && npm run test:corpus"
   },
   "repository": {

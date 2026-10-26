@@ -117,6 +117,7 @@ Features tested include:
 ## Phase 3 — Full conformance (current)
 
 - [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,879 passing, 20 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
+- [x] Full-corpus invalid instances (10,942 cases from the same 34 test sets, sharded ms/sun/nist/misc: 10,916 pass, 26 anomalies pinned as `it.fails` in `tests/w3cCorpusNegativeKnownAnomalies.ts`; per-shard leniency reports merge into `.xsd-to-zod-tests/w3c-negative-corpus.json`)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
@@ -145,22 +146,16 @@ features:
 | XSD edge lexicals | `xsdPattern.ts` 89.1 / 85.7; `xsdDateTime.ts` 94.5 / 89.1 | Rare regex-translation and date/time lexical branches | Backstopped by the 13,899-case W3C corpus. |
 | Validation reporting | `validate.ts` 100 / 79.4 | Synthetic libxml2 detail shapes and schema-load fallbacks | The success, issue and fallback contracts are tested; branches are defensive. |
 
-### Corpus gaps deferred past 0.4.0
-
-Three coverage gaps stay deferred; none changes the 0.4.0 output or API surface:
+### Corpus coverage notes
 
 - **Widen the NIST datatype pilot in the PR-level suites.** The full corpus
   already runs every NIST valid-instance family on merge and weekly, so
   widening the PR selection would add ~38k cases to every push without adding
-  release signal. The negative pilot stays decimal-only until corpus-wide
-  negative runs exist.
-- **Corpus-wide invalid-instance suite.** Valuable, but nightly-only work: it
-  needs sharded runners and a corpus leniency report. The PR-level negative
-  suite (1,609 cases) plus the libxml2 tier already enforce the release's
-  validation contract, so it does not block 0.4.0.
+  release signal. The negative pilot stays decimal-only; the corpus-wide
+  negative suite covers the rest.
 - **Invalid-schema harness mode.** Its deliverable is a leniency map, not a
   conformance fix; codegen currently accepts most invalid schemas by design.
-  Land it with the corpus negative mode so both share discovery and reporting.
+  It should share discovery/reporting with the corpus negative mode.
 
 ### Release gate
 
