@@ -2986,9 +2986,11 @@ export const irToZod = (
   // Emitted fields per complex type: eligible repeated choices collapse their
   // branch fields into one synthetic "choice" field, placed where the first
   // branch sat so hand-built data serializes in content-model order.
-  const ergoEmission = new Map<QName, { choices: ChoiceArrayField[]; fields: IrField[] }>();
-  const ergoFor = (type: ComplexTypeDef): { choices: ChoiceArrayField[]; fields: IrField[] } => {
-    const cached = ergoEmission.get(type.name);
+  const choiceArrayEmission = new Map<QName, { choices: ChoiceArrayField[]; fields: IrField[] }>();
+  const choiceArrayFor = (
+    type: ComplexTypeDef,
+  ): { choices: ChoiceArrayField[]; fields: IrField[] } => {
+    const cached = choiceArrayEmission.get(type.name);
     if (cached !== undefined) {
       return cached;
     }
@@ -3043,11 +3045,12 @@ export const irToZod = (
         throw new Error(`Ergonomic choice emission lost every field of ${type.name}`);
       }
     }
-    ergoEmission.set(type.name, built);
+    choiceArrayEmission.set(type.name, built);
     return built;
   };
-  const emissionFields = (type: ComplexTypeDef): IrField[] => ergoFor(type).fields;
-  const choiceArraysFor = (type: ComplexTypeDef): ChoiceArrayField[] => ergoFor(type).choices;
+  const emissionFields = (type: ComplexTypeDef): IrField[] => choiceArrayFor(type).fields;
+  const choiceArraysFor = (type: ComplexTypeDef): ChoiceArrayField[] =>
+    choiceArrayFor(type).choices;
 
   // xsi:type polymorphism. variantSets maps a polymorphic declared type
   // (abstract, or with known derived types) to [declared, ...derivedClosure].

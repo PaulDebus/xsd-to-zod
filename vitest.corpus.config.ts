@@ -4,5 +4,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/corpus/**/*.test.ts'],
+    // A direct `vitest run --config vitest.corpus.config.ts` bypasses the
+    // `pretest:corpus` npm hook, so run the submodule guard here as well.
+    globalSetup: ['./scripts/require-w3c-corpus.mjs'],
   }
 });

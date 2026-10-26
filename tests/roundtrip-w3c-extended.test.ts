@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { IrToZodOptions } from "../src/irToZod.js";
 import { runRoundTrip } from "./helpers.js";
-import { discoverValidCases, type W3cTestSetRef } from "./w3cDriver.js";
+import { discoverValidCases, parseTestSet, type W3cTestSetRef } from "./w3cDriver.js";
 import { W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
@@ -108,6 +108,15 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
     const discovered = new Set(cases.map((c) => keyOf(c.testSet, c.name)));
     const stale = [...W3C_KNOWN_FAILURES.keys()].filter((k) => !discovered.has(k));
     expect(stale).toEqual([]);
+  });
+
+  // The NIST slice is group-filtered to the datatype families; a new family
+  // outside the filter would be skipped silently.
+  it("NIST groups all match the datatype family filter", () => {
+    const unmatched = parseTestSet(path.join(W3C_DIR, NIST_TEST_SET))
+      .map((group) => group.name)
+      .filter((name) => !/^(?:atomic|list|union)-/.test(name));
+    expect(unmatched).toEqual([]);
   });
 
   for (const c of cases) {

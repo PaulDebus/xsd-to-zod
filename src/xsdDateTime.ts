@@ -175,8 +175,9 @@ const toUtc = (
 
 // Minutes-of-day shift for xs:time, which wraps within the day. The wrapped
 // clock fields are the value's canonical form; dayOffset carries how many days
-// the normalization moved (hour 24 normalizes to 00:00 of the same day, so it
-// does not count).
+// the normalization moved. For floating values the offset is zero and hour 24
+// folds to 00:00 of the same day, so dayOffset stays zero; only timezoned
+// values can move across a midnight boundary.
 const toUtcTime = (
   hour: number,
   minute: number,
