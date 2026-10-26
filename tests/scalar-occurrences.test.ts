@@ -161,6 +161,24 @@ const TWO_OCCURRENCE_WILDCARD_AFTER = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
+// One bounded wildcard between two distinct scalar fields: both fields can
+// overflow onto it, but its maxOccurs is a capacity of the content model — a
+// single wildcard occurrence can claim one element in total, not one per field.
+const WILDCARD_BETWEEN_TWO_FIELDS = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="e" type="xs:string"/>
+  <xs:element name="f" type="xs:string"/>
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="##any" processContents="strict"/>
+        <xs:element ref="e"/>
+        <xs:element ref="f"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+
 describe("scalar element occurrences", () => {
   it("accepts one occurrence of a maxOccurs=1 element", async () => {
     const xml = "<root><e>a</e></root>";
@@ -275,6 +293,23 @@ describe("scalar element occurrences", () => {
     const parsed = parseXml(root, xml);
     expect(safeParseXml(root, xml).success).toBe(true);
     expect(parseXml(root, serializeXml(root, parsed))).toEqual(parsed);
+  });
+
+  it("accepts one overflow claimed by a wildcard shared by two fields", async () => {
+    const xml = "<root><e>a</e><e>b</e><f>c</f></root>";
+    const mod = await schemasFor(WILDCARD_BETWEEN_TWO_FIELDS);
+    const root = rootFor(mod, xml);
+    const parsed = parseXml(root, xml);
+    expect(safeParseXml(root, xml).success).toBe(true);
+    expect(parseXml(root, serializeXml(root, parsed))).toEqual(parsed);
+  });
+
+  it("rejects two fields both overflowing onto one bounded wildcard", async () => {
+    const xml = "<root><e>a</e><e>b</e><f>c</f><f>d</f></root>";
+    const mod = await schemasFor(WILDCARD_BETWEEN_TWO_FIELDS);
+    const result = safeParseXml(rootFor(mod, xml), xml);
+    expect(result.success).toBe(false);
+    expect(result.success === false && String(result.error)).toContain("occurs 2 times");
   });
 
   it("rejects overflow beyond a maxOccurs=2 wildcard", async () => {
