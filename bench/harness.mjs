@@ -114,7 +114,9 @@ function importGenerated(schemasCode) {
   const file = path.join(dir, "schema.zod.ts");
   fs.writeFileSync(file, schemasCode);
   try {
-    return import(url.pathToFileURL(file).href);
+    // Await before the finally block removes the directory: the loader may not
+    // have read the module yet while the import promise is still pending.
+    return await import(url.pathToFileURL(file).href);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -35,8 +35,8 @@ const merged = {
   bySpecSection: Object.fromEntries(
     Object.entries(bySpecSection).sort(([a], [b]) => a.localeCompare(b)),
   ),
-  lenientCases: shards.flatMap((s) => s.report.lenientCases ?? []).sort(),
-  anomalyCases: shards.flatMap((s) => s.report.anomalyCases ?? []).sort(),
+  lenientCases: [...new Set(shards.flatMap((s) => s.report.lenientCases ?? []))].sort(),
+  anomalyCases: [...new Set(shards.flatMap((s) => s.report.anomalyCases ?? []))].sort(),
   shards: shards.map(({ report }) => ({
     label: report.label,
     totalCases: report.totalCases ?? 0,

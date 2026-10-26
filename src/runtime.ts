@@ -336,8 +336,7 @@ const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta 
     }
   }
   for (const meta of chain) {
-    const picked = pick(meta);
-    if (picked !== undefined && picked !== false) {
+    if (pick(meta)) {
       return meta;
     }
   }

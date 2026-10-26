@@ -1,6 +1,12 @@
 name: Pack smoke
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   pack-smoke:
@@ -10,6 +16,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # The smoke script installs the packed tarball in a pnpm consumer project
+      # (with an isolated node linker), so pnpm is required here.
       - uses: pnpm/action-setup@v4
         with:
           version: 10

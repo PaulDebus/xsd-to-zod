@@ -27,6 +27,24 @@ export const corpusTestSets = (): string[] =>
 export const corpusAvailable = (): boolean =>
   fs.existsSync(W3C_DIR) && fs.readdirSync(W3C_DIR).length > 0;
 
+// The negative corpus runs as one shard per contribution so CI can split it.
+// Markers must partition corpusTestSets() exactly: every test set belongs to
+// one shard, or its cases are silently dropped (or double-counted).
+export const NEGATIVE_CORPUS_SHARDS = [
+  { label: "misc", markers: ["boeingMeta", "common", "wgMeta"] },
+  { label: "ms", markers: ["msMeta"] },
+  { label: "nist", markers: ["nistMeta"] },
+  { label: "sun", markers: ["sunMeta"] },
+] as const;
+
+export const negativeCorpusSlice = (label: string): string[] => {
+  const shard = NEGATIVE_CORPUS_SHARDS.find((s) => s.label === label);
+  if (shard === undefined) {
+    throw new Error(`unknown negative corpus shard "${label}"`);
+  }
+  return corpusTestSets().filter((f) => shard.markers.some((marker) => f.includes(marker)));
+};
+
 export const discoverCorpusCases = (testSetFiles: string[]): W3cCase[] =>
   discoverValidCases(testSetFiles);
 
