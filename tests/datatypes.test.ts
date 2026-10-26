@@ -24,7 +24,7 @@ import {
   xsdQName,
   xsdTime,
 } from "../src/xsdLexicals.js";
-import { generateAndImport, withTempDirAsync } from "./helpers.js";
+import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Lexical checks for the XSD builtin datatypes in the zod tier: valid W3C
 // lexicals pass, garbage is rejected, values stay strings.
@@ -344,9 +344,7 @@ describe("parseXml lexical validation", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file]);
-      root = Object.values(mod).find(
-        (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
-      );
+      root = onlyRootSchema(mod);
     });
     if (root === undefined) {
       throw new Error("no root schema generated");
@@ -404,9 +402,7 @@ describe("integer types default to number", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file]);
-      root = Object.values(mod).find(
-        (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
-      );
+      root = onlyRootSchema(mod);
     });
     if (root === undefined) {
       throw new Error("no root schema generated");
@@ -471,9 +467,7 @@ describe("bigint integer types (integers: bigint)", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, XSD);
       const mod = await generateAndImport([file], { integers: "bigint" });
-      root = Object.values(mod).find(
-        (v): v is z.ZodType => v !== null && typeof v === "object" && "_zod" in v,
-      );
+      root = onlyRootSchema(mod);
     });
     if (root === undefined) {
       throw new Error("no root schema generated");

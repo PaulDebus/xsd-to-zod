@@ -58,7 +58,7 @@ export interface OrderType {
   sku: string;
   "@id": number;
 }
-const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({
+export const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({
   "item": z.array(z.string()),
   "sku": z.string(),
   "@id": z.number().int(),
@@ -74,9 +74,13 @@ export const orderSchema = z.lazy(() => OrderTypeSchema)
   .register(xmlRegistry, { root: "{urn:example}order" });
 ```
 
-Every complex type becomes an exported interface plus a schema const annotated
+Every complex type becomes an exported interface plus an exported schema annotated
 `z.ZodType<Interface>`, so `z.infer<typeof orderSchema>` is `OrderType` — full
-compile-time types, including for mutually recursive XSD types.
+compile-time types, including for mutually recursive XSD types. Named types from
+the schema (simple and complex, e.g. `GuidTypeSchema`) are exported too, so you
+can validate fragments or reuse them in your own schemas without going through
+the root element. Root-element exports and type exports never share a name;
+a collision is resolved with a numeric suffix on the type const.
 
 Use it in TypeScript:
 
@@ -302,6 +306,11 @@ Thin wrapper over [libxml2-wasm](https://www.npmjs.com/package/libxml2-wasm) (th
 ### Working with generated schemas
 
 Every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so cyclic type references and forward references load without errors. `z.infer<typeof FooSchema>` resolves through the lazy wrapper transparently.
+
+Every named type's schema is exported, so a fragment can be validated directly
+(`DataTemplateTypeSchema.parse(fragment)`) or embedded in a hand-written schema.
+Element-root schemas keep the element's name, while inline element-owned types
+carry the `…TypeSchema` infix.
 
 If you need to call `.extend()`, `.pick()`, `.omit()` or any object-only method on a generated schema, unwrap it first via the Zod v4 lazy getter:
 
