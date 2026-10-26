@@ -140,6 +140,12 @@ describe("xsdOrderCompare", () => {
     // Fractional seconds order by value, not by lexical length.
     expect(xsdOrderCompare("dateTime", "2002-01-01T00:00:00.5", "2002-01-01T00:00:00.50")).toBe(0);
     expect(xsdOrderCompare("time", "12:00:00+01:00", "10:30:00Z")).toBe(1);
+    // A floating time's ±14:00 window crosses midnight: its endpoints keep the
+    // day offset instead of wrapping modulo 24h.
+    expect(xsdOrderCompare("time", "23:00:00Z", "10:30:00")).toBe(Number.NaN);
+    expect(xsdOrderCompare("time", "10:30:00", "23:00:00Z")).toBe(Number.NaN);
+    expect(xsdOrderCompare("time", "13:00:00Z", "00:00:00")).toBe(Number.NaN);
+    expect(xsdOrderCompare("time", "23:00:00Z", "00:00:00")).toBe(1);
     expect(xsdOrderCompare("gYear", "2002", "2001")).toBe(1);
     expect(xsdOrderCompare("gYearMonth", "2002-02", "2002-01")).toBe(1);
     expect(xsdOrderCompare("gMonth", "--02", "--01")).toBe(1);

@@ -101,6 +101,23 @@ describe("date order facets", () => {
   });
 });
 
+describe("time order facets", () => {
+  it("keeps the day offset when a floating window crosses midnight", async () => {
+    const root = await importRoot(fieldSchema("time", `<xs:maxExclusive value="10:30:00"/>`));
+    // 23:00Z is inside the floating 10:30 value's 28-hour window
+    // (20:30 the previous day through 00:30 the next), so it is indeterminate.
+    expectValues(root, ["09:00:00"], ["10:30:00", "11:00:00", "23:00:00Z"]);
+  });
+
+  it("accepts a determinate timezoned value outside the window", async () => {
+    const root = await importRoot(fieldSchema("time", `<xs:minInclusive value="00:00:00"/>`));
+    expect(safeParseXml(root, doc("23:00:00Z")).success).toBe(true);
+    // 13:00Z is inside the floating 00:00 window (10:00 the previous day
+    // through 14:00), so the order is indeterminate and the value rejects.
+    expect(safeParseXml(root, doc("13:00:00Z")).success).toBe(false);
+  });
+});
+
 describe("duration order facets", () => {
   it("compares sub-second boundaries exactly", async () => {
     const root = await importRoot(

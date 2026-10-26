@@ -282,6 +282,53 @@ const compareFields = (
   }
 };
 
+const timeSeconds = (value: XsdTime): number =>
+  value.hour * 3600 + value.minute * 60 + value.second;
+
+const compareTimeInstants = (
+  secondsA: number,
+  fractionA: string | undefined,
+  secondsB: number,
+  fractionB: string | undefined,
+): number => {
+  if (secondsA !== secondsB) {
+    return secondsA < secondsB ? -1 : 1;
+  }
+  return fractionCompare(fractionA, fractionB);
+};
+
+// xs:time recurs every day, so a floating value's ±14:00 window can cross
+// midnight. The wrapped clock time loses that day offset (a floating 10:30
+// spans 20:30 the previous day through 00:30 the next), so the mixed-timezone
+// window is evaluated on an unwrapped axis instead of modulo 24h.
+const compareMixedTime = (a: XsdTime, b: XsdTime, aHasTimezone: boolean): number => {
+  const window = 14 * 3600;
+  if (aHasTimezone) {
+    // a is timezoned, b is not: b's real instant spans [b-14:00, b+14:00].
+    const aSeconds = timeSeconds(a);
+    const earliest = timeSeconds(b) - window;
+    const latest = timeSeconds(b) + window;
+    if (compareTimeInstants(aSeconds, a.fraction, earliest, b.fraction) < 0) {
+      return -1;
+    }
+    if (compareTimeInstants(aSeconds, a.fraction, latest, b.fraction) > 0) {
+      return 1;
+    }
+    return Number.NaN;
+  }
+  // a is not timezoned, b is: a's real instant spans [a-14:00, a+14:00].
+  const bSeconds = timeSeconds(b);
+  const earliest = timeSeconds(a) - window;
+  const latest = timeSeconds(a) + window;
+  if (compareTimeInstants(latest, a.fraction, bSeconds, b.fraction) < 0) {
+    return -1;
+  }
+  if (compareTimeInstants(earliest, a.fraction, bSeconds, b.fraction) > 0) {
+    return 1;
+  }
+  return Number.NaN;
+};
+
 const compareDateTimeLike = (
   datatype: Exclude<XsdDatatypeName, "duration">,
   a: XsdStructuredValue,
@@ -291,6 +338,9 @@ const compareDateTimeLike = (
   const bHasTimezone = hasTimezone(b);
   if (aHasTimezone === bHasTimezone) {
     return compareFields(datatype, a, b);
+  }
+  if (datatype === "time") {
+    return compareMixedTime(a as XsdTime, b as XsdTime, aHasTimezone);
   }
   if (aHasTimezone) {
     // a is timezoned, b is not: b's real instant spans [b+14:00, b-14:00].
