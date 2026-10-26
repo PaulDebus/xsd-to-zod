@@ -29,4 +29,5 @@ jobs:
           path: |
             .xsd-to-zod-tests/w3c-conformance.json
             .xsd-to-zod-tests/w3c-negative-corpus*.json
+            .xsd-to-zod-tests/w3c-schema-validity-corpus*.json
           if-no-files-found: ignore

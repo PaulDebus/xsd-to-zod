@@ -22,7 +22,7 @@ Codegen output itself is pinned by **golden snapshots** (`tests/golden.test.ts`)
 |-------|---------|------|-------|
 | **quick** | `npm run test:quick` | Dev loop | Curated fixtures + unit tests + golden snapshots + W3C Boeing smoke |
 | **full** | `npm test` | Every push/PR (CI) | Everything, incl. xmlschema examples, UBL examples and the expanded W3C selection |
-| **corpus** | `npm run test:corpus` | Merge to main + weekly | Full XSD 1.0 W3C corpus via `suite.xml` discovery (`tests/corpus/`, excluded from the PR levels) |
+| **corpus** | `npm run test:corpus` | Merge to main + weekly | Full XSD 1.0 W3C corpus via `suite.xml` discovery — valid instances, invalid instances, and invalid schemas (`tests/corpus/`, excluded from the PR levels) |
 | **release** | `npm run test:release` | 0.4.0 release commit | Lint + full suite with coverage thresholds + full corpus |
 
 ---
@@ -77,6 +77,8 @@ Real-world business document schemas (Invoice, Order, CreditNote, etc.) with a l
 
 Consumed as a git submodule (pinned commit). The W3C test suite is the authoritative conformance corpus for XSD processors. Test groups are discovered from the suite's `.testSet` metadata files (`tests/w3cDriver.ts`), not hardcoded directories; test names carry the group's XSD spec anchors (from `documentationReference`). The Boeing ipo1–ipo6 datasets run in all levels; a broader valid-instance-only selection (`tests/roundtrip-w3c-extended.test.ts`: 18 sun/ms test sets, the ms schema-composition/annotation sets, and every NIST datatype family — atomic, list and union) runs in the full level, with known failures pinned as `it.fails` in `tests/w3cKnownFailures.ts`. The NIST families generate in the exact integer mapping (`integers: "bigint"`) so 64-bit boundary lexicals round-trip instead of hitting the default number mapping's ±2⁵³ ceiling. Invalid-instance (negative) tests (`tests/roundtrip-w3c-negative.test.ts`) assert the zod tier rejects what the suite marks invalid; where the zod tier is intentionally lenient, the libxml2 tier is the conformance authority and the leniency is recorded in `.xsd-to-zod-tests/w3c-negative-conformance.json`.
 
+Invalid-**schema** tests run in the corpus level (`tests/corpus/schema-validity-*.test.ts`). The driver's `discoverInvalidSchemaCases` selects test groups whose schema the suite marks invalid for XSD 1.0 — version-qualified expectations are resolved per version, so schemas that are only invalid in XSD 1.1 and `indeterminate` (implementation-defined) groups are not selected. `validateSchema` (the libxml2 tier) is the conformance authority: a case passes when libxml2 rejects the schema; where codegen silently accepts an invalid schema that libxml2 rejects, the gap is recorded as leniency in `.xsd-to-zod-tests/w3c-schema-validity-corpus.json`. A schema both tiers accept is an anomaly, pinned as `it.fails` in `tests/w3cCorpusSchemaValidityKnownAnomalies.ts` (362 libxml2 schema-constraint gaps and 30 XSD 1.0-invalid/XSD 1.1-valid expectations).
+
 Note: the pre-errata sun tests use relative namespace URIs (e.g. `targetNamespace="SType/ST_facets"`), which libxml2 refuses to load — for those cases the libxml2 cross-validation of the serialized XML is skipped (the zod-tier round-trip still runs in full).
 
 Features tested include:
@@ -118,6 +120,7 @@ Features tested include:
 
 - [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,879 passing, 20 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [x] Full-corpus invalid instances (10,942 cases from the same 34 test sets, sharded ms/sun/nist/misc: 10,916 pass, 26 anomalies pinned as `it.fails` in `tests/w3cCorpusNegativeKnownAnomalies.ts`; per-shard leniency reports merge into `.xsd-to-zod-tests/w3c-negative-corpus.json`)
+- [x] Full-corpus invalid schemas (3,329 groups from the same 34 test sets, sharded ms/sun/nist/misc: libxml2 rejects the schema for 2,937 cases — codegen rejects 75 of those and is lenient on 2,862; 392 anomalies both tiers accept are pinned as `it.fails` in `tests/w3cCorpusSchemaValidityKnownAnomalies.ts`; per-shard leniency reports merge into `.xsd-to-zod-tests/w3c-schema-validity-corpus.json`)
 - [ ] XSD 1.1 corpus (if licensing clarified)
 
 ---
@@ -155,8 +158,9 @@ features:
   the default number mapping's ±2⁵³ ceiling. The default mapping's boundary
   divergences stay pinned for the sun/ms selection cases that exercise it.
 - **Invalid-schema harness mode.** Its deliverable is a leniency map, not a
-  conformance fix; codegen currently accepts most invalid schemas by design.
-  It should share discovery/reporting with the corpus negative mode.
+  conformance fix; codegen currently accepts most invalid schemas by design
+  (2,862 of the 2,937 libxml2-rejected schemas). It shares discovery, sharding,
+  pinning and report merging with the corpus negative mode.
 
 ### Release gate
 

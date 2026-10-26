@@ -92,6 +92,24 @@ export interface W3cInstanceTest {
   expectedValid: boolean;
 }
 
+/** One `<expected>` entry — XSD expectations may carry a `version` attribute. */
+export interface W3cExpected {
+  validity: string;
+  version?: string;
+}
+
+export interface W3cSchemaTest {
+  name: string;
+  /** Absolute paths of the test's schema documents. */
+  xsdFiles: string[];
+  /** Raw metadata fact (every `<expected validity>`) — not a selection. */
+  expectedValid: boolean;
+  /** Raw `<expected>` entries, version-qualified when the suite declares them. */
+  expected: W3cExpected[];
+  /** Raw `<schemaTest version>` attribute, e.g. "1.0" or "1.0 1.1". */
+  version?: string;
+}
+
 export interface W3cTestGroup {
   /** testGroup name, e.g. "ipo1" */
   name: string;
@@ -101,10 +119,23 @@ export interface W3cTestGroup {
   xsdFiles: string[];
   /** Raw metadata fact (every schemaTest's `expected validity`) — not a selection. */
   schemaExpectedValid: boolean;
+  /** Every schemaTest of the group, with its raw validity facts. */
+  schemaTests: W3cSchemaTest[];
   instances: W3cInstanceTest[];
   /** Unique spec anchors (e.g. "xmlschema-1#Complex_Type_Definitions"). */
   specRefs: string[];
 }
+
+const versionsOf = (value: unknown): string[] | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const versions = String(value)
+    .trim()
+    .split(/\s+/)
+    .filter((v) => v !== "");
+  return versions.length > 0 ? versions : undefined;
+};
 
 // Faithful, unfiltered representation of a testSet file: every testGroup with
 // the raw validity facts from its metadata. All case *selection* lives in
@@ -115,12 +146,23 @@ export const parseTestSet = (file: string): W3cTestGroup[] => {
   const root = rootOf(parsed);
 
   return childrenOf(root, "testGroup").map((group) => {
-    const schemaTests = childrenOf(group, "schemaTest");
-    const xsdFiles = schemaTests
-      .flatMap((t) => childrenOf(t, "schemaDocument"))
-      .map((d) => href(d))
-      .filter((h): h is string => h !== undefined)
-      .map((h) => path.resolve(dir, h));
+    const schemaTests: W3cSchemaTest[] = childrenOf(group, "schemaTest").map((t) => {
+      const version = t["@_version"];
+      return {
+        name: String(t["@_name"] ?? ""),
+        xsdFiles: childrenOf(t, "schemaDocument")
+          .map((d) => href(d))
+          .filter((h): h is string => h !== undefined)
+          .map((h) => path.resolve(dir, h)),
+        expectedValid: expectedValid(t),
+        expected: childrenOf(t, "expected").map((e) => ({
+          validity: String(e["@_validity"] ?? ""),
+          ...(e["@_version"] === undefined ? {} : { version: String(e["@_version"]) }),
+        })),
+        ...(version === undefined ? {} : { version: String(version) }),
+      };
+    });
+    const xsdFiles = schemaTests.flatMap((t) => t.xsdFiles);
 
     const instances = childrenOf(group, "instanceTest")
       .map((t) => {
@@ -148,7 +190,8 @@ export const parseTestSet = (file: string): W3cTestGroup[] => {
       name: String(group["@_name"] ?? ""),
       testSet: file,
       xsdFiles,
-      schemaExpectedValid: schemaTests.length > 0 && schemaTests.every(expectedValid),
+      schemaExpectedValid: schemaTests.length > 0 && schemaTests.every((t) => t.expectedValid),
+      schemaTests,
       instances,
       specRefs,
     };
@@ -245,8 +288,69 @@ export const discoverValidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] =>
 
 /**
  * Negative cases: groups whose schema is expected valid, restricted to
- * instances expected INVALID. (Schema-validity tests — groups whose schema is
- * expected invalid — are a separate, still uncovered mode.)
+ * instances expected INVALID. Schema-validity cases live in
+ * discoverInvalidSchemaCases.
  */
 export const discoverInvalidCases = (testSetFiles: W3cTestSetRef[]): W3cCase[] =>
   discoverCases(testSetFiles, false);
+
+export interface W3cInvalidSchemaCase {
+  /** testGroup name, e.g. "particlesZ001" */
+  name: string;
+  testSet: string;
+  /** Schema documents of the schemaTest(s) expected invalid. */
+  xsdFiles: string[];
+  specRefs: string[];
+}
+
+// A schemaTest only applies to the suites of the versions it names; an
+// unversioned test applies to every suite.
+const appliesToVersion = (test: W3cSchemaTest, version: string): boolean => {
+  const versions = versionsOf(test.version);
+  return versions === undefined || versions.includes(version);
+};
+
+// The suite can record version-specific expectations; the exact version wins
+// over an unversioned expectation.
+const expectedValidityFor = (test: W3cSchemaTest, version: string): string | undefined => {
+  const exact = test.expected.find((e) => versionsOf(e.version)?.includes(version));
+  const generic = test.expected.find((e) => e.version === undefined);
+  return (exact ?? generic)?.validity;
+};
+
+/**
+ * Schema-validity cases: groups whose schema is expected INVALID for the given
+ * XSD version. Groups whose expectation is "indeterminate" (implementation-
+ * determined) or that only declare the other version are not selected.
+ */
+export const discoverInvalidSchemaCases = (
+  testSetFiles: W3cTestSetRef[],
+  version = "1.0",
+): W3cInvalidSchemaCase[] => {
+  const cases: W3cInvalidSchemaCase[] = [];
+  for (const ref of testSetFiles) {
+    const testSet = typeof ref === "string" ? ref : ref.file;
+    const groupFilter = typeof ref === "string" ? undefined : ref.groupFilter;
+    for (const group of parseTestSet(testSet)) {
+      if (groupFilter && !groupFilter.test(group.name)) {
+        continue;
+      }
+      const invalidTests = group.schemaTests.filter(
+        (test) =>
+          appliesToVersion(test, version) &&
+          expectedValidityFor(test, version) === "invalid" &&
+          test.xsdFiles.length > 0,
+      );
+      if (invalidTests.length === 0) {
+        continue;
+      }
+      cases.push({
+        name: group.name,
+        testSet,
+        xsdFiles: invalidTests.flatMap((test) => test.xsdFiles),
+        specRefs: group.specRefs,
+      });
+    }
+  }
+  return cases;
+};
