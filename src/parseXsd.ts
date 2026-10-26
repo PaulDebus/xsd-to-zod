@@ -1164,6 +1164,7 @@ const collectAttribute: FieldHandler = (child, ctx, scope) => {
 const collectWildcard =
   (kind: WildcardDef["kind"]): FieldHandler =>
   (child, _ctx, scope) => {
+    const cardinality = combineCardinality(scope.inheritedCardinality, parseCardinality(child));
     scope.wildcards.push({
       kind,
       namespaceConstraint: String(child["@_namespace"] ?? "##any"),
@@ -1171,6 +1172,7 @@ const collectWildcard =
         ? { position: scope.fields.filter((f) => f.kind === "element").length }
         : {}),
       ...optProp("choiceGroup", scope.choiceGroup),
+      ...(cardinality.maxOccurs === 1 ? {} : { maxOccurs: cardinality.maxOccurs }),
     });
   };
 

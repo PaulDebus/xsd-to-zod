@@ -87,6 +87,14 @@ export type IrField = Cardinality & {
    * their values.
    */
   fieldKey?: string;
+  /**
+   * Occurrence capacity of same-qname particles that collapse into this one
+   * emitted field but cannot merge into an array because a wildcard separates
+   * them (sequence: e, xs:any, e). The emitted field keeps a single
+   * occurrence; this is the number of particles whose occurrences the field
+   * accounts for.
+   */
+  occurrenceCapacity?: number | "unbounded";
   /** Text of xs:annotation/xs:documentation, emitted as .describe(). */
   description?: string;
   /** Identity constraints declared on this element particle. */
@@ -170,6 +178,9 @@ export type WildcardDef = {
   /** Set when the wildcard sits inside a choice branch: wildcard content is
       invisible to the field-based choice check, so the group's refine is skipped. */
   choiceGroup?: string;
+  /** Effective maxOccurs of the wildcard particle (enclosing compositor
+      cardinality applied). Absent means 1. */
+  maxOccurs?: number | "unbounded";
   /**
    * Element-field ordinal the wildcard particle sits at in its compositor
    * (kind "any" only): captured extras are re-serialized before the declared

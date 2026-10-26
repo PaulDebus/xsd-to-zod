@@ -1544,6 +1544,27 @@ const readObject = (
         wildcardAllows(w.namespaceConstraint ?? "##any", targetNamespace, splitClark(q).namespace),
       );
     const wildcardClaimsOverflow = fieldQnames.length > 0 && anyWildcards.some(admitsField);
+    // Occurrence budget: the field keeps its declared capacity (a scalar
+    // particle, or the same-qname particles collapsed into one key), and each
+    // admitting wildcard can claim up to its own maxOccurs. Beyond the combined
+    // capacity is an overflow no particle owns, i.e. a duplicate.
+    let wildcardCapacity: number | "unbounded" = 0;
+    for (const wildcard of anyWildcards) {
+      if (!admitsField(wildcard)) {
+        continue;
+      }
+      const wildcardMax = wildcard.maxOccurs ?? 1;
+      if (wildcardMax === "unbounded") {
+        wildcardCapacity = "unbounded";
+        break;
+      }
+      wildcardCapacity += wildcardMax;
+    }
+    const fieldCapacity = fieldMeta.occurrenceCapacity ?? 1;
+    const occurrenceBudget =
+      fieldCapacity === "unbounded" || wildcardCapacity === "unbounded"
+        ? "unbounded"
+        : fieldCapacity + wildcardCapacity;
     const claimFromEnd =
       fieldMeta.kind === "element" &&
       !analyzeField(fieldSchema).isArray &&
@@ -1577,7 +1598,7 @@ const readObject = (
             exactElementQNames,
             childWalk(walk, key),
             claimFromEnd,
-            wildcardClaimsOverflow,
+            occurrenceBudget,
             read,
           );
     if (recordOrder && claimed !== undefined && claimed.length > 0) {
@@ -2204,7 +2225,7 @@ const readField = (
   exactElementQNames?: ReadonlySet<string>,
   walk?: WalkCtx,
   claimFromEnd = false,
-  wildcardClaimsOverflow = false,
+  occurrenceBudget: number | "unbounded" = 1,
   read: ReadCtx = NO_LEXICAL_RETENTION,
 ): FieldRead => {
   const field = analyzeField(fieldSchema);
@@ -2295,13 +2316,14 @@ const readField = (
       }
     }
   }
-  // A scalar element (maxOccurs=1) occurs at most once. Extra occurrences are
-  // a duplicate error unless a wildcard in the same content model claims them
-  // — a preceding wildcard owns everything but the last, a following one
-  // everything but the first (see readObject / sweepWildcards).
-  if (!field.isArray && matched.length > 1 && !wildcardClaimsOverflow) {
+  // A scalar field keeps its declared occurrences; extra occurrences are a
+  // duplicate error unless the collapsed same-qname particles or admitting
+  // wildcards have capacity for them (see readObject). A preceding wildcard
+  // owns everything but the last, a following one everything but the first
+  // (see sweepWildcards).
+  if (!field.isArray && occurrenceBudget !== "unbounded" && matched.length > occurrenceBudget) {
     throw new Error(
-      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most 1`,
+      `element "${fieldMeta.qname}" occurs ${matched.length} times; expected at most ${occurrenceBudget}`,
     );
   }
   // Scalar fields keep one occurrence (the last when a preceding wildcard
