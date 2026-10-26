@@ -124,6 +124,32 @@ describe("validateXml (conformance tier)", () => {
   });
 });
 
+describe("validateSchema (conformance tier)", () => {
+  it("returns valid for a compilable schema", async () => {
+    const { validateSchema } = await import("../src/validate.js");
+    await expect(validateSchema(XSD)).resolves.toEqual({ valid: true });
+  });
+
+  it("returns issues instead of throwing for an invalid schema", async () => {
+    const { validateSchema } = await import("../src/validate.js");
+    const broken = XSD.replace('type="xs:int"', 'type="xs:doesNotExist"');
+    const result = await validateSchema(broken);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.issues.length).toBeGreaterThan(0);
+      expect(result.issues[0]!.message).toContain("doesNotExist");
+    }
+  });
+
+  it("resolves relative xs:include against the schema url", async () => {
+    const { validateSchema } = await import("../src/validate.js");
+    const xsdFile = path.resolve("testdata/curated/imports/include.xsd");
+    await expect(validateSchema(readXmlFile(xsdFile), { url: xsdFile })).resolves.toEqual({
+      valid: true,
+    });
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });

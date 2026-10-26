@@ -295,6 +295,8 @@ if (!result.valid) {
 }
 ```
 
+`validateSchema(xsdString, { url })` checks a schema document itself (returns `{ valid: false, issues }` instead of throwing on compile errors), useful for validating schemas before code generation.
+
 Thin wrapper over [libxml2-wasm](https://www.npmjs.com/package/libxml2-wasm) (the reference libxml2 engine on WebAssembly), loaded via dynamic import — it is an **optional peer dependency**, so browser deployments and zod-tier-only consumers never pay for it. The `url` option lets relative `xs:include`/`xs:import` resolve (from the filesystem in Node).
 
 **Typical upload gate:** `validateXml` first (contract check with line-numbered errors), then `parseXml` (typed data + user-friendly zod issues).

@@ -141,6 +141,33 @@ export const validateXmlAgainstSchemaSet = async (
 ): Promise<ValidateXmlResult> => validateXml(xml, aggregateSchemaSet(schemas), opts);
 
 /**
+ * Check whether a schema document is a valid XSD schema with full conformance
+ * semantics (libxml2). Unlike {@link validateXml}, schema *compile* errors are
+ * reported as `{ valid: false }` instead of thrown.
+ */
+export const validateSchema = async (
+  xsd: string,
+  opts?: ValidateXmlOptions,
+): Promise<ValidateXmlResult> => {
+  const { XmlDocument, XsdValidator } = await loadLibxml2();
+
+  let schemaDoc: InstanceType<Libxml2["XmlDocument"]> | undefined;
+  let validator: InstanceType<Libxml2["XsdValidator"]> | undefined;
+  try {
+    schemaDoc = opts?.url
+      ? XmlDocument.fromString(xsd, { url: opts.url })
+      : XmlDocument.fromString(xsd);
+    validator = XsdValidator.fromDoc(schemaDoc);
+    return { valid: true };
+  } catch (error) {
+    return { valid: false, issues: toIssues(error) };
+  } finally {
+    validator?.dispose();
+    schemaDoc?.dispose();
+  }
+};
+
+/**
  * Validate an XML document against an XSD schema with full conformance
  * semantics (libxml2). Returns a result object; schema *compile* errors and
  * malformed input XML throw instead (they are not instance-invalidity).
