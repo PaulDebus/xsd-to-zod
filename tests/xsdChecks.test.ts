@@ -146,6 +146,16 @@ describe("xsdOrderCompare", () => {
     expect(xsdOrderCompare("time", "10:30:00", "23:00:00Z")).toBe(Number.NaN);
     expect(xsdOrderCompare("time", "13:00:00Z", "00:00:00")).toBe(Number.NaN);
     expect(xsdOrderCompare("time", "23:00:00Z", "00:00:00")).toBe(1);
+    // The timezoned operand of a mixed pair keeps its day offset too: 23:00-11:00
+    // is 10:00Z the next day, outside the floating 10:00 value's window, so the
+    // pair is determinate rather than indeterminate.
+    expect(xsdOrderCompare("time", "23:00:00-11:00", "10:00:00")).toBe(1);
+    expect(xsdOrderCompare("time", "10:00:00", "23:00:00-11:00")).toBe(-1);
+    // 02:00+14:00 is 12:00Z the previous day, before the floating 22:00 window.
+    expect(xsdOrderCompare("time", "02:00:00+14:00", "22:00:00")).toBe(-1);
+    // Two timezoned values normalize on the same arbitrary date: 12:00+14:00 is
+    // 22:00Z on the previous day, 12:00-14:00 is 02:00Z on the next.
+    expect(xsdOrderCompare("time", "12:00:00+14:00", "12:00:00-14:00")).toBe(-1);
     expect(xsdOrderCompare("gYear", "2002", "2001")).toBe(1);
     expect(xsdOrderCompare("gYearMonth", "2002-02", "2002-01")).toBe(1);
     expect(xsdOrderCompare("gMonth", "--02", "--01")).toBe(1);

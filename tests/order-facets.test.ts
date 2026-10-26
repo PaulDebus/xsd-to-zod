@@ -116,6 +116,17 @@ describe("time order facets", () => {
     // through 14:00), so the order is indeterminate and the value rejects.
     expect(safeParseXml(root, doc("13:00:00Z")).success).toBe(false);
   });
+
+  it("keeps a timezoned value's normalized day offset against a floating boundary", async () => {
+    const lower = await importRoot(fieldSchema("time", `<xs:minInclusive value="10:00:00"/>`));
+    // 23:00-11:00 is 10:00Z the next day: the window of the floating boundary
+    // ends 14 hours either side of 10:00, and the value sits after it.
+    expectValues(lower, ["10:00:00", "23:00:00-11:00"], ["09:00:00", "23:00:00Z"]);
+
+    const upper = await importRoot(fieldSchema("time", `<xs:maxExclusive value="22:00:00"/>`));
+    // 02:00+14:00 is 12:00Z the previous day, before the floating window opens.
+    expectValues(upper, ["21:00:00", "02:00:00+14:00"], ["23:00:00", "23:00:00Z"]);
+  });
 });
 
 describe("duration order facets", () => {

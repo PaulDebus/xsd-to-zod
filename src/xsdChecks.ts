@@ -249,7 +249,12 @@ const compareFields = (
     case "time": {
       const x = a as XsdTime;
       const y = b as XsdTime;
-      const time = fieldCompare([x.hour, x.minute, x.second], [y.hour, y.minute, y.second]);
+      // Both sides are timezoned here: compare the normalized UTC instants,
+      // keeping the day their normalization landed on (§3.2.7.4 step A).
+      const time = fieldCompare(
+        [x.dayOffset ?? 0, x.hour, x.minute, x.second],
+        [y.dayOffset ?? 0, y.hour, y.minute, y.second],
+      );
       return time === 0 ? fractionCompare(x.fraction, y.fraction) : time;
     }
     case "gYear": {
@@ -282,8 +287,12 @@ const compareFields = (
   }
 };
 
+// Seconds on an unwrapped axis: a timezoned value's UTC normalization can land
+// on another day, and that day offset has to survive into the comparison (a
+// floating value's ±14:00 window spans 28 hours, so the two operands must be
+// measured on the same axis). Floating values carry no offset.
 const timeSeconds = (value: XsdTime): number =>
-  value.hour * 3600 + value.minute * 60 + value.second;
+  (value.dayOffset ?? 0) * 86400 + value.hour * 3600 + value.minute * 60 + value.second;
 
 const compareTimeInstants = (
   secondsA: number,
@@ -298,9 +307,10 @@ const compareTimeInstants = (
 };
 
 // xs:time recurs every day, so a floating value's ±14:00 window can cross
-// midnight. The wrapped clock time loses that day offset (a floating 10:30
-// spans 20:30 the previous day through 00:30 the next), so the mixed-timezone
-// window is evaluated on an unwrapped axis instead of modulo 24h.
+// midnight (a floating 10:30 spans 20:30 the previous day through 00:30 the
+// next), and a timezoned value's UTC normalization can land on another day.
+// Both operands are therefore evaluated on an unwrapped axis instead of
+// modulo 24h, so neither day offset collapses into the wrapped clock time.
 const compareMixedTime = (a: XsdTime, b: XsdTime, aHasTimezone: boolean): number => {
   const window = 14 * 3600;
   if (aHasTimezone) {
