@@ -39,7 +39,7 @@ const TEST_SETS: W3cTestSetRef[] = [
   "msMeta/Errata10_w3c.xml",
   {
     file: "nistMeta/NISTXMLSchemaDatatypes.testSet",
-    groupFilter: /^atomic-/,
+    groupFilter: /^(?:atomic|list|union)-/,
   },
 ];
 

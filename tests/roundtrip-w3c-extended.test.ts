@@ -12,7 +12,8 @@ const NIST_TEST_SET = "nistMeta/NISTXMLSchemaDatatypes.testSet";
 // Targeted selection of sun/ms test sets exercising supported features
 // (complexType, simpleType, elements, attributes, groups),
 // extended with the ms schema-composition/annotation sets and every NIST
-// atomic datatype family (group-filtered: the nist testSet is one giant file).
+// datatype family — atomic, list and union (group-filtered: the nist testSet
+// is one giant file).
 // The NIST families generate in the exact integer mapping (integers: bigint):
 // the value-space cases include 64-bit boundary lexicals beyond ±2^53, which
 // the default number mapping rejects by design.
@@ -43,7 +44,7 @@ const TEST_SETS: W3cTestSetRef[] = [
   "msMeta/Errata10_w3c.xml",
   {
     file: NIST_TEST_SET,
-    groupFilter: /^atomic-/,
+    groupFilter: /^(?:atomic|list|union)-/,
   },
 ];
 
