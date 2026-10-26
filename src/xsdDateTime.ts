@@ -5,7 +5,8 @@
 // validators already collapse without storing).
 //
 // Normalization at parse time (so that write(parse(x)) is the XSD canonical
-// lexical form and parse(write(parse(x))) deep-equals parse(x)):
+// lexical form and parse(write(parse(x))) deep-equals parse(x), except for
+// xs:time's order-only `dayOffset`, which the canonical lexical cannot carry):
 // - a present timezone is converted to UTC and kept as tzOffset: 0 ("Z",
 //   "+00:00" and "-00:00" collapse); tzOffset absent means floating. The
 //   shift follows the interval interpretation of the date/g* types (their

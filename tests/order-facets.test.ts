@@ -127,6 +127,22 @@ describe("time order facets", () => {
     // 02:00+14:00 is 12:00Z the previous day, before the floating window opens.
     expectValues(upper, ["21:00:00", "02:00:00+14:00"], ["23:00:00", "23:00:00Z"]);
   });
+
+  it("applies the day offset in structured mode", async () => {
+    const root = await importRoot(fieldSchema("time", `<xs:minInclusive value="10:00:00"/>`), {
+      datatypes: "structured",
+    });
+    expect(safeParseXml(root, doc("23:00:00-14:00")).success).toBe(true);
+    expect(safeParseXml(root, doc("02:00:00+14:00")).success).toBe(false);
+    const parsed = parseXml(root, doc("23:00:00-14:00")) as { v: unknown };
+    expect(parsed.v).toEqual({
+      hour: 13,
+      minute: 0,
+      second: 0,
+      tzOffset: 0,
+      dayOffset: 1,
+    });
+  });
 });
 
 describe("duration order facets", () => {
