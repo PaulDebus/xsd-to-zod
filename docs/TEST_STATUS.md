@@ -23,6 +23,7 @@ Codegen output itself is pinned by **golden snapshots** (`tests/golden.test.ts`)
 | **quick** | `npm run test:quick` | Dev loop | Curated fixtures + unit tests + golden snapshots + W3C Boeing smoke |
 | **full** | `npm test` | Every push/PR (CI) | Everything, incl. xmlschema examples, UBL examples and the expanded W3C selection |
 | **corpus** | `npm run test:corpus` | Merge to main + weekly | Full XSD 1.0 W3C corpus via `suite.xml` discovery (`tests/corpus/`, excluded from the PR levels) |
+| **release** | `npm run test:release` | 0.4.0 release commit | Lint + full suite with coverage thresholds + full corpus |
 
 ---
 
@@ -101,8 +102,8 @@ Features tested include:
 - [x] xmlschema examples (vehicles, collection, stockquote, menù)
 - [x] UBL Invoice + Order round-trips
 - [x] W3C smoke subset (Boeing ipo1–ipo6, discovered via `.testSet` metadata)
-- [x] W3C sun/ms selection + Phase 2 expansion (2,615 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,600 passing, 15 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
-- [x] W3C invalid-instance (negative) tests (1,529 cases: the zod tier rejects what the suite marks invalid or libxml2 confirms the leniency, recorded in the negative conformance report, 6 pinned)
+- [x] W3C sun/ms selection + Phase 2 expansion (2,614 valid-instance cases from 22 test sets + a group-filtered nist pilot; 2,581 passing, 33 pinned as `it.fails` with categorized reasons in `tests/w3cKnownFailures.ts`)
+- [x] W3C invalid-instance (negative) tests (1,609 cases: the zod tier rejects what the suite marks invalid or libxml2 confirms the leniency, recorded in the negative conformance report, 6 pinned)
 - [x] Spec-section conformance report (`.xsd-to-zod-tests/w3c-conformance.json`, generated each run from `documentationReference` anchors)
 - [x] CI workflow (full suite on push/PR, `test:quick` for the dev loop)
 
@@ -117,6 +118,59 @@ Features tested include:
 
 - [x] Full XSD 1.0 corpus via `suite.xml` discovery (on merge to main + weekly, ~3 min: 13,899 valid-instance cases from 34 test sets — 13,879 passing, 20 pinned as `it.fails` in `tests/w3cCorpusKnownFailures.ts`; XSD 1.1 sets excluded — licensing, plus 1.1 features; `common/introspection` excluded — multi-MB metadata documents)
 - [ ] XSD 1.1 corpus (if licensing clarified)
+
+---
+
+## 0.4.0 test-health audit
+
+Audited on 2026-10-26 against `main` (`f055587`) for the 0.4.0 round. Every
+level was green locally on that run:
+
+| Level | Files | Result | Wall time |
+|-------|------:|--------|-----------|
+| **quick** | 57 | 739 passed | ~17 s |
+| **full** | 60 | 4,939 passed, 39 expected failures, 2 skipped | ~50 s |
+| **coverage** | 60 | same tests; all thresholds pass | ~54 s |
+| **corpus** | 4 | 13,879 passed, 20 expected failures | ~69 s |
+
+Coverage was 93.93% statements, 87.27% branches, 97.37% functions and 93.95%
+lines (thresholds 86 / 78 / 89 / 87). No `src/` function is entirely
+unexecuted. The remaining uncovered lines are defensive branches, not missing
+features:
+
+| Area | Lowest module coverage | Uncovered | Disposition |
+|------|------------------------|-----------|-------------|
+| Remote schema acquisition | `download.ts` 86.9% lines / 67.9% branches; `remoteSchemaStore.ts` 86.6 / 79.5; `fetchSchema.ts` 91.4 / 89.1 | Rare redirect/URL failures, vendored-name sanitisation and collision handling, cache/lockfile corruption after open, temp-file cleanup | Defensive paths. The remote e2e suite covers the supported flows; add focused failure tests as follow-up, not a release blocker. |
+| CLI surface | `cli.ts` 94.2 / 86.6 | Uncommon option and usage-error combinations | Supported flows are covered by CLI e2e; errors stay honest. |
+| XSD edge lexicals | `xsdPattern.ts` 89.1 / 85.7; `xsdDateTime.ts` 94.5 / 89.1 | Rare regex-translation and date/time lexical branches | Backstopped by the 13,899-case W3C corpus. |
+| Validation reporting | `validate.ts` 100 / 79.4 | Synthetic libxml2 detail shapes and schema-load fallbacks | The success, issue and fallback contracts are tested; branches are defensive. |
+
+### Corpus gaps deferred past 0.4.0
+
+Three coverage gaps stay deferred; none changes the 0.4.0 output or API surface:
+
+- **Widen the NIST datatype pilot in the PR-level suites.** The full corpus
+  already runs every NIST valid-instance family on merge and weekly, so
+  widening the PR selection would add ~38k cases to every push without adding
+  release signal. The negative pilot stays decimal-only until corpus-wide
+  negative runs exist.
+- **Corpus-wide invalid-instance suite.** Valuable, but nightly-only work: it
+  needs sharded runners and a corpus leniency report. The PR-level negative
+  suite (1,609 cases) plus the libxml2 tier already enforce the release's
+  validation contract, so it does not block 0.4.0.
+- **Invalid-schema harness mode.** Its deliverable is a leniency map, not a
+  conformance fix; codegen currently accepts most invalid schemas by design.
+  Land it with the corpus negative mode so both share discovery and reporting.
+
+### Release gate
+
+0.4.0 ships only from a commit where `npm run test:release` passes. That runs
+lint, the full suite with the coverage thresholds, and the full W3C corpus —
+`test:quick` is the dev loop and is never the release gate. The corpus
+prerequisite fails the gate when the W3C submodule is missing, so a skipped
+corpus cannot pass as green. `npm publish` runs the same gate through
+`prepublishOnly`; `npm pack` and the publish/tag steps stay in the release
+issue.
 
 ---
 
