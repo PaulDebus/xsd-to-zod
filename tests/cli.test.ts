@@ -10,7 +10,8 @@ import {
   main,
   stripImports,
 } from "../src/cli.js";
-import { withTempDir, withTempDirAsync } from "./helpers.js";
+import { PACKAGE_VERSION } from "../src/version.js";
+import { readXmlFile, withTempDir, withTempDirAsync } from "./helpers.js";
 
 const XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
@@ -66,6 +67,22 @@ const runCliQuiet = async (
     errSpy.mockRestore();
   }
 };
+
+describe("CLI version", () => {
+  it("prints the package version with --version", async () => {
+    const writes: string[] = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(await main(["--version"])).toBe(0);
+      expect(writes.join("")).toBe(`${PACKAGE_VERSION}\n`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+});
 
 describe("isLibrary", () => {
   it("returns false for a file with root elements", () =>
@@ -284,7 +301,7 @@ describe("CLI e2e", () => {
       expect(rExact.code).toBe(0);
       const exact = fs.readFileSync(path.join(dir, "dec-exact.zod.ts"), "utf8");
       expect(exact).toContain("xsdDecimalLexical");
-      expect(exact).toContain("z.string().trim().refine(xsdDecimalLexical");
+      expect(exact).toContain("z.string().refine(xsdDecimalLexical");
     });
   });
 
@@ -791,6 +808,20 @@ describe("CLI validate e2e", () => {
     });
   });
 
+  it("rejects an unknown --engine before reading any input", async () => {
+    const r = await runCli([
+      "validate",
+      "/nonexistent.xml",
+      "-x",
+      "/nonexistent.xsd",
+      "--engine",
+      "libxml",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('invalid --engine mode: libxml (expected "zod" or "libxml2")');
+    expect(r.stderr).not.toContain("xml file not found");
+  });
+
   it("fails when xml file does not exist", async () => {
     const r = await runCli(["validate", "/nonexistent.xml", "-x", "/nonexistent.xsd"]);
     expect(r.code).toBe(1);
@@ -942,7 +973,7 @@ describe("CLI bundle e2e", () => {
     });
   });
 
-  it("bundles XSD with xs:import", async () => {
+  it("rejects a foreign-namespace import instead of flattening it", async () => {
     await withTempDirAsync(async (dir) => {
       const libFile = path.join(dir, "lib.xsd");
       const mainFile = path.join(dir, "main.xsd");
@@ -974,10 +1005,283 @@ describe("CLI bundle e2e", () => {
       );
       const outFile = path.join(dir, "bundled.xsd");
       const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      // One XSD document cannot declare two target namespaces, so flattening
+      // this import would silently reinterpret the foreign declarations.
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("foreign-namespace import");
+      expect(r.stderr).toContain("xsd-to-zod download");
+      expect(fs.existsSync(outFile)).toBe(false);
+    });
+  });
+
+  it("bundles a same-namespace include declared with a custom prefix", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <s:complexType name="ItemType">
+    <s:sequence>
+      <s:element name="name" type="s:string"/>
+    </s:sequence>
+  </s:complexType>
+</s:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <s:include schemaLocation="types.xsd"></s:include>
+  <s:element name="order" type="t:ItemType"/>
+</s:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
       expect(r.code).toBe(0);
       const content = fs.readFileSync(outFile, "utf8");
+      expect(content.startsWith("<s:schema")).toBe(true);
+      expect(content.trimEnd().endsWith("</s:schema>")).toBe(true);
+      expect(content).not.toMatch(/<\/?s:include/);
+      expect(content).toContain("ItemType");
+    });
+  });
+
+  it("bundles an unprefixed schema and closes with an unprefixed tag", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<schema xmlns="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <complexType name="ItemType">
+    <sequence>
+      <element name="name" type="string"/>
+    </sequence>
+  </complexType>
+</schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<schema xmlns="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" elementFormDefault="qualified">
+  <include schemaLocation="types.xsd"></include>
+  <element name="order" type="t:ItemType"/>
+</schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, "utf8");
+      expect(content.startsWith("<schema")).toBe(true);
+      expect(content.trimEnd().endsWith("</schema>")).toBe(true);
+      expect(content).not.toContain("</xs:schema>");
+      expect(content).not.toMatch(/<\/?include\b/);
+      expect(content).toContain("ItemType");
+    });
+  });
+
+  it("bundles a paired same-namespace import declared with a custom prefix", async () => {
+    await withTempDirAsync(async (dir) => {
+      const libFile = path.join(dir, "lib.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        libFile,
+        `<?xml version="1.0"?>
+<x:schema xmlns:x="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:lib="urn:test" elementFormDefault="qualified">
+  <x:complexType name="AddressType">
+    <x:sequence>
+      <x:element name="street" type="x:string"/>
+    </x:sequence>
+  </x:complexType>
+</x:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<x:schema xmlns:x="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" xmlns:t="urn:test" xmlns:lib="urn:test" elementFormDefault="qualified">
+  <x:import namespace="urn:test" schemaLocation="lib.xsd"></x:import>
+  <x:element name="person">
+    <x:complexType>
+      <x:sequence>
+        <x:element name="name" type="x:string"/>
+        <x:element name="addr" type="lib:AddressType"/>
+      </x:sequence>
+    </x:complexType>
+  </x:element>
+</x:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, "utf8");
+      expect(content.startsWith("<x:schema")).toBe(true);
+      expect(content.trimEnd().endsWith("</x:schema>")).toBe(true);
+      expect(content).not.toMatch(/<\/?x:import\b/);
       expect(content).toContain("AddressType");
-      expect(content).not.toMatch(/xs:import/);
+    });
+  });
+
+  it("rejects an unresolved include schemaLocation without writing output", async () => {
+    await withTempDirAsync(async (dir) => {
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:include schemaLocation="missing.xsd"/>
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("unresolved schemaLocation");
+      expect(r.stderr).toContain("xsd-to-zod download");
+      expect(fs.existsSync(outFile)).toBe(false);
+    });
+  });
+
+  it("rejects redefine without writing output", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="ItemType"/>
+</xs:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:redefine schemaLocation="types.xsd">
+    <xs:complexType name="ItemType"/>
+  </xs:redefine>
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("redefine");
+      expect(r.stderr).toContain("xsd-to-zod download");
+      expect(fs.existsSync(outFile)).toBe(false);
+    });
+  });
+
+  it("rejects conflicting namespace-prefix bindings without writing output", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:c="urn:other" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:complexType name="ItemType"/>
+</xs:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:c="urn:entry" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:include schemaLocation="types.xsd"/>
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("conflicting xmlns:c");
+      expect(r.stderr).toContain("xsd-to-zod download");
+      expect(fs.existsSync(outFile)).toBe(false);
+    });
+  });
+
+  it("rejects differing form defaults without writing output", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test">
+  <xs:complexType name="ItemType"/>
+</xs:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <xs:include schemaLocation="types.xsd"/>
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("elementFormDefault");
+      expect(r.stderr).toContain("xsd-to-zod download");
+      expect(fs.existsSync(outFile)).toBe(false);
+    });
+  });
+
+  it("preserves dependency-only xmlns declarations and produces a valid schema", async () => {
+    await withTempDirAsync(async (dir) => {
+      const typesFile = path.join(dir, "types.xsd");
+      const mainFile = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        typesFile,
+        `<?xml version="1.0"?>
+<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" xmlns:d="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test" elementFormDefault="qualified">
+  <d:complexType name="ItemType">
+    <d:sequence>
+      <d:element name="name" type="d:string"/>
+    </d:sequence>
+  </d:complexType>
+</s:schema>`,
+      );
+      fs.writeFileSync(
+        mainFile,
+        `<?xml version="1.0"?>
+<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:test" targetNamespace="urn:test" elementFormDefault="qualified">
+  <s:include schemaLocation="types.xsd"/>
+  <s:element name="order" type="t:ItemType"/>
+</s:schema>`,
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", mainFile, "-o", outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, "utf8");
+      expect(content).toContain('xmlns:d="http://www.w3.org/2001/XMLSchema"');
+      const { validateSchema } = await import("../src/validate.js");
+      await expect(validateSchema(readXmlFile(outFile), { url: outFile })).resolves.toEqual({
+        valid: true,
+      });
+    });
+  });
+
+  it("expands an empty self-closing schema into well-formed XML", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "empty.xsd");
+      fs.writeFileSync(
+        xsdFile,
+        '<?xml version="1.0"?>\n<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" />',
+      );
+      const outFile = path.join(dir, "bundled.xsd");
+      const r = await runCli(["bundle", xsdFile, "-o", outFile]);
+      expect(r.code).toBe(0);
+      const content = fs.readFileSync(outFile, "utf8");
+      expect(content).not.toMatch(/<xs:schema[^>]*\/>/);
+      expect(content.trimEnd().endsWith("</xs:schema>")).toBe(true);
+      const { validateSchema } = await import("../src/validate.js");
+      await expect(validateSchema(readXmlFile(outFile), { url: outFile })).resolves.toEqual({
+        valid: true,
+      });
     });
   });
 
@@ -1059,6 +1363,55 @@ describe("discoverDependencies (unit)", () => {
       expect(deps).toContain(leaf);
     });
   });
+
+  it("finds include dependencies declared with an arbitrary prefix", () => {
+    withTempDir((dir) => {
+      const leaf = path.join(dir, "leaf.xsd");
+      const main = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        leaf,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:element name="x" type="s:string"/></s:schema>',
+      );
+      fs.writeFileSync(
+        main,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:include schemaLocation="leaf.xsd"></s:include></s:schema>',
+      );
+      const deps = discoverDependencies(main);
+      expect(deps).toContain(leaf);
+    });
+  });
+
+  it("finds schemaLocation with whitespace around the equals sign", () => {
+    withTempDir((dir) => {
+      const leaf = path.join(dir, "leaf.xsd");
+      const main = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        leaf,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:element name="x" type="s:string"/></s:schema>',
+      );
+      fs.writeFileSync(
+        main,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:include schemaLocation = "leaf.xsd" /></s:schema>',
+      );
+      expect(discoverDependencies(main)).toContain(leaf);
+    });
+  });
+
+  it("ignores include tags inside comments", () => {
+    withTempDir((dir) => {
+      const leaf = path.join(dir, "leaf.xsd");
+      const main = path.join(dir, "main.xsd");
+      fs.writeFileSync(
+        leaf,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><s:element name="x" type="s:string"/></s:schema>',
+      );
+      fs.writeFileSync(
+        main,
+        '<s:schema xmlns:s="http://www.w3.org/2001/XMLSchema"><!-- <s:include schemaLocation="leaf.xsd"/> --></s:schema>',
+      );
+      expect(discoverDependencies(main)).not.toContain(leaf);
+    });
+  });
 });
 
 describe("stripImports (unit)", () => {
@@ -1071,6 +1424,38 @@ describe("stripImports (unit)", () => {
     const result = stripImports(xsd);
     expect(result).not.toMatch(/xs:import/);
     expect(result).not.toMatch(/xs:include/);
+    expect(result).toContain('xs:element name="root"');
+  });
+
+  it("removes paired import/include tags without leaving closing tags", () => {
+    const xsd = `<xs:schema>
+  <xs:import namespace="urn:lib" schemaLocation="lib.xsd"></xs:import>
+  <xs:include schemaLocation="types.xsd"></xs:include>
+  <xs:element name="root"/>
+</xs:schema>`;
+    const result = stripImports(xsd);
+    expect(result).not.toMatch(/<\/?xs:(?:import|include|redefine)/);
+    expect(result).toContain('xs:element name="root"');
+  });
+
+  it("removes import/include tags declared with an arbitrary prefix", () => {
+    const xsd = `<s:schema>
+  <s:import namespace="urn:lib" schemaLocation="lib.xsd"></s:import>
+  <s:include schemaLocation="types.xsd"/>
+  <s:element name="root"/>
+</s:schema>`;
+    const result = stripImports(xsd);
+    expect(result).not.toMatch(/<\/?s:(?:import|include|redefine)/);
+    expect(result).toContain('s:element name="root"');
+  });
+
+  it("leaves import/include text inside comments untouched", () => {
+    const xsd = `<xs:schema>
+  <!-- <xs:include schemaLocation="old.xsd"/> -->
+  <xs:element name="root"/>
+</xs:schema>`;
+    const result = stripImports(xsd);
+    expect(result).toContain('<xs:include schemaLocation="old.xsd"/>');
     expect(result).toContain('xs:element name="root"');
   });
 });

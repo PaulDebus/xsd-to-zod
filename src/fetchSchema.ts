@@ -179,9 +179,11 @@ const readResponseBody = async (
 ): Promise<Buffer> => {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > MAX_FILE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
     throw fileTooLarge(url);
   }
   if (contentLength > remainingBytes) {
+    await response.body?.cancel().catch(() => undefined);
     throw totalTooLarge();
   }
   if (!response.body) {
@@ -243,13 +245,12 @@ export const createFetchSchemaResolver = ({
   const depthByUrl = new Map([...entries].map((url) => [url, 0]));
   let fileCount = 0;
   let totalBytes = 0;
-
-  const fetchSchema = async (
-    url: URL,
-    depth: number,
-    base: SchemaResolutionBase,
-    ifNoneMatch?: string,
-  ): Promise<ResolvedSchema | null> => {
+  const countedUrls = new Set<string>();
+  const countFile = (url: URL): void => {
+    if (countedUrls.has(url.href)) {
+      return;
+    }
+    countedUrls.add(url.href);
     fileCount++;
     if (fileCount > MAX_FILES) {
       throw new Xsd2ZodError(
@@ -257,11 +258,21 @@ export const createFetchSchemaResolver = ({
         `Remote schema graph exceeds the ${MAX_FILES}-file limit`,
       );
     }
+  };
+
+  const fetchSchema = async (
+    url: URL,
+    depth: number,
+    base: SchemaResolutionBase,
+    ifNoneMatch?: string,
+  ): Promise<ResolvedSchema | null> => {
+    countFile(url);
 
     let currentUrl = url;
-    // Cross-origin redirects drop the validator (see below), so track the
-    // effective conditional header per hop instead of using the parameter.
-    let conditional = ifNoneMatch;
+    // ETags identify a representation at a URL, not an entire origin.
+    const validatorUrl = store?.entry(url.href)?.finalUrl ?? url.href;
+    let conditional = currentUrl.href === validatorUrl ? ifNoneMatch : undefined;
+    let crossedOrigin = false;
     for (let redirects = 0; ; redirects++) {
       onFetch?.(currentUrl.href, base);
       const response = await fetchImplementation(currentUrl, {
@@ -273,6 +284,7 @@ export const createFetchSchemaResolver = ({
       });
 
       if ([301, 302, 303, 307, 308].includes(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
         if (redirects >= MAX_REDIRECTS) {
           throw new Xsd2ZodError(
             "remote-redirect-limit",
@@ -280,7 +292,6 @@ export const createFetchSchemaResolver = ({
           );
         }
         const location = response.headers.get("location");
-        await response.body?.cancel().catch(() => undefined);
         if (!location) {
           throw new Xsd2ZodError(
             "remote-redirect-invalid",
@@ -303,8 +314,9 @@ export const createFetchSchemaResolver = ({
           // to the host that recorded it, and a 304 from the new host
           // would serve bytes pinned to the old final URL, hiding the
           // redirect drift the lockfile is meant to surface.
-          conditional = undefined;
+          crossedOrigin = true;
         }
+        conditional = !crossedOrigin && redirectUrl.href === validatorUrl ? ifNoneMatch : undefined;
         currentUrl = redirectUrl;
         continue;
       }
@@ -316,12 +328,14 @@ export const createFetchSchemaResolver = ({
         return null;
       }
       if (response.status === 404) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Xsd2ZodError(
           "remote-not-found",
           `Remote schema not found (404): "${currentUrl.href}"`,
         );
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Xsd2ZodError(
           "remote-http-status",
           `Remote schema request failed with HTTP ${response.status}: "${currentUrl.href}"`,
@@ -333,6 +347,7 @@ export const createFetchSchemaResolver = ({
         ?.trim()
         .toLowerCase();
       if (contentType?.includes("html")) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Xsd2ZodError(
           "remote-content-type",
           `Expected XSD from "${currentUrl.href}", got ${contentType}`,
@@ -376,6 +391,16 @@ export const createFetchSchemaResolver = ({
     // The lockfile final URL is a second fetch surface: it must pass
     // the same protocol and allowlist policy as a live fetch.
     assertFetchable(new URL(stored.url), allowHttp, allowed);
+    // A cache hit still consumes the graph budget: a hand-built lockfile or
+    // a cache populated by another caller must not bypass resolver limits.
+    countFile(url);
+    if (stored.content.length > MAX_FILE_BYTES) {
+      throw fileTooLarge(url);
+    }
+    if (stored.content.length > MAX_TOTAL_BYTES - totalBytes) {
+      throw totalTooLarge();
+    }
+    totalBytes += stored.content.length;
     depthByUrl.set(url.href, depth);
     depthByUrl.set(stored.url, depth);
     const resolved = Promise.resolve({
@@ -446,9 +471,7 @@ export const createFetchSchemaResolver = ({
           if (served !== undefined) {
             return served;
           }
-          // The cache file was evicted; fall through to an unconditional
-          // fetch below (the failed conditional fetch may double-count one
-          // file against the limits, which is acceptable).
+          // The cache file was evicted; fall through to an unconditional fetch.
         }
       }
       if (!refresh || offline) {

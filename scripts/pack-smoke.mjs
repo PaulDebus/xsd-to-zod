@@ -5,6 +5,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const pnpm = process.env.PNPM ?? "pnpm";
+const zodVersion = process.env.PACK_SMOKE_ZOD ?? "^4.4.3";
 
 const run = (command, args, cwd) => {
   console.log(`$ ${command} ${args.join(" ")}`);
@@ -74,8 +75,15 @@ try {
   );
   fs.writeFileSync(path.join(consumer, "schema.xsd"), XSD);
 
-  run(pnpm, ["add", path.join(packDir, tarball), "zod@^4.4.3"], consumer);
+  run(pnpm, ["add", path.join(packDir, tarball), `zod@${zodVersion}`], consumer);
   run(pnpm, ["exec", "xsd-to-zod", "schema.xsd", "-o", "gen"], consumer);
+
+  fs.writeFileSync(path.join(consumer, "data.xml"), '<catalog><item id="1"/></catalog>');
+  run(pnpm, ["exec", "xsd-to-zod", "validate", "data.xml", "--xsd", "schema.xsd"], consumer);
+  const installedRoot = fs.realpathSync(path.join(consumer, "node_modules", "xsd-to-zod"));
+  if (fs.existsSync(path.join(installedRoot, ".xsd-to-zod-cli"))) {
+    throw new Error("validate must not write temporary modules inside the installed package");
+  }
 
   fs.writeFileSync(path.join(consumer, "run.ts"), RUNNER);
   run(path.join(root, "node_modules", ".bin", "tsx"), ["run.ts"], consumer);

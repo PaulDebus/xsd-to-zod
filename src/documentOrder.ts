@@ -157,12 +157,13 @@ export class DocumentOrderTracker {
     fields: Record<string, XmlFieldMeta>,
     hasElementWildcard: boolean,
     isSyntheticKey: (key: string) => boolean,
+    isRepeated?: (key: string) => boolean,
   ): DocumentOrderEntry[] | undefined {
     const retained = this.retainedStore.get(obj);
     if (retained === undefined) {
       return undefined;
     }
-    const counts = matchCounts(retained, obj, fields);
+    const counts = matchCounts(retained, obj, fields, isRepeated);
     if (counts === undefined) {
       return undefined;
     }
@@ -193,8 +194,9 @@ export class DocumentOrderTracker {
     extras: Record<string, unknown[]>,
     obj: Record<string, unknown>,
     fields: Record<string, XmlFieldMeta>,
+    isRepeated?: (key: string) => boolean,
   ): DocumentOrderEntry[] | undefined {
-    const counts = matchCounts(order, obj, fields);
+    const counts = matchCounts(order, obj, fields, isRepeated);
     if (counts === undefined) {
       return undefined;
     }
@@ -219,7 +221,7 @@ export class DocumentOrderTracker {
     buffered: ReadonlyMap<string, readonly (string | undefined)[]>,
     extraOf: (key: string) => unknown,
     emit: (xml: string) => void,
-    emitExtra: (key: string, item: unknown) => void,
+    emitExtra: (key: string, item: unknown, index: number) => void,
   ): void {
     for (const [key, index] of order) {
       const built = buffered.get(key);
@@ -233,7 +235,7 @@ export class DocumentOrderTracker {
       const value = extraOf(key);
       const item = Array.isArray(value) ? value[index] : value;
       if (item !== undefined) {
-        emitExtra(key, item);
+        emitExtra(key, item, index);
       }
     }
   }
@@ -249,6 +251,7 @@ const matchCounts = (
   order: readonly DocumentOrderEntry[],
   obj: Record<string, unknown>,
   fields: Record<string, XmlFieldMeta>,
+  isRepeated?: (key: string) => boolean,
 ): Map<string, number> | undefined => {
   const counts = new Map<string, number>();
   for (const [key] of order) {
@@ -261,7 +264,13 @@ const matchCounts = (
     if (fieldMeta.kind !== "element" && fieldMeta.kind !== "choice") {
       continue;
     }
-    if (countOf(obj[key]) !== (counts.get(key) ?? 0)) {
+    const count =
+      obj[key] === undefined
+        ? 0
+        : isRepeated !== undefined && !isRepeated(key)
+          ? 1
+          : countOf(obj[key]);
+    if (count !== (counts.get(key) ?? 0)) {
       return undefined;
     }
     counts.delete(key);

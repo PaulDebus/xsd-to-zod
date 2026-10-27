@@ -81,9 +81,9 @@ describe("xs:decimal mapping (opt-in: string)", () => {
       const { schemas } = irToZod(await parseXsd([file]), { decimal: "string" });
       expect(schemas).toContain('"amount": string;');
       expect(schemas).toContain('"plain": string;');
-      expect(schemas).toContain('"enum": "1.5" | "2";');
+      expect(schemas).toContain('"enum": string;');
       expect(schemas).toContain("xsdDecimalLexical");
-      expect(schemas).toContain("z.string().trim().refine(xsdDecimalLexical");
+      expect(schemas).toContain("z.string().refine(xsdDecimalLexical");
       expect(schemas).toContain('"totalDigits":20');
     });
   });

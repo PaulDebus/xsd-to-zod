@@ -207,6 +207,7 @@ export type ElementDef = {
 };
 
 export type DiagnosticKind =
+  | "naming-collision"
   /** xs:import/xs:include/xs:redefine schemaLocation pointing at a remote URL — skipped, never read as a file. */
   | "remote-schema-location"
   /** xs:import/xs:include/xs:redefine schemaLocation pointing at a local file that could not be read — skipped. */

@@ -8,16 +8,11 @@ import {
   parseXsdDatatype,
   writeXsdDatatype,
   type XsdDatatypeName,
-  type XsdDate,
   type XsdDateTime,
   type XsdDuration,
-  type XsdGDay,
-  type XsdGMonth,
-  type XsdGMonthDay,
-  type XsdGYear,
-  type XsdGYearMonth,
   type XsdStructuredValue,
   type XsdTime,
+  xsdUtcComparable,
 } from "./xsdDateTime.js";
 
 const canonicalParts = (value: number): { digits: string; exponent: number } => {
@@ -67,6 +62,11 @@ export const xsdFractionDigits =
 
 const DECIMAL_LEXICAL = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
+// Only XML whitespace (TAB, CR, LF, SPACE) is ignorable around a token. JS
+// String.trim() would also strip NBSP and other Unicode spaces, which are not
+// XML whitespace and must make the numeric lexical invalid.
+const trimXmlWhitespace = (value: string): string => value.replace(/^[\t\r\n ]+|[\t\r\n ]+$/g, "");
+
 // The XSD decimal lexical space (no exponent notation). The marker lets the
 // runtime recognize string-backed decimal schemas even when the generated
 // module and the runtime were loaded from separate builds (function identity
@@ -85,7 +85,7 @@ export const xsdDecimalLexical: XsdDecimalLexical = Object.assign(
 // value. The value is unchanged because only representation is rewritten —
 // unlike Number(), no significant digit is ever dropped.
 export const canonicalDecimalLexical = (lexical: string): string => {
-  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  const m = DECIMAL_LEXICAL.exec(trimXmlWhitespace(lexical));
   if (!m) {
     throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
   }
@@ -101,7 +101,7 @@ export const canonicalDecimalLexical = (lexical: string): string => {
 // value (1.100 is 1.1), so they do not count. Non-decimal lexicals (exponent
 // notation) return 0 — other checks reject them.
 export const countLexicalFractionDigits = (lexical: string): number => {
-  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  const m = DECIMAL_LEXICAL.exec(trimXmlWhitespace(lexical));
   if (!m) {
     return 0;
   }
@@ -112,7 +112,7 @@ export const countLexicalFractionDigits = (lexical: string): number => {
 // (1200 has 4), but leading integer/fraction zeros and trailing fraction zeros
 // do not (0.0012 has 2, 1.2300 has 3).
 export const countLexicalTotalDigits = (lexical: string): number => {
-  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  const m = DECIMAL_LEXICAL.exec(trimXmlWhitespace(lexical));
   if (!m) {
     return 0;
   }
@@ -123,7 +123,7 @@ export const countLexicalTotalDigits = (lexical: string): number => {
 };
 
 const decimalParts = (lexical: string): { neg: boolean; digits: bigint; scale: number } => {
-  const m = DECIMAL_LEXICAL.exec(lexical.trim());
+  const m = DECIMAL_LEXICAL.exec(trimXmlWhitespace(lexical));
   if (!m) {
     throw new Error(`Invalid xs:decimal lexical: ${JSON.stringify(lexical)}`);
   }
@@ -218,7 +218,7 @@ const hasTimezone = (value: XsdStructuredValue): boolean =>
 
 // Add the given timezone to a timezone-absent value by round-tripping through
 // its canonical lexical (write never emits a timezone here, so the suffix is
-// unambiguous). Parsing normalizes the result to UTC, like every explicit tz.
+// unambiguous). comparison then normalizes both operands to UTC.
 const withTimezone = (
   datatype: XsdDatatypeName,
   value: XsdStructuredValue,
@@ -228,15 +228,23 @@ const withTimezone = (
 
 const compareFields = (
   datatype: XsdDatatypeName,
-  a: XsdStructuredValue,
-  b: XsdStructuredValue,
+  aValue: XsdStructuredValue,
+  bValue: XsdStructuredValue,
 ): number => {
+  // Parsed values keep local components and their actual offset; compare their
+  // value-space (UTC) view. xs:time keeps its dayOffset instead (below), and
+  // xs:duration has its own reference-date order.
+  const a =
+    datatype === "time" || datatype === "duration" ? aValue : xsdUtcComparable(datatype, aValue);
+  const b =
+    datatype === "time" || datatype === "duration" ? bValue : xsdUtcComparable(datatype, bValue);
   switch (datatype) {
-    case "date": {
-      const x = a as XsdDate;
-      const y = b as XsdDate;
-      return fieldCompare([x.year, x.month, x.day], [y.year, y.month, y.day]);
-    }
+    case "date":
+    case "gYear":
+    case "gYearMonth":
+    case "gMonth":
+    case "gMonthDay":
+    case "gDay":
     case "dateTime": {
       const x = a as XsdDateTime;
       const y = b as XsdDateTime;
@@ -256,31 +264,6 @@ const compareFields = (
         [y.dayOffset ?? 0, y.hour, y.minute, y.second],
       );
       return time === 0 ? fractionCompare(x.fraction, y.fraction) : time;
-    }
-    case "gYear": {
-      const x = a as XsdGYear;
-      const y = b as XsdGYear;
-      return fieldCompare([x.year], [y.year]);
-    }
-    case "gYearMonth": {
-      const x = a as XsdGYearMonth;
-      const y = b as XsdGYearMonth;
-      return fieldCompare([x.year, x.month], [y.year, y.month]);
-    }
-    case "gMonth": {
-      const x = a as XsdGMonth;
-      const y = b as XsdGMonth;
-      return fieldCompare([x.month], [y.month]);
-    }
-    case "gMonthDay": {
-      const x = a as XsdGMonthDay;
-      const y = b as XsdGMonthDay;
-      return fieldCompare([x.month, x.day], [y.month, y.day]);
-    }
-    case "gDay": {
-      const x = a as XsdGDay;
-      const y = b as XsdGDay;
-      return fieldCompare([x.day], [y.day]);
     }
     case "duration":
       return compareDurations(a as XsdDuration, b as XsdDuration);

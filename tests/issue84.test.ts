@@ -41,8 +41,8 @@ describe("enum facet coercion", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, NUM_ENUM_XSD);
       const { schemas } = irToZod(await parseXsd([file]));
-      // Number('1.0') → 1, Number('2.50') → 2.5 — not raw lexicals, not strings.
-      expect(schemas).toContain("z.union([z.literal(1), z.literal(2.5)])");
+      // Check the exact lexicals before conversion to potentially rounded numbers.
+      expect(schemas).toContain('"enumerations":["1.0","2.50"],"decimal":true');
     });
   });
 

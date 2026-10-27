@@ -54,6 +54,7 @@
   "homepage": "https://github.com/PaulDebus/xsd-to-zod#readme",
   "files": [
     "dist",
+    "docs",
     "README.md",
     "LICENSE"
   ],
@@ -67,16 +68,16 @@
     "@nodable/flexible-xml-parser": "^1.10.0",
     "commander": "^15.0.0",
     "iconv-lite": "^0.7.3",
-    "undici": "^7.29.1"
+    "undici": "^7.30.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.12",
     "libxml2-wasm": "^0.7.1",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.12",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

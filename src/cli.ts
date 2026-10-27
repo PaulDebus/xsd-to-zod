@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
@@ -32,7 +33,8 @@ const errorMessage = (e: unknown): string => {
 
 import { runPostGenerationFormatting } from "./postProcess.js";
 import { readXmlFile } from "./readXmlFile.js";
-import { safeParseXml } from "./runtime.js";
+import { decodeXmlEntities, safeParseXml } from "./runtime.js";
+import { PACKAGE_VERSION } from "./version.js";
 import { xmlRegistry } from "./xmlMeta.js";
 
 const reportWarnings = (warnings: string[]): void => {
@@ -65,20 +67,21 @@ const warnDiagnostics = (ir: XsdIr, suggestFetch = false): void => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Shared pattern matching `<xs:import>`, `<xs:include>`, or `<xs:redefine>` (with optional `xs:` prefix). */
-const IMPORT_INCLUDE_REDUCE_RE = /<(?:xs:)?(?:import|include|redefine)\b/;
-
 const isZodSchema = (value: unknown): value is z.ZodType =>
   value !== null && typeof value === "object" && "_zod" in value;
 
 const importGeneratedModule = async (schemasCode: string): Promise<Record<string, unknown>> => {
-  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const baseDir = join(packageRoot, ".xsd-to-zod-cli");
-  mkdirSync(baseDir, { recursive: true });
-  const dir = mkdtempSync(join(baseDir, "run-"));
+  const dir = mkdtempSync(join(tmpdir(), "xsd-to-zod-cli-"));
   try {
     const file = join(dir, "generated.mjs");
-    writeFileSync(file, schemasCode, "utf8");
+    // Resolve generated imports from the installed CLI, not from the OS temp
+    // directory, so validation also works with isolated and read-only installs.
+    const resolved = schemasCode.replace(
+      /^(import\s+[^\n]+?\s+from\s+)(["'])(zod|xsd-to-zod)\2/gm,
+      (_line, start: string, _quote: string, source: string) =>
+        `${start}${JSON.stringify(import.meta.resolve(source))}`,
+    );
+    writeFileSync(file, resolved, "utf8");
     return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -145,6 +148,120 @@ export const expandDirectories = (files: string[], visitedDirs = new Set<string>
   return expanded.sort();
 };
 
+const XML_NON_MARKUP_SOURCE = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g;
+
+const maskXmlNonMarkup = (content: string): string =>
+  content.replace(XML_NON_MARKUP_SOURCE, (part) => " ".repeat(part.length));
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const XML_ATTRIBUTE_RE = /([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+const parseAttributes = (source: string): Map<string, string> => {
+  const attributes = new Map<string, string>();
+  for (const match of source.matchAll(XML_ATTRIBUTE_RE)) {
+    const name = match[1];
+    if (name !== undefined) {
+      attributes.set(name, decodeXmlEntities(match[2] ?? match[3] ?? ""));
+    }
+  }
+  return attributes;
+};
+
+const SCHEMA_ROOT_RE = /<([A-Za-z_][\w.-]*:)?schema\b((?:[^>"']|"[^"]*"|'[^']*')*)>/;
+
+const DEPENDENCY_RE =
+  /<([A-Za-z_][\w.-]*:)?(import|include|redefine)\b((?:[^>"']|"[^"]*"|'[^']*')*)\/?>/g;
+
+type SchemaReferenceKind = "import" | "include" | "redefine";
+
+type SchemaReference = {
+  kind: SchemaReferenceKind;
+  namespace: string | undefined;
+  schemaLocation: string | undefined;
+  tagName: string;
+};
+
+const schemaReferences = (content: string): SchemaReference[] => {
+  const references: SchemaReference[] = [];
+  for (const match of maskXmlNonMarkup(content).matchAll(DEPENDENCY_RE)) {
+    const kind = match[2];
+    if (kind !== "import" && kind !== "include" && kind !== "redefine") {
+      continue;
+    }
+    const attributes = parseAttributes(match[3] ?? "");
+    references.push({
+      kind,
+      namespace: attributes.get("namespace"),
+      schemaLocation: attributes.get("schemaLocation"),
+      tagName: `${match[1] ?? ""}${kind}`,
+    });
+  }
+  return references;
+};
+
+type SchemaDocument = {
+  file: string;
+  content: string;
+  prefix: string;
+  rootName: string;
+  rootTag: string;
+  selfClosing: boolean;
+  body: string;
+  targetNamespace: string;
+  elementFormDefault: string;
+  attributeFormDefault: string;
+  blockDefault: string;
+  finalDefault: string;
+  xmlns: Map<string, string>;
+};
+
+const parseSchemaDocument = (file: string, content: string): SchemaDocument => {
+  const masked = maskXmlNonMarkup(content);
+  const root = SCHEMA_ROOT_RE.exec(masked);
+  if (!root || root.index === undefined) {
+    throw new Error(`not an XSD schema: ${file}`);
+  }
+  const prefix = root[1] ?? "";
+  const rootName = `${prefix}schema`;
+  const rootTag = content.slice(root.index, root.index + root[0].length);
+  const selfClosing = /\/\s*>$/.test(rootTag);
+  const bodyStart = root.index + root[0].length;
+  let body = "";
+  if (!selfClosing) {
+    const close = new RegExp(`</${escapeRegExp(rootName)}\\s*>`);
+    const closeIndex = masked.slice(bodyStart).search(close);
+    if (closeIndex === -1) {
+      throw new Error(`missing closing </${rootName}> in ${file}`);
+    }
+    body = content.slice(bodyStart, bodyStart + closeIndex);
+  }
+  const attributes = parseAttributes(root[2] ?? "");
+  const xmlns = new Map<string, string>();
+  for (const [name, value] of attributes) {
+    if (name === "xmlns") {
+      xmlns.set("", value);
+    } else if (name.startsWith("xmlns:")) {
+      xmlns.set(name.slice("xmlns:".length), value);
+    }
+  }
+  return {
+    file,
+    content,
+    prefix,
+    rootName,
+    rootTag,
+    selfClosing,
+    body,
+    targetNamespace: attributes.get("targetNamespace") ?? "",
+    elementFormDefault: attributes.get("elementFormDefault") ?? "unqualified",
+    attributeFormDefault: attributes.get("attributeFormDefault") ?? "unqualified",
+    blockDefault: attributes.get("blockDefault") ?? "",
+    finalDefault: attributes.get("finalDefault") ?? "",
+    xmlns,
+  };
+};
+
 export const discoverDependencies = (entryFile: string, visited = new Set<string>()): string[] => {
   const resolved = resolve(entryFile);
   if (visited.has(resolved)) {
@@ -152,15 +269,15 @@ export const discoverDependencies = (entryFile: string, visited = new Set<string
   }
   visited.add(resolved);
 
-  const content = readFileSync(resolved, "utf8");
+  const content = readXmlFile(resolved);
   const files: string[] = [resolved];
 
-  const re = new RegExp(
-    `${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*schemaLocation=["']([^"']+)["']`,
-    "g",
-  );
-  for (const m of content.matchAll(re)) {
-    const depPath = resolve(dirname(resolved), m[1] ?? "");
+  for (const reference of schemaReferences(content)) {
+    const location = reference.schemaLocation;
+    if (location === undefined || location === "") {
+      continue;
+    }
+    const depPath = resolve(dirname(resolved), location);
     if (existsSync(depPath)) {
       files.push(...discoverDependencies(depPath, visited));
     }
@@ -169,16 +286,25 @@ export const discoverDependencies = (entryFile: string, visited = new Set<string
   return files;
 };
 
-export const stripImports = (xsd: string): string =>
-  xsd
-    .replace(new RegExp(`${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*\\/?>`, "g"), "")
-    .replace(
-      new RegExp(
-        `${IMPORT_INCLUDE_REDUCE_RE.source}[^>]*>[\\s\\S]*?<\\/(?:xs:)?(?:import|include|redefine)>`,
-        "g",
-      ),
-      "",
-    );
+export const stripImports = (xsd: string): string => {
+  const masked = maskXmlNonMarkup(xsd);
+  const paired =
+    /<([A-Za-z_][\w.-]*:)?(import|include|redefine)\b(?:[^>"']|"[^"]*"|'[^']*')*(?<!\/)>[\s\S]*?<\/\1\2\s*>/g;
+  const ranges = [...masked.matchAll(paired), ...masked.matchAll(DEPENDENCY_RE)]
+    .map((match) => ({ start: match.index, end: match.index + match[0].length }))
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start < cursor) {
+      continue;
+    }
+    parts.push(xsd.slice(cursor, range.start));
+    cursor = range.end;
+  }
+  parts.push(xsd.slice(cursor));
+  return parts.join("");
+};
 
 // Per-file library detection: returns true for type-definition-only schemas
 // (those without root elements).  Uses a raw text heuristic instead of a full
@@ -223,6 +349,123 @@ export const isLibrary = (filePath: string): boolean => {
   } catch {
     return false;
   }
+};
+
+// ---------------------------------------------------------------------------
+// Bundle planning
+// ---------------------------------------------------------------------------
+
+const BUNDLE_DOWNLOAD_HINT =
+  'a single bundled XSD cannot express this; use "xsd-to-zod download" to vendor the schema closure instead';
+
+function failBundle(message: string): never {
+  throw new Error(`${message}; ${BUNDLE_DOWNLOAD_HINT}`);
+}
+
+const escapeXmlAttribute = (value: string): string =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+const normalizeSchemaRootTag = (rootTag: string, additions: string[]): string => {
+  const selfClosing = /\/\s*>$/.test(rootTag);
+  const end = selfClosing ? rootTag.lastIndexOf("/>") : rootTag.lastIndexOf(">");
+  const head = rootTag.slice(0, end).trimEnd();
+  const attributes = additions.length > 0 ? ` ${additions.join(" ")}` : "";
+  return `${head}${attributes}>`;
+};
+
+type BundlePlan = {
+  schemas: SchemaDocument[];
+  entry: SchemaDocument;
+  schemaTag: string;
+};
+
+const planBundle = (entryFile: string): BundlePlan => {
+  const files = discoverDependencies(entryFile);
+  const schemas = files.map((file) => parseSchemaDocument(file, readXmlFile(file)));
+  const entry = schemas[0];
+  if (entry === undefined) {
+    throw new Error(`entry file not found: ${entryFile}`);
+  }
+  const additions = new Map<string, string>();
+
+  for (const schema of schemas) {
+    for (const reference of schemaReferences(schema.content)) {
+      if (reference.kind === "redefine") {
+        failBundle(`cannot bundle <${reference.tagName}> in ${schema.file}`);
+      }
+      const location = reference.schemaLocation;
+      if (location === undefined || location === "") {
+        failBundle(
+          `cannot bundle <${reference.tagName}> without a schemaLocation in ${schema.file}`,
+        );
+      }
+      const depPath = resolve(dirname(schema.file), location);
+      const dependency = schemas.find((candidate) => resolve(candidate.file) === depPath);
+      if (dependency === undefined) {
+        failBundle(`cannot bundle unresolved schemaLocation "${location}" in ${schema.file}`);
+      }
+
+      if (reference.kind === "include") {
+        if (dependency.targetNamespace !== entry.targetNamespace) {
+          failBundle(
+            `cannot bundle include "${location}" with target namespace "${dependency.targetNamespace}" into entry target namespace "${entry.targetNamespace}"`,
+          );
+        }
+      } else {
+        const importNamespace = reference.namespace;
+        if (importNamespace === undefined) {
+          if (entry.targetNamespace !== "" || dependency.targetNamespace !== "") {
+            failBundle(
+              `cannot bundle no-namespace import "${location}" into entry target namespace "${entry.targetNamespace}"`,
+            );
+          }
+        } else if (
+          importNamespace !== entry.targetNamespace ||
+          dependency.targetNamespace !== entry.targetNamespace
+        ) {
+          failBundle(
+            `cannot bundle foreign-namespace import "${importNamespace}" from ${dependency.file} into entry target namespace "${entry.targetNamespace}"`,
+          );
+        }
+      }
+
+      if (
+        dependency.elementFormDefault !== entry.elementFormDefault ||
+        dependency.attributeFormDefault !== entry.attributeFormDefault ||
+        dependency.blockDefault !== entry.blockDefault ||
+        dependency.finalDefault !== entry.finalDefault
+      ) {
+        failBundle(
+          `cannot bundle ${dependency.file} with elementFormDefault="${dependency.elementFormDefault}" and attributeFormDefault="${dependency.attributeFormDefault}" into entry defaults "${entry.elementFormDefault}"/"${entry.attributeFormDefault}"`,
+        );
+      }
+
+      if ((dependency.xmlns.get("") ?? "") !== (entry.xmlns.get("") ?? "")) {
+        failBundle(`cannot bundle differing default namespace contexts in ${dependency.file}`);
+      }
+
+      for (const [prefix, uri] of dependency.xmlns) {
+        const existing = entry.xmlns.get(prefix);
+        if (existing !== undefined) {
+          if (existing !== uri) {
+            failBundle(
+              `cannot bundle conflicting xmlns${prefix === "" ? "" : `:${prefix}`} binding "${existing}" in the entry with "${uri}" in ${dependency.file}`,
+            );
+          }
+          continue;
+        }
+        additions.set(prefix, uri);
+        entry.xmlns.set(prefix, uri);
+      }
+    }
+  }
+
+  const declarations = [...additions].map(([prefix, uri]) =>
+    prefix === ""
+      ? `xmlns="${escapeXmlAttribute(uri)}"`
+      : `xmlns:${prefix}="${escapeXmlAttribute(uri)}"`,
+  );
+  return { schemas, entry, schemaTag: normalizeSchemaRootTag(entry.rootTag, declarations) };
 };
 
 // ---------------------------------------------------------------------------
@@ -473,6 +716,10 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
 const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> => {
   const { xsd: xsdFile, root, engine } = opts;
 
+  if (engine !== "zod" && engine !== "libxml2") {
+    throw new Error(`invalid --engine mode: ${engine} (expected "zod" or "libxml2")`);
+  }
+
   if (!existsSync(xmlFile)) {
     throw new Error(`xml file not found: ${xmlFile}`);
   }
@@ -549,6 +796,7 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
 
 const program = new Command()
   .name("xsd-to-zod")
+  .version(PACKAGE_VERSION)
   .exitOverride()
   .enablePositionalOptions()
   .description("Turn XSD schemas into strongly-typed Zod parsers for XML.")
@@ -654,23 +902,10 @@ program
       out = stem ? `${stem}.bundled.xsd` : "bundled.xsd";
     }
 
-    const files = discoverDependencies(entryFile);
+    const plan = planBundle(entryFile);
+    const bodies = plan.schemas.map((schema) => stripImports(schema.body));
 
-    const entryContent = readFileSync(entryFile, "utf8");
-
-    const bodies: string[] = [];
-    for (const file of files) {
-      const content = readFileSync(file, "utf8");
-      const schemaMatch = content.match(/<((?:xs:)?schema)\b[^>]*>([\s\S]*)<\/\1>/);
-      if (schemaMatch) {
-        bodies.push(stripImports(schemaMatch[2] ?? ""));
-      }
-    }
-
-    const tagMatch = entryContent.match(/<((?:xs:)?schema)\b[^>]*>/);
-    const schemaTag = tagMatch?.[0] ?? '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">';
-
-    const bundled = `${schemaTag}\n${bodies.join("\n")}\n</xs:schema>`;
+    const bundled = `${plan.schemaTag}\n${bodies.join("\n")}\n</${plan.entry.prefix}schema>`;
 
     const outDir = dirname(resolve(out));
     if (!existsSync(outDir)) {
@@ -685,7 +920,7 @@ program
       );
     }
 
-    console.log(`Bundled ${files.length} file(s) → ${out}`);
+    console.log(`Bundled ${plan.schemas.length} file(s) → ${out}`);
   });
 
 // ---------------------------------------------------------------------------

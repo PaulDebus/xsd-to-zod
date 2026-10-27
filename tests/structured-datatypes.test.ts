@@ -27,9 +27,9 @@ import {
 import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 // Structured parsing of the XSD date/time builtins (datatypes: "structured"):
-// parsers normalize to the value space (UTC when a timezone is present),
-// writers emit the XSD 1.0 canonical lexical form, and the generated schemas
-// transform after the lexical refine.
+// dateTime/time normalize to UTC; partial dates preserve local fields and
+// offsets. Writers emit value-preserving lexicals, and generated schemas
+// transform after lexical validation.
 
 const fixedPoint = <T extends XsdStructuredValue>(
   parse: (value: string) => T,
@@ -49,19 +49,20 @@ describe("xsdDateTime parsers and canonical writers", () => {
       month: 10,
       day: 10,
     });
-    // A present timezone anchors the interval in UTC (tzOffset: 0).
+    // A partial date keeps its local components and carries the actual offset:
+    // normalizing it to UTC would shift the calendar fields and change value.
     expect(fixedPoint(parseXsdDate, writeXsdDate, "2002-10-10+05:00")).toEqual({
       year: 2002,
       month: 10,
-      day: 9,
-      tzOffset: 0,
+      day: 10,
+      tzOffset: 300,
     });
-    expect(writeXsdDate(parseXsdDate("2002-10-10+05:00"))).toBe("2002-10-09Z");
+    expect(writeXsdDate(parseXsdDate("2002-10-10+05:00"))).toBe("2002-10-10+05:00");
     expect(fixedPoint(parseXsdDate, writeXsdDate, "2002-10-10-05:00")).toEqual({
       year: 2002,
       month: 10,
       day: 10,
-      tzOffset: 0,
+      tzOffset: -300,
     });
     // Z, +00:00 and -00:00 collapse to the same UTC anchor.
     for (const tz of ["Z", "+00:00", "-00:00"]) {
@@ -84,8 +85,8 @@ describe("xsdDateTime parsers and canonical writers", () => {
       day: 29,
     });
     expect(fixedPoint(parseXsdDate, writeXsdDate, "2000-02-29").day).toBe(29);
-    // No year zero: shifting 0001-01-01T00:00+00:30 to UTC lands in year -1.
-    expect(writeXsdDate(parseXsdDate("0001-01-01+00:30"))).toBe("-0001-12-31Z");
+    // A partial date does not shift into the previous year on serialization.
+    expect(writeXsdDate(parseXsdDate("0001-01-01+00:30"))).toBe("0001-01-01+00:30");
     expect(fixedPoint(parseXsdDate, writeXsdDate, " 2002-10-10 ")).toEqual({
       year: 2002,
       month: 10,
@@ -165,14 +166,23 @@ describe("xsdDateTime parsers and canonical writers", () => {
 
   it("xs:gYear / xs:gYearMonth", async () => {
     expect(fixedPoint(parseXsdGYear, writeXsdGYear, "2002")).toEqual({ year: 2002 });
-    expect(writeXsdGYear(parseXsdGYear("2002+05:00"))).toBe("2001Z");
+    expect(fixedPoint(parseXsdGYear, writeXsdGYear, "2002+05:00")).toEqual({
+      year: 2002,
+      tzOffset: 300,
+    });
+    expect(writeXsdGYear(parseXsdGYear("2002+05:00"))).toBe("2002+05:00");
     expect(fixedPoint(parseXsdGYear, writeXsdGYear, "-2002")).toEqual({ year: -2002 });
     expect(fixedPoint(parseXsdGYearMonth, writeXsdGYearMonth, "2002-10")).toEqual({
       year: 2002,
       month: 10,
     });
-    expect(writeXsdGYearMonth(parseXsdGYearMonth("2002-10+05:00"))).toBe("2002-09Z");
-    expect(writeXsdGYearMonth(parseXsdGYearMonth("2002-01-14:00"))).toBe("2002-01Z");
+    expect(fixedPoint(parseXsdGYearMonth, writeXsdGYearMonth, "2002-10+05:00")).toEqual({
+      year: 2002,
+      month: 10,
+      tzOffset: 300,
+    });
+    expect(writeXsdGYearMonth(parseXsdGYearMonth("2002-10+05:00"))).toBe("2002-10+05:00");
+    expect(writeXsdGYearMonth(parseXsdGYearMonth("2002-01-14:00"))).toBe("2002-01-14:00");
   });
 
   it("xs:gMonth / xs:gMonthDay / xs:gDay", async () => {
@@ -182,9 +192,9 @@ describe("xsdDateTime parsers and canonical writers", () => {
       month: 2,
       day: 29,
     });
-    expect(writeXsdGMonthDay(parseXsdGMonthDay("--05-01+14:00"))).toBe("--04-30Z");
+    expect(writeXsdGMonthDay(parseXsdGMonthDay("--05-01+14:00"))).toBe("--05-01+14:00");
     expect(fixedPoint(parseXsdGDay, writeXsdGDay, "---31")).toEqual({ day: 31 });
-    expect(writeXsdGDay(parseXsdGDay("---01+14:00"))).toBe("---31Z");
+    expect(writeXsdGDay(parseXsdGDay("---01+14:00"))).toBe("---01+14:00");
   });
 
   it("xs:duration", async () => {
@@ -283,8 +293,8 @@ describe("datatypes: structured codegen", () => {
       expect(schemas).toContain(
         '"@kind": { kind: "attribute", qname: "{}kind", datatype: "date" }',
       );
-      // Enum values canonicalize at codegen time (+00:00 → Z).
-      expect(schemas).toContain('["2002-10-10", "2002-10-11Z"].includes(writeXsdDate(val))');
+      // Enum values compare in value space, retaining the declaration lexical.
+      expect(schemas).toContain('xsdOrderCompare("date", val, allowed) === 0');
     });
   });
 
@@ -322,7 +332,9 @@ describe("datatypes: structured codegen", () => {
         expect(schemas).toContain('fixedValue: "2002-10-10T12:00:00-05:00"');
         expect(schemas).toContain('.default({"hour":17,"minute":0,"second":0,"tzOffset":0})');
         // Fixed is a canonical-lexical refine, not a z.literal of an object.
-        expect(schemas).toContain('writeXsdDateTime(val) === "2002-10-10T17:00:00Z"');
+        expect(schemas).toContain(
+          'xsdOrderCompare("dateTime", val, "2002-10-10T12:00:00-05:00") === 0',
+        );
       },
     );
   });
@@ -366,7 +378,7 @@ describe("datatypes: structured runtime round-trip", () => {
         "<tags>2002-10-10 2003-11-11Z</tags></event>";
       const parsed = parseXml(schema, xml);
       expect(parsed).toEqual({
-        date: { year: 2002, month: 10, day: 9, tzOffset: 0 },
+        date: { year: 2002, month: 10, day: 10, tzOffset: 300 },
         stamp: { year: 2002, month: 10, day: 10, hour: 17, minute: 0, second: 0, tzOffset: 0 },
         at: { hour: 0, minute: 0, second: 0 },
         year: { year: 2002 },
@@ -393,7 +405,7 @@ describe("datatypes: structured runtime round-trip", () => {
 
       const serialized = serializeXml(schema, parsed);
       expect(serialized).toBe(
-        '<event kind="2002-10-10"><date>2002-10-09Z</date><stamp>2002-10-10T17:00:00Z</stamp>' +
+        '<event kind="2002-10-10"><date>2002-10-10+05:00</date><stamp>2002-10-10T17:00:00Z</stamp>' +
           "<at>00:00:00</at><year>2002</year><yearMonth>2002-10Z</yearMonth><month>--05</month>" +
           "<monthDay>--02-29</monthDay><day>---31</day><span>P1Y2M3DT4H5M6.7S</span>" +
           "<tags>2002-10-10 2003-11-11Z</tags></event>",
@@ -421,7 +433,7 @@ describe("datatypes: structured runtime round-trip", () => {
         span: "P1Y",
       };
       const serialized = serializeXml(schema, data);
-      expect(serialized).toContain("<date>2002-10-09Z</date>");
+      expect(serialized).toContain("<date>2002-10-10+05:00</date>");
       expect(serialized).toContain("<at>00:00:00</at>");
       expect(serialized).toContain("<yearMonth>2002-10</yearMonth>");
       expect(serialized).toContain("<span>P1Y</span>");

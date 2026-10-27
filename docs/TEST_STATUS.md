@@ -230,18 +230,20 @@ enforced by the suite itself, not by review discipline:
    unpin), and no-root pins must still have no global element matching the
    instance root.
 4. **Scope boundaries are documented once** (see "Intentionally out of
-   scope" below): identity constraints and validation conformance belong to
-   the libxml2 tier; XSD 1.1 is excluded.
+   scope" below): full validation conformance belongs to the libxml2 tier;
+   XSD 1.1 is excluded. The supported identity-constraint subset is enforced
+   by the zod tier too.
 5. **Remaining gaps are feature work, not conformance debt.** e.g. rootless
    xsi:type assessment (`noRootDeclaration`) or XSD 1.1 — if picked up, they
    get their own feature issues, not a place in the failure count.
 
 ## Intentionally out of scope (zod tier)
 
-- **Identity constraints** (`xs:key`, `xs:keyref`, `xs:unique`) — cross-document
-  referential checks, not shape/type validation; the libxml2 tier
-  (`xsd-to-zod/validate`) is the conformance authority and already enforces
-  them. Note the two skipped xmlschema collection fixtures
+- **Identity-constraint gaps** — the zod tier enforces `xs:key`, `xs:keyref`,
+  and `xs:unique` per declaring-element occurrence. Unsupported XPath forms
+  are diagnosed during generation; constraints declared on substitution-group
+  members and ID/IDREF referential semantics remain outside its contract.
+  The libxml2 tier is the full conformance authority. The two skipped xmlschema collection fixtures
   (`collection2`/`collection3` in `tests/roundtrip-upstream.test.ts`) are
   inherent test-data violations — libxml2 rejects the original XML itself
   (duplicate `xs:key` sequence, unmatched `xs:keyref`) — so they stay skipped

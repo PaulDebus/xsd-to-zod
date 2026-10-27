@@ -90,6 +90,6 @@ describe("length facet units", () => {
       </xs:restriction>
     </xs:simpleType>`),
     );
-    expect(code).toContain("val.trim().split(/\\s+/).length) >= 2");
+    expect(code).toContain("val.split(/[\\t\\n\\r ]+/).filter(Boolean).length >= 2");
   });
 });
