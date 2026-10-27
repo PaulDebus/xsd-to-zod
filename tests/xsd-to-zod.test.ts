@@ -84,20 +84,12 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       const ir = await parseXsd([file]);
       const generated = irToZod(ir);
-      expect(generated.schemas).toContain(
-        '"note": z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).nullable().optional()',
-      );
-      expect(generated.schemas).toContain(
-        '"approved": z.boolean().register(xmlRegistry, { simpleType: {"primitive":"boolean","lexical":"boolean"} }).optional()',
-      );
+      expect(generated.schemas).toContain('"note": z.string().nullable().optional()');
+      expect(generated.schemas).toContain('"approved": z.boolean().optional()');
       // Choice: no __choice marker anymore — branch fields become optional and
       // mutual exclusion is registry meta enforced by the runtime.
-      expect(generated.schemas).toContain(
-        '"sku": z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).optional()',
-      );
-      expect(generated.schemas).toContain(
-        '"ean": z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).optional()',
-      );
+      expect(generated.schemas).toContain('"sku": z.string().optional()');
+      expect(generated.schemas).toContain('"ean": z.string().optional()');
       expect(generated.schemas).toContain('"message":"choice allows at most one of: sku, ean"');
       expect(generated.schemas).not.toContain("__choice");
 
@@ -745,9 +737,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       expect(generated.schemas).toContain(
         'z.number().int().register(xmlRegistry, { simpleType: {"primitive":"decimal","lexical":"integer"}, lexicalType: "integer" }).min(0).max(150)',
       );
-      expect(generated.schemas).toContain(
-        'z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).max(20)',
-      );
+      expect(generated.schemas).toContain("z.string().max(20)");
       expect(generated.schemas).toContain('z.enum(["active", "inactive"])');
     });
   });
@@ -930,7 +920,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const CountryCodeSchema = z.lazy(() => z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).length(2).regex(xsdPattern("[A-Z]{2}"))).register(xmlRegistry, { qname: "{urn:facets}CountryCode", simpleType: {"primitive":"string","lexical":"string"} });',
+          'const CountryCodeSchema = z.lazy(() => z.string().length(2).regex(xsdPattern("[A-Z]{2}"))).register(xmlRegistry, { qname: "{urn:facets}CountryCode" });',
         );
       });
     });
@@ -939,7 +929,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const StatusCodeSchema = z.lazy(() => z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).pipe(z.enum(["active", "inactive", "pending"]))).register(xmlRegistry, { qname: "{urn:facets}StatusCode", simpleType: {"primitive":"string","lexical":"string"} });',
+          'const StatusCodeSchema = z.lazy(() => z.string().pipe(z.enum(["active", "inactive", "pending"]))).register(xmlRegistry, { qname: "{urn:facets}StatusCode" });',
         );
       });
     });
@@ -990,7 +980,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const ShortCodeSchema = z.lazy(() => z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).regex(xsdPattern("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val), { message: \'value is not one of the allowed values\' })).register(xmlRegistry, { qname: "{urn:facets}ShortCode", simpleType: {"primitive":"string","lexical":"string"} });',
+          'const ShortCodeSchema = z.lazy(() => z.string().regex(xsdPattern("[A-Z0-9]{3,8}")).refine((val) => ["ADM", "USR"].includes(val), { message: \'value is not one of the allowed values\' })).register(xmlRegistry, { qname: "{urn:facets}ShortCode" });',
         );
       });
     });
@@ -1008,7 +998,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const NameTypeSchema = z.lazy(() => z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).min(2).max(50)).register(xmlRegistry, { qname: "{urn:facets}NameType", simpleType: {"primitive":"string","lexical":"string"} });',
+          'const NameTypeSchema = z.lazy(() => z.string().min(2).max(50)).register(xmlRegistry, { qname: "{urn:facets}NameType" });',
         );
       });
     });
@@ -1017,7 +1007,7 @@ describe("xsd-to-zod v1 pipeline", () => {
       await runFacetTest(async (_dir, file) => {
         const generated = irToZod(await parseXsd([file]));
         expect(generated.schemas).toContain(
-          'const TokenTypeSchema = z.clone(z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "") : v, z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }))).register(xmlRegistry, { qname: "{urn:facets}TokenType", simpleType: {"primitive":"string","lexical":"string"}, facets: {"whiteSpace":"collapse"} });',
+          'const TokenTypeSchema = z.clone(z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "") : v, z.string())).register(xmlRegistry, { qname: "{urn:facets}TokenType", facets: {"whiteSpace":"collapse"} });',
         );
       });
     });
@@ -1059,12 +1049,8 @@ describe("xsd-to-zod v1 pipeline", () => {
         expect(generated.schemas).toContain(
           '.pipe(z.literal(3))).register(xmlRegistry, { simpleType: {"primitive":"decimal","lexical":"integer"}, lexicalType: "integer" }).optional()',
         );
-        expect(generated.schemas).toContain(
-          '"enabled": z.boolean().register(xmlRegistry, { simpleType: {"primitive":"boolean","lexical":"boolean"} }).optional()',
-        );
-        expect(generated.schemas).toContain(
-          '"note": z.string().register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"string"} }).optional()',
-        );
+        expect(generated.schemas).toContain('"enabled": z.boolean().optional()');
+        expect(generated.schemas).toContain('"note": z.string().optional()');
         expect(generated.schemas).not.toContain(".default(");
         expect(generated.schemas).toContain(
           '"ratio": { kind: "element", qname: "{urn:typedDefaults}ratio", defaultValue: 1.5, defaultLexical: "1.50" }',

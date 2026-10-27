@@ -426,7 +426,25 @@ interface PrimitiveEmitCtx {
   integers: IntegersMode;
   decimal: DecimalMode;
   datatypeCtx: DatatypeEmitCtx | undefined;
+  /** Identity comparison needs value-space descriptors for every simple type. */
+  identityMode: boolean;
 }
+
+// Most simple-type descriptors exist for identity comparison, so only emit
+// them when that pass can run — except numeric lexicals (whose grammar must be
+// enforced on every parse) and QName values (whose prefixes must be captured).
+const needsSimpleMeta = (descriptor: XmlSimpleTypeMeta, identityMode: boolean): boolean =>
+  identityMode ||
+  descriptor.primitive === "decimal" ||
+  descriptor.primitive === "float" ||
+  descriptor.primitive === "double" ||
+  descriptor.primitive === "QName" ||
+  descriptor.primitive === "NOTATION" ||
+  (descriptor.primitive === "list" &&
+    descriptor.item !== undefined &&
+    needsSimpleMeta(descriptor.item, false)) ||
+  (descriptor.primitive === "union" &&
+    (descriptor.members ?? []).some((member) => needsSimpleMeta(member, false)));
 
 const simpleTypeMeta = (
   typeName: QName,
@@ -486,7 +504,7 @@ const simpleTypeMeta = (
 const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
   const expr = primitiveToZodRaw(typeName, ctx);
   const descriptor = simpleTypeMeta(typeName);
-  if (descriptor === undefined) {
+  if (descriptor === undefined || !needsSimpleMeta(descriptor, ctx.identityMode)) {
     return expr;
   }
   const lexical = descriptor.lexical;
@@ -3259,6 +3277,7 @@ export const irToZod = (
     integers,
     decimal,
     datatypeCtx,
+    identityMode: moduleHasIdentity,
   };
   const sortedSimpleTypes = sortSimpleTypes(ir);
 
@@ -4080,7 +4099,9 @@ export const irToZod = (
     claimTypeName(simpleType.name);
     const descriptor = simpleTypeMeta(simpleType.name, ir);
     const descriptorMeta =
-      descriptor === undefined ? "" : `, simpleType: ${JSON.stringify(descriptor)}`;
+      descriptor === undefined || !needsSimpleMeta(descriptor, moduleHasIdentity)
+        ? ""
+        : `, simpleType: ${JSON.stringify(descriptor)}`;
     let expr: string;
     if (simpleType.kind === "list") {
       const itemExpr = primitiveToZod(simpleType.itemType, primitiveCtx);

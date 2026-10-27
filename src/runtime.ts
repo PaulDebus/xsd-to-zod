@@ -978,10 +978,11 @@ const qnameTokensFor = (lexical: string, schema: AnySchema): boolean[] => {
         );
     }
   }
+  // A union member without a descriptor is a non-QName primitive (QName
+  // leaves always carry one), so it must not capture prefix bindings.
   const isQName =
-    descriptor === undefined ||
-    descriptor.primitive === "QName" ||
-    descriptor.primitive === "NOTATION";
+    descriptor !== undefined &&
+    (descriptor.primitive === "QName" || descriptor.primitive === "NOTATION");
   return trimXmlWhitespace(lexical)
     .split(/[\t\n\r ]+/)
     .filter(Boolean)

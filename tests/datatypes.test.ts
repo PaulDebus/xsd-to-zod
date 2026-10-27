@@ -314,14 +314,12 @@ describe("builtin lexical codegen", () => {
     // whiteSpace=collapse is fixed for xs:token, replace for
     // xs:normalizedString — they ride the type as a preprocess.
     expect(code).toContain(
-      '"t": z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "") : v, z.string()).register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"token"} })',
+      '"t": z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "") : v, z.string())',
     );
     expect(code).toContain(
-      '"n": z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, z.string()).register(xmlRegistry, { simpleType: {"primitive":"string","lexical":"normalizedString"} })',
+      '"n": z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r]/g, " ") : v, z.string())',
     );
-    expect(code).toContain(
-      '"u": z.string().register(xmlRegistry, { simpleType: {"primitive":"anyURI","lexical":"anyURI"} })',
-    );
+    expect(code).toContain('"u": z.string()');
     expect(code).not.toContain(".refine(");
   });
 });
