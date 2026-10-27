@@ -4,13 +4,21 @@ import { afterAll, expect, it } from "vitest";
 import { runRoundTrip } from "./helpers.js";
 import { W3C_CORPUS_KNOWN_FAILURES } from "./w3cCorpusKnownFailures.js";
 import { W3C_CORPUS_NEGATIVE_KNOWN_ANOMALIES } from "./w3cCorpusNegativeKnownAnomalies.js";
+import { W3C_SCHEMA_VALIDITY_KNOWN_ANOMALIES } from "./w3cCorpusSchemaValidityKnownAnomalies.js";
 import {
   discoverInvalidCases,
+  discoverInvalidSchemaCases,
   discoverValidCases,
   parseSuiteIndex,
   type W3cCase,
+  type W3cInvalidSchemaCase,
 } from "./w3cDriver.js";
 import { evaluateNegativeCase, type NegativeTally, tallyNegative } from "./w3cNegative.js";
+import {
+  evaluateInvalidSchemaCase,
+  type SchemaValidityTally,
+  tallySchemaValidity,
+} from "./w3cSchemaValidity.js";
 
 const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
@@ -27,20 +35,20 @@ export const corpusTestSets = (): string[] =>
 export const corpusAvailable = (): boolean =>
   fs.existsSync(W3C_DIR) && fs.readdirSync(W3C_DIR).length > 0;
 
-// The negative corpus runs as one shard per contribution so CI can split it.
-// Markers must partition corpusTestSets() exactly: every test set belongs to
-// one shard, or its cases are silently dropped (or double-counted).
-export const NEGATIVE_CORPUS_SHARDS = [
+// The corpus runs as one shard per contribution so CI can split it. Markers
+// must partition corpusTestSets() exactly: every test set belongs to one
+// shard, or its cases are silently dropped (or double-counted).
+export const CORPUS_SHARDS = [
   { label: "misc", markers: ["boeingMeta", "common", "wgMeta"] },
   { label: "ms", markers: ["msMeta"] },
   { label: "nist", markers: ["nistMeta"] },
   { label: "sun", markers: ["sunMeta"] },
 ] as const;
 
-export const negativeCorpusSlice = (label: string): string[] => {
-  const shard = NEGATIVE_CORPUS_SHARDS.find((s) => s.label === label);
+export const corpusSlice = (label: string): string[] => {
+  const shard = CORPUS_SHARDS.find((s) => s.label === label);
   if (shard === undefined) {
-    throw new Error(`unknown negative corpus shard "${label}"`);
+    throw new Error(`unknown corpus shard "${label}"`);
   }
   return corpusTestSets().filter((f) => shard.markers.some((marker) => f.includes(marker)));
 };
@@ -151,6 +159,84 @@ export const registerCorpusNegativeTests = (label: string, testSetFiles: string[
         anomalyCases.push(key);
       }
       tallyNegative(stats, anchors, outcome);
+      expect(outcome).not.toBe("anomaly");
+    };
+
+    if (reason) {
+      it.fails(`${title} — KNOWN ANOMALY: ${reason}`, body, 30_000);
+    } else {
+      it(title, body, 30_000);
+    }
+  }
+};
+
+export const discoverCorpusInvalidSchemas = (testSetFiles: string[]): W3cInvalidSchemaCase[] =>
+  discoverInvalidSchemaCases(testSetFiles);
+
+// Register the invalid-schema tests for a slice of the corpus. The suite marks
+// the schema invalid (for XSD 1.0); libxml2 is the conformance authority. A
+// zod-tier reject passes — libxml2 may reject the schema too or accept it, in
+// which case our tier still matches the suite. A zod accept with a libxml2
+// reject is recorded as leniency; a schema both tiers accept is an anomaly
+// pinned as `it.fails`. Each shard writes its own report; the merge script
+// publishes all shards together.
+export const registerCorpusSchemaValidityTests = (label: string, testSetFiles: string[]): void => {
+  const cases = discoverCorpusInvalidSchemas(testSetFiles);
+  const slicePrefixes = testSetFiles.map((f) => `${path.relative(W3C_DIR, f)}/`);
+  const inSlice = (key: string): boolean => slicePrefixes.some((p) => key.startsWith(p));
+
+  it(`has no stale W3C corpus schema-validity KNOWN_ANOMALIES entries (${label})`, () => {
+    const discovered = new Set(cases.map((c) => corpusKeyOf(c.testSet, c.name)));
+    const stale = [...W3C_SCHEMA_VALIDITY_KNOWN_ANOMALIES.keys()]
+      .filter(inSlice)
+      .filter((k) => !discovered.has(k));
+    expect(stale).toEqual([]);
+  });
+
+  const stats = new Map<string, SchemaValidityTally>();
+  const lenientCases: string[] = [];
+  const anomalyCases: string[] = [];
+
+  afterAll(() => {
+    const reportDir = path.resolve(".xsd-to-zod-tests");
+    fs.mkdirSync(reportDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(reportDir, `w3c-schema-validity-corpus-${label}.json`),
+      JSON.stringify(
+        {
+          generated: new Date().toISOString(),
+          label,
+          testSets: testSetFiles.map((f) => path.relative(W3C_DIR, f)),
+          totalCases: cases.length,
+          knownAnomalies: [...W3C_SCHEMA_VALIDITY_KNOWN_ANOMALIES.keys()].filter(inSlice).length,
+          bySpecSection: Object.fromEntries(
+            [...stats.entries()].sort(([a], [b]) => a.localeCompare(b)),
+          ),
+          lenientCases: lenientCases.sort(),
+          anomalyCases: anomalyCases.sort(),
+        },
+        null,
+        2,
+      ),
+    );
+  });
+
+  for (const c of cases) {
+    const key = corpusKeyOf(c.testSet, c.name);
+    const anchors = c.specRefs.length > 0 ? c.specRefs : ["(no spec reference)"];
+    const anchorsSuffix = c.specRefs.length > 0 ? ` [${c.specRefs.join(", ")}]` : "";
+    const title = `rejects invalid W3C schema ${key}${anchorsSuffix}`;
+    const reason = W3C_SCHEMA_VALIDITY_KNOWN_ANOMALIES.get(key);
+
+    const body = async () => {
+      const outcome = await evaluateInvalidSchemaCase(c);
+      if (outcome === "lenient") {
+        lenientCases.push(key);
+      }
+      if (outcome === "anomaly") {
+        anomalyCases.push(key);
+      }
+      tallySchemaValidity(stats, anchors, outcome);
       expect(outcome).not.toBe("anomaly");
     };
 
