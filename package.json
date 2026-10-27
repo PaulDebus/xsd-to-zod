@@ -1,6 +1,6 @@
 {
   "name": "xsd-to-zod",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Turn XSD schemas into type-safe Zod parsers for XML, with a metadata-driven runtime for parseXml/serializeXml round-trips.",
   "main": "./dist/index.js",
   "exports": {
@@ -54,8 +54,11 @@
   "homepage": "https://github.com/PaulDebus/xsd-to-zod#readme",
   "files": [
     "dist",
-    "docs",
+    "docs/1.0-output-defaults.md",
+    "docs/MIGRATION.md",
+    "docs/TEST_STATUS.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "sideEffects": false,
