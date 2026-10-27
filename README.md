@@ -135,10 +135,10 @@ npm install libxml2-wasm
 
 ## Usage
 
-The next release, 0.4.0, is the last planned 0.x release before the 1.0
-ergonomic-output/API change. It also includes changes from 0.3.1 that require
-migration; see the [0.4 → 1.0 migration preview](docs/MIGRATION.md) before
-regenerating existing schemas.
+0.4.0 is the last planned 0.x release before the 1.0 ergonomic-output/API
+change. It also includes changes from 0.3.1 that require migration; see the
+[0.4 → 1.0 migration preview](docs/MIGRATION.md) before regenerating existing
+schemas. See the [CHANGELOG](CHANGELOG.md) for the full release notes.
 
 ### CLI
 
