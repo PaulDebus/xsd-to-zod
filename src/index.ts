@@ -26,8 +26,9 @@ export type {
   RemoteSchemaStoreOptions,
 } from "./remoteSchemaStore.js";
 export { REMOTE_SCHEMA_LOCKFILE, RemoteSchemaStore } from "./remoteSchemaStore.js";
-export type { ParseXmlOptions } from "./runtime.js";
+export type { ParseXmlOptions, SerializeXmlOptions } from "./runtime.js";
 export {
+  coerceXmlValue,
   decodeTagNameCharRefs,
   decodeXmlEntities,
   parseXml,
@@ -57,6 +58,7 @@ export type {
   XmlFieldMeta,
   XmlLexicalFacets,
   XmlMeta,
+  XmlSimpleTypeMeta,
   XmlWrappedMeta,
 } from "./xmlMeta.js";
 export { xmlRegistry } from "./xmlMeta.js";

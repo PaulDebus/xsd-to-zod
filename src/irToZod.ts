@@ -11,7 +11,7 @@ import type {
   XsdIr,
 } from "./types.js";
 import { PACKAGE_VERSION } from "./version.js";
-import type { XmlChoiceMeta, XmlLexicalFacets } from "./xmlMeta.js";
+import type { XmlChoiceMeta, XmlLexicalFacets, XmlSimpleTypeMeta } from "./xmlMeta.js";
 import {
   XSD_BIGINT_TYPE_NAMES,
   XSD_INTEGER_TYPE_NAMES,
@@ -128,7 +128,13 @@ const effectiveWhiteSpace = (
   return effectiveWhiteSpace(simple.baseType, ir, next);
 };
 
-const XSD_WS_COLLAPSE = 'v.replace(/\\s+/g, " ").trim()';
+// XSD whiteSpace is exactly #x9/#xA/#xD/#x20 — JS \s and String.trim also
+// strip Unicode spaces (NBSP, …) that are ordinary characters to XML.
+const XML_WS_SPLIT = /[\t\n\r ]+/;
+const trimXmlWhitespace = (raw: string): string => raw.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+const collapseXmlWhitespace = (raw: string): string =>
+  raw.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
+const XSD_WS_COLLAPSE = 'v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "")';
 const XSD_WS_REPLACE = 'v.replace(/[\\t\\n\\r]/g, " ")';
 
 // String-derived builtins with a fixed whiteSpace=collapse facet (XSD 1.0
@@ -168,7 +174,7 @@ const XSD_ORDERED_STRING_BUILTINS: ReadonlySet<string> = new Set([
 // value (NMTOKENS fixed="&#x9; X" means the value "X").
 const wsProcessLiteral = (raw: string, whiteSpace: "collapse" | "replace" | undefined): string =>
   whiteSpace === "collapse"
-    ? raw.replace(/\s+/g, " ").trim()
+    ? collapseXmlWhitespace(raw)
     : whiteSpace === "replace"
       ? raw.replace(/[\t\n\r]/g, " ")
       : raw;
@@ -393,6 +399,7 @@ const structuredValueGuard = (
     `typeof v === "object"`,
     `v !== null`,
     ...fields.map((f) => `"${f}" in v && typeof v.${f} === "number"`),
+    ...(fields.includes("year") ? ["Number.isSafeInteger(v.year)"] : []),
   ].join(" && ");
   if (datatypeCtx !== undefined) {
     datatypeCtx.usedTypes.add(structInfo.tsType);
@@ -419,9 +426,96 @@ interface PrimitiveEmitCtx {
   integers: IntegersMode;
   decimal: DecimalMode;
   datatypeCtx: DatatypeEmitCtx | undefined;
+  /** Identity comparison needs value-space descriptors for every simple type. */
+  identityMode: boolean;
 }
 
+// Most simple-type descriptors exist for identity comparison, so only emit
+// them when that pass can run — except numeric lexicals (whose grammar must be
+// enforced on every parse) and QName values (whose prefixes must be captured).
+const needsSimpleMeta = (descriptor: XmlSimpleTypeMeta, identityMode: boolean): boolean =>
+  identityMode ||
+  descriptor.primitive === "decimal" ||
+  descriptor.primitive === "float" ||
+  descriptor.primitive === "double" ||
+  descriptor.primitive === "QName" ||
+  descriptor.primitive === "NOTATION" ||
+  (descriptor.primitive === "list" &&
+    descriptor.item !== undefined &&
+    needsSimpleMeta(descriptor.item, false)) ||
+  (descriptor.primitive === "union" &&
+    (descriptor.members ?? []).some((member) => needsSimpleMeta(member, false)));
+
+const simpleTypeMeta = (
+  typeName: QName,
+  ir?: XsdIr,
+  seen = new Set<string>(),
+): XmlSimpleTypeMeta | undefined => {
+  if (seen.has(typeName)) {
+    return undefined;
+  }
+  const next = new Set(seen).add(typeName);
+  const simple = ir?.simpleTypes[typeName];
+  if (simple?.kind === "restriction") {
+    return simpleTypeMeta(simple.baseType, ir, next);
+  }
+  if (simple?.kind === "list") {
+    return {
+      primitive: "list",
+      item: simpleTypeMeta(simple.itemType, ir, next) ?? { primitive: "unknown" },
+    };
+  }
+  if (simple?.kind === "union") {
+    return {
+      primitive: "union",
+      members: simple.memberTypes.map(
+        (member) => simpleTypeMeta(member, ir, next) ?? { primitive: "unknown" },
+      ),
+    };
+  }
+  const parts = trySplitClark(typeName);
+  if (parts?.ns !== XSD_NS || parts.local === "anyType") {
+    return undefined;
+  }
+  const local = parts.local;
+  if (XSD_INTEGER_TYPE_NAMES.has(local)) {
+    return { primitive: "decimal", lexical: "integer" };
+  }
+  if (local === "IDREFS" || local === "NMTOKENS" || local === "ENTITIES") {
+    return { primitive: "list", item: { primitive: "string" }, lexical: local };
+  }
+  const primitive = [
+    "decimal",
+    "float",
+    "double",
+    "boolean",
+    "QName",
+    "NOTATION",
+    "anyURI",
+    "hexBinary",
+    "base64Binary",
+    ...XSD_STRUCTURED_TYPES.keys(),
+  ].includes(local)
+    ? local
+    : "string";
+  return { primitive, lexical: local };
+};
+
 const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
+  const expr = primitiveToZodRaw(typeName, ctx);
+  const descriptor = simpleTypeMeta(typeName);
+  if (descriptor === undefined || !needsSimpleMeta(descriptor, ctx.identityMode)) {
+    return expr;
+  }
+  const lexical = descriptor.lexical;
+  const lexicalType =
+    lexical === "integer" || lexical === "decimal" || lexical === "float" || lexical === "double"
+      ? `, lexicalType: ${JSON.stringify(lexical)}`
+      : "";
+  return `${expr}.register(xmlRegistry, { simpleType: ${JSON.stringify(descriptor)}${lexicalType} })`;
+};
+
+const primitiveToZodRaw = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
   const { definedTypes, constName, usedHelpers, structured, integers, decimal, datatypeCtx } = ctx;
   const parts = trySplitClark(typeName);
   if (!parts) {
@@ -473,7 +567,7 @@ const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
     usedHelpers.add("xsdDecimalLexical");
     // Canonicalized by the runtime on parse; the trim makes the schema's own
     // validation accept surrounding XML whitespace (whiteSpace=collapse).
-    return `z.string().trim().refine(xsdDecimalLexical, { message: 'invalid xs:decimal lexical' })`;
+    return `z.string().refine(xsdDecimalLexical, { message: 'invalid xs:decimal lexical' })`;
   }
 
   const validator = XSD_LEXICAL_VALIDATORS.get(parts.local);
@@ -515,7 +609,7 @@ const typedLiteral = (kind: PrimitiveKind, raw: string): string => {
     }
   }
   if (kind === "number") {
-    const trimmed = raw.trim();
+    const trimmed = trimXmlWhitespace(raw);
     // xs:float/xs:double special lexicals: Number() maps all three to NaN.
     if (trimmed === "INF") {
       return "Infinity";
@@ -526,15 +620,15 @@ const typedLiteral = (kind: PrimitiveKind, raw: string): string => {
     if (trimmed === "NaN") {
       return "NaN";
     }
-    return String(Number(raw));
+    return String(Number(trimmed));
   }
   if (kind === "bigint") {
-    const trimmed = raw.trim();
+    const trimmed = trimXmlWhitespace(raw);
     // Enumeration on a list-of-integers type: the facet value is a list
     // lexical, so emit an array literal (one bigint per item).
-    if (/\s/.test(trimmed)) {
+    if (XML_WS_SPLIT.test(trimmed)) {
       return `[${trimmed
-        .split(/\s+/)
+        .split(XML_WS_SPLIT)
         .map((tok) => `${BigInt(tok)}n`)
         .join(", ")}]`;
     }
@@ -542,7 +636,8 @@ const typedLiteral = (kind: PrimitiveKind, raw: string): string => {
     return `${BigInt(trimmed)}n`;
   }
   if (kind === "boolean") {
-    return raw === "true" || raw === "1" ? "true" : "false";
+    const trimmed = trimXmlWhitespace(raw);
+    return trimmed === "true" || trimmed === "1" ? "true" : "false";
   }
   return JSON.stringify(raw);
 };
@@ -550,8 +645,8 @@ const typedLiteral = (kind: PrimitiveKind, raw: string): string => {
 // Whitespace-separated tokens of a list lexical; a trimmed empty lexical is an
 // empty list.
 const listTokens = (raw: string): string[] => {
-  const trimmed = raw.trim();
-  return trimmed === "" ? [] : trimmed.split(/\s+/);
+  const trimmed = trimXmlWhitespace(raw);
+  return trimmed === "" ? [] : trimmed.split(XML_WS_SPLIT);
 };
 
 // Typed array literal for a list-typed fixed lexical: one typed item per
@@ -604,7 +699,7 @@ const ergonomicAttributeKeys = (ir: XsdIr): { ir: XsdIr; fallbacks: FieldKeyFall
     // Keys an attribute's stripped name must not shadow. The synthetic
     // ergonomic choice key is allocated later and avoids these too; xsiType is
     // the runtime's polymorphic discriminant, spread onto variant schemas.
-    const reserved = new Set<string>(["xsiType"]);
+    const reserved = new Set<string>(["xsiType", "__proto__"]);
     for (const field of type.fields) {
       if (field.kind !== "attribute") {
         reserved.add(toFieldKey(field));
@@ -873,19 +968,17 @@ const resolveBaseStructure = (
 const applyPatternFacets = (
   result: string,
   facetValues: string[],
-  st: ReturnType<typeof structuredType> | undefined,
   usedHelpers: Set<string>,
   ownPatterns: string[],
 ): string => {
-  if (st !== undefined) {
-    usedHelpers.add(st.writeFn);
-    const alternatives = facetValues.map((v) => JSON.stringify(v)).join(", ");
-    return `${result}.refine((val) => [${alternatives}].some((p) => new RegExp(p).test(${st.writeFn}(val))), { message: 'value does not match the pattern' })`;
-  }
   if (isStringType(result)) {
     usedHelpers.add("xsdPattern");
     return `${result}.regex(xsdPattern(${JSON.stringify(facetValues.join("|"))}))`;
   }
+  // Non-string values (structured date/time objects, numeric aliases) cannot
+  // check an XSD pattern against their canonical form: the pattern applies to
+  // the original lexical, so it rides the metadata and the runtime's
+  // xsdPattern translation.
   ownPatterns.push(...facetValues);
   return result;
 };
@@ -905,10 +998,10 @@ const applyLengthFacet = (
     return `${result}.refine((val) => typeof val === 'string' && val.length % 2 === 0 && val.length / 2 ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
   }
   if (builtinLocal === "base64Binary") {
-    return `${result}.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/\\s+/g, '')) ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
+    return `${result}.refine((val) => typeof val === 'string' && ((s) => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0))(val.replace(/[\\t\\n\\r ]/g, '')) ${op} ${kind.value}, { message: 'octet length constraint violated' })`;
   }
   if (builtinLocal === "IDREFS" || builtinLocal === "NMTOKENS" || builtinLocal === "ENTITIES") {
-    return `${result}.refine((val) => typeof val === 'string' && (val.trim() === '' ? 0 : val.trim().split(/\\s+/).length) ${op} ${kind.value}, { message: 'item count constraint violated' })`;
+    return `${result}.refine((val) => typeof val === 'string' && val.split(/[\\t\\n\\r ]+/).filter(Boolean).length ${op} ${kind.value}, { message: 'item count constraint violated' })`;
   }
   if (st !== undefined) {
     usedHelpers.add(st.writeFn);
@@ -921,7 +1014,11 @@ const applyLengthFacet = (
         ? `${result}.min(${kind.value})`
         : `${result}.max(${kind.value})`;
   }
-  return `${result}.refine((val) => (typeof val === 'string' || Array.isArray(val)) && val.length ${op} ${kind.value}, { message: 'length constraint violated' })`;
+  // Named string aliases (and list types) arrive as schema references, so the
+  // direct z.string() helpers above cannot apply. XSD length counts
+  // characters (Unicode code points), not UTF-16 code units; lists count
+  // items.
+  return `${result}.refine((val) => Array.isArray(val) ? val.length ${op} ${kind.value} : typeof val === 'string' ? Array.from(val).length ${op} ${kind.value} : false, { message: 'length constraint violated' })`;
 };
 
 // The ordered builtin a type derives from: the date/time family (including
@@ -1049,26 +1146,31 @@ const withFacets = (
   // canonical lexicals (value-space equality) instead of reference identity.
   const st = structured ? structuredType(builtinLocal) : undefined;
   if (st && enumFacets.length > 0) {
-    usedHelpers.add(st.writeFn);
+    usedHelpers.add("xsdOrderCompare");
   }
   const enumConstraint =
     st === undefined
       ? undefined
       : `.refine((val) => [${enumFacets
-          .map((f) => JSON.stringify(writeXsdDatatype(st.name, parseXsdDatatype(st.name, f.value))))
+          .map((f) => JSON.stringify(f.value))
           .join(
             ", ",
-          )}].includes(${st.writeFn}(val)), { message: 'value is not one of the allowed values' })`;
+          )}].some((allowed) => xsdOrderCompare(${JSON.stringify(st.name)}, val, allowed) === 0), { message: 'value is not one of the allowed values' })`;
 
   const enumViaMeta =
     st === undefined &&
     enumFacets.length > 0 &&
     (kind === "decimalString" ||
+      (kind === "number" && builtinLocal === "decimal") ||
       baseStructure !== undefined ||
       (builtinLocal !== undefined && XSD_STRUCTURED_TYPES.has(builtinLocal)));
   if (enumViaMeta) {
     lexical.enumerations = enumFacets.map((f) => f.value);
-    if (baseStructure === undefined && builtinLocal !== undefined && kind !== "decimalString") {
+    if (kind === "decimalString" || (kind === "number" && builtinLocal === "decimal")) {
+      // Numeric-mode decimals are rounded doubles; comparing the original
+      // lexicals is the only exact check.
+      lexical.decimal = true;
+    } else if (baseStructure === undefined && builtinLocal !== undefined) {
       lexical.datatype = builtinLocal as XsdDatatypeName;
     }
   }
@@ -1124,8 +1226,8 @@ const withFacets = (
     if (enumConstraint !== undefined) {
       // Structured base (a string→object pipe): keep it and constrain.
       result += enumConstraint;
-    } else if (isStringType(base)) {
-      result = `z.enum([${enumLiterals().join(", ")}])`;
+    } else if (isStringType(base) || (kind === "string" && builtinLocal !== undefined)) {
+      result = `${base}.pipe(z.enum([${enumLiterals().join(", ")}]))`;
     } else if (isNumberType(base) || isBigIntType(base) || base === "z.boolean()") {
       result = `z.union([${enumLiterals()
         .map((lit) => `z.literal(${lit})`)
@@ -1151,10 +1253,14 @@ const withFacets = (
         case "totalDigits":
           if (kind === "bigint") {
             result += `.refine((val) => String(val < 0n ? -val : val).length <= ${facet.value}, { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
-          } else if (kind === "decimalString") {
-            // Exact lexical digits; the string-backed value may carry more
-            // significant digits than a double.
+          } else if (
+            builtinLocal === "decimal" &&
+            (kind === "decimalString" || kind === "number")
+          ) {
+            // Exact lexical digits; the value may be an exact string or a
+            // rounded double, so the runtime counts the original lexical.
             lexical.totalDigits = facet.value;
+            lexical.decimal = true;
           } else {
             usage.totalDigits = true;
             result += `.refine(xsdTotalDigits(${facet.value}), { message: ${JSON.stringify(`expected at most ${facet.value} total digits`)} })`;
@@ -1182,7 +1288,7 @@ const withFacets = (
       .filter((f) => f.kind === "pattern")
       .map((f) => (f as Facet & { kind: "pattern" }).value);
     if (patternValues.length > 0) {
-      result = applyPatternFacets(result, patternValues, st, usedHelpers, ownPatterns);
+      result = applyPatternFacets(result, patternValues, usedHelpers, ownPatterns);
     }
 
     if (enumFacets.length > 0 && !enumViaMeta) {
@@ -1205,7 +1311,7 @@ const withFacets = (
     // The decimal-string base already trims, and a pipe would hide it from
     // the runtime's decimal detection (canonicalization).
     if (kind !== "decimalString") {
-      result = `z.preprocess((v) => typeof v === "string" ? v.replace(/\\s+/g, " ").trim() : v, ${result})`;
+      result = `z.preprocess((v) => typeof v === "string" ? v.replace(/[\\t\\n\\r ]+/g, " ").replace(/^ | $/g, "") : v, ${result})`;
     }
   } else if (whiteSpace?.value === "replace") {
     lexical.whiteSpace = "replace";
@@ -1250,6 +1356,9 @@ const mergeLexicalFacets = (
   const datatype = own.datatype ?? base.datatype;
   if (datatype !== undefined) {
     merged.datatype = datatype;
+  }
+  if (base.decimal === true || own.decimal === true) {
+    merged.decimal = true;
   }
   const patterns = [...(base.patterns ?? []), ...(own.patterns ?? [])];
   if (patterns.length > 0) {
@@ -1357,13 +1466,13 @@ const optionalUnitsCheck = (complexType: ComplexTypeDef, js: boolean): string =>
     ? `const present = (k) => { const v = val[k]; ` +
       `return v !== undefined && (!Array.isArray(v) || v.length > 0); };`
     : `const present = (k: string): boolean => { ` +
-      `const v = (val as Record<string, unknown>)[k]; ` +
+      `const v = (val as { [key: string]: unknown })[k]; ` +
       `return v !== undefined && (!Array.isArray(v) || v.length > 0); };`;
   const seenFn = js
     ? `const seen = (q) => (keys[q] ?? []).some(present);`
     : `const seen = (q: string): boolean => (keys[q] ?? []).some(present);`;
   return (
-    `.superRefine((val, ctx) => { ${presentFn} const keys = ${keysLiteral}; ${seenFn} ` +
+    `.superRefine((val, ctx) => { ${presentFn} const keys${js ? "" : ": { [key: string]: string[] }"} = ${keysLiteral}; ${seenFn} ` +
     `const units = ${JSON.stringify(checked)}; const covered = new Set(); ` +
     `for (const unit of units) { ` +
     `if (unit.alternatives.some((alt) => alt.every(seen))) { ` +
@@ -1418,6 +1527,9 @@ const withCardinality = (
   decimal: DecimalMode,
 ): string => {
   const kind = resolvePrimitiveKind(field.typeName, ir, integers, decimal);
+  if (field.kind === "attribute" && field.maxOccurs === 0) {
+    return "z.never().optional()";
+  }
   // Fixed/default literals are values: the type's whiteSpace facet applies to
   // the declared lexical before comparison.
   const ws = kind === "string" ? effectiveWhiteSpace(field.typeName, ir) : undefined;
@@ -1441,18 +1553,14 @@ const withCardinality = (
         // the field meta (the runtime substitutes present-but-empty content).
         const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
         if (st) {
-          usedHelpers.add(st.writeFn);
-          const canonical = writeXsdDatatype(st.name, parseXsdDatatype(st.name, field.fixedValue));
-          result += `.refine((val) => ${st.writeFn}(val) === ${JSON.stringify(canonical)}, { message: 'value does not match the fixed value' })`;
+          usedHelpers.add("xsdOrderCompare");
+          result += `.refine((val) => xsdOrderCompare(${JSON.stringify(st.name)}, val, ${JSON.stringify(field.fixedValue)}) === 0, { message: 'value does not match the fixed value' })`;
         } else {
           // z.literal replaces the type expression, so the type's whiteSpace
           // preprocessing must be re-applied around it (NMTOKENS fixed values
           // compare after collapse).
           const literal = `z.literal(${typedLiteral(kind, fixedValue)})`;
-          result =
-            ws === undefined
-              ? literal
-              : `z.preprocess((v) => typeof v === "string" ? ${ws === "collapse" ? XSD_WS_COLLAPSE : XSD_WS_REPLACE} : v, ${literal})`;
+          result = `${schema}.pipe(${literal})`;
         }
       }
     } else if (resolvesToUnion(listItemType, ir)) {
@@ -1476,6 +1584,13 @@ const withCardinality = (
         // Object.is so NaN items (xs:float/xs:double specials) compare equal.
         result += `.refine((val) => val.length === ${items.length} && val.every((item, i) => Object.is(item, [${items.join(", ")}][i])), { message: 'value does not match the fixed value' })`;
       }
+    }
+  }
+  if (field.fixedValue !== undefined) {
+    const descriptor = simpleTypeMeta(field.typeName, ir);
+    if (descriptor !== undefined) {
+      const lexical = descriptor.lexical;
+      result = `z.lazy(() => ${result}).register(xmlRegistry, { simpleType: ${JSON.stringify(descriptor)}${lexical === "integer" || lexical === "decimal" || lexical === "float" || lexical === "double" ? `, lexicalType: ${JSON.stringify(lexical)}` : ""} })`;
     }
   }
   if (field.nillable) {
@@ -1515,7 +1630,13 @@ const withCardinality = (
   ) {
     const defaultValue = wsProcessLiteral(field.defaultValue, ws);
     const listItemType = resolveListItemType(field.typeName, ir);
-    if (listItemType === undefined) {
+    if (
+      resolvesToUnion(field.typeName, ir) ||
+      (listItemType !== undefined && resolvesToUnion(listItemType, ir))
+    ) {
+      usedHelpers.add("coerceXmlValue");
+      result += `.default(() => coerceXmlValue(${JSON.stringify(field.defaultValue)}, ${schema}))`;
+    } else if (listItemType === undefined) {
       const st = structured ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
       result += `.default(${st ? structuredLiteral(st.name, field.defaultValue) : typedLiteral(kind, defaultValue)})`;
     } else {
@@ -1523,8 +1644,8 @@ const withCardinality = (
       const itemKind = resolvePrimitiveKind(listItemType, ir, integers, decimal);
       // A trimmed empty default is an empty list; splitting it would yield a
       // single empty token.
-      const trimmed = field.defaultValue.trim();
-      const items = (trimmed === "" ? [] : trimmed.split(/\s+/)).map((token) =>
+      const trimmed = trimXmlWhitespace(field.defaultValue);
+      const items = (trimmed === "" ? [] : trimmed.split(XML_WS_SPLIT)).map((token) =>
         itemSt ? structuredLiteral(itemSt.name, token) : typedLiteral(itemKind, token),
       );
       result += `.default([${items.join(", ")}])`;
@@ -1739,14 +1860,23 @@ const choicesMetaFor = (
 const structuredTypeOfTypeName = (
   typeName: QName,
   ir: XsdIr,
+  seen?: Set<string>,
 ): ReturnType<typeof structuredType> => {
   const direct = structuredType(resolveBuiltinLocal(typeName, ir));
   if (direct) {
     return direct;
   }
+  const next = nextSeen(seen, typeName);
+  if (!next) {
+    return undefined;
+  }
   const simple = ir.simpleTypes[typeName];
-  return simple?.kind === "list"
-    ? structuredType(resolveBuiltinLocal(simple.itemType, ir))
+  if (simple?.kind === "list") {
+    return structuredType(resolveBuiltinLocal(simple.itemType, ir));
+  }
+  // A restriction of a list still holds a list of the item type's values.
+  return simple?.kind === "restriction"
+    ? structuredTypeOfTypeName(simple.baseType, ir, next)
     : undefined;
 };
 
@@ -1856,6 +1986,12 @@ const defaultValueMetaParts = (
   const parts =
     listItemType === undefined
       ? (() => {
+          // A union's member type decides the value from the declared lexical
+          // ("2" is the int member, not boolean false); only the runtime's
+          // branch-agreed coercion knows it. Keep the raw lexical instead.
+          if (resolvesToUnion(typeName, ir)) {
+            return [];
+          }
           const kind = resolvePrimitiveKind(typeName, ir, integers, decimal);
           return [
             `defaultValue: ${typedLiteral(kind, wsProcessLiteral(defaultValue, kind === "string" ? effectiveWhiteSpace(typeName, ir) : undefined))}`,
@@ -1868,8 +2004,12 @@ const defaultValueMetaParts = (
           if (itemSt) {
             // Structured items transform from the lexical, so the meta carries the
             // raw lexical for the schema's preprocess to split and parse.
-            const trimmed = defaultValue.trim();
+            const trimmed = trimXmlWhitespace(defaultValue);
             return [`defaultValue: ${trimmed === "" ? "[]" : JSON.stringify(defaultValue)}`];
+          }
+          // List-of-union: per-token branch agreement is runtime knowledge.
+          if (resolvesToUnion(listItemType, ir)) {
+            return [];
           }
           return [`defaultValue: ${listLiteral(typeName, ir, defaultValue, integers, decimal)}`];
         })();
@@ -2191,7 +2331,7 @@ const fieldsMetaFor = (
       // Lets the serializer canonicalize structured values back to lexicals.
       parts.push(`datatype: ${JSON.stringify(st.name)}`);
     }
-    if (field.kind === "element" || field.kind === "attribute") {
+    if (field.kind === "element" || field.kind === "attribute" || field.kind === "text") {
       if (isQNameTyped(field.typeName, ir)) {
         parts.push("qnameValue: true");
       }
@@ -2203,7 +2343,7 @@ const fieldsMetaFor = (
     if (
       field.defaultValue !== undefined &&
       field.fixedValue === undefined &&
-      (field.kind === "element" || (structured && st && field.kind === "attribute"))
+      (field.kind === "element" || field.kind === "attribute")
     ) {
       parts.push(
         ...defaultValueMetaParts(
@@ -2230,7 +2370,12 @@ const fieldsMetaFor = (
     if (field.identityConstraints !== undefined) {
       parts.push(`identity: ${JSON.stringify(field.identityConstraints)}`);
     }
-    return `${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
+    const local = clarkToLocal(field.qname);
+    const comment =
+      field.fieldKey !== undefined && (local === "__proto__" || local === "xsiType")
+        ? `/* XML name ${local} uses the safe data key ${toFieldKey(field)}. */ `
+        : "";
+    return `${comment}${JSON.stringify(toFieldKey(field))}: { ${parts.join(", ")} }`;
   });
   // Wildcard sentinels: '*' sweeps unmatched child elements, '@*' unmatched
   // attributes into the open shape. Element wildcards carry their namespace
@@ -2671,7 +2816,7 @@ const tsTypeOfTypeName = (
   }
   if (simple.kind === "union") {
     const members = simple.memberTypes.map((mt) =>
-      tsTypeOfTypeName(mt, ir, ifaceName, seen, dt, integers, decimal),
+      tsTypeOfTypeName(mt, ir, ifaceName, new Set(seen), dt, integers, decimal),
     );
     const unique = [...new Set(members)];
     return unique.length > 0 ? unique.join(" | ") : "unknown";
@@ -2700,7 +2845,17 @@ const tsTypeOfTypeName = (
       return "string";
     }
     const kind = resolvePrimitiveKind(simple.baseType, ir, integers, decimal);
-    return enumFacets.map((f) => typedLiteral(kind, f.value)).join(" | ");
+    if (baseParts.local === "decimal") {
+      return decimal === "string" ? "string" : "number";
+    }
+    const literals = enumFacets.map((f) =>
+      typedLiteral(kind, wsProcessLiteral(f.value, effectiveWhiteSpace(simple.name, ir))),
+    );
+    return literals.some(
+      (literal) => literal === "Infinity" || literal === "-Infinity" || literal === "NaN",
+    )
+      ? "number"
+      : literals.join(" | ");
   }
   return tsTypeOfTypeName(simple.baseType, ir, ifaceName, seen, dt, integers, decimal);
 };
@@ -2792,6 +2947,11 @@ const tsFieldLine = (
       ]),
     ];
     type = types.join(" | ");
+  } else if (
+    resolvesToUnion(field.typeName, ir) ||
+    resolvePrimitiveKind(field.typeName, ir, integers, decimal) === "decimalString"
+  ) {
+    type = tsTypeOfTypeName(field.typeName, ir, ifaceName, new Set(), dt, integers, decimal);
   } else if (resolveListItemType(field.typeName, ir) === undefined) {
     // Structured fixed values have no literal type; the base type it is.
     const st = dt ? structuredType(resolveBuiltinLocal(field.typeName, ir)) : undefined;
@@ -2808,6 +2968,9 @@ const tsFieldLine = (
             : undefined,
         ),
       );
+      if (type === "Infinity" || type === "-Infinity" || type === "NaN") {
+        type = "number";
+      }
     }
   } else {
     // List-typed fixed: the schema keeps the list type (the constraint is a
@@ -2878,6 +3041,7 @@ export const TS_TYPE_RESERVED = new Set([
   "z",
   "xmlRegistry",
   "xsdTotalDigits",
+  "coerceXmlValue",
   "xsdFractionDigits",
   "xsdPattern",
   "xsdDecimalLexical",
@@ -3113,6 +3277,7 @@ export const irToZod = (
     integers,
     decimal,
     datatypeCtx,
+    identityMode: moduleHasIdentity,
   };
   const sortedSimpleTypes = sortSimpleTypes(ir);
 
@@ -3257,7 +3422,7 @@ export const irToZod = (
       return "";
     }
     usedTypes.add(typeName);
-    return typeName === "XmlMeta" ? ": XmlMeta" : `: Record<string, ${typeName}>`;
+    return typeName === "XmlMeta" ? ": XmlMeta" : `: { [key: string]: ${typeName} }`;
   };
   const metaGroupAnnotation = (): string => {
     if (opts?.js) {
@@ -3932,10 +4097,15 @@ export const irToZod = (
 
   for (const simpleType of sortedSimpleTypes) {
     claimTypeName(simpleType.name);
+    const descriptor = simpleTypeMeta(simpleType.name, ir);
+    const descriptorMeta =
+      descriptor === undefined || !needsSimpleMeta(descriptor, moduleHasIdentity)
+        ? ""
+        : `, simpleType: ${JSON.stringify(descriptor)}`;
     let expr: string;
     if (simpleType.kind === "list") {
       const itemExpr = primitiveToZod(simpleType.itemType, primitiveCtx);
-      expr = `z.preprocess((v) => typeof v === "string" ? v.trim().split(/\\s+/) : v, z.array(${itemExpr}))`;
+      expr = `z.preprocess((v) => typeof v === "string" ? v.split(/[\\t\\n\\r ]+/).filter(Boolean) : v, z.array(${itemExpr}))`;
     } else if (simpleType.kind === "union") {
       const memberExprs = simpleType.memberTypes.map((mt) => primitiveToZod(mt, primitiveCtx));
       // Distinct member types can emit identical expressions (two
@@ -3973,7 +4143,7 @@ export const irToZod = (
             `export const ${constName.get(simpleType.name)} = ${registered(
               expr,
               simpleType.description,
-              `{ qname: ${JSON.stringify(simpleType.name)}, facets: ${JSON.stringify(merged)} }`,
+              `{ qname: ${JSON.stringify(simpleType.name)}${descriptorMeta}, facets: ${JSON.stringify(merged)} }`,
             )};`,
           ),
         );
@@ -3983,7 +4153,7 @@ export const irToZod = (
     schemaLines.push(
       withNamingComment(
         simpleType.name,
-        `export const ${constName.get(simpleType.name)} = ${registered(expr, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)} }`)};`,
+        `export const ${constName.get(simpleType.name)} = ${registered(`z.lazy(() => ${expr})`, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)}${descriptorMeta} }`)};`,
       ),
     );
   }
@@ -4137,6 +4307,14 @@ export const irToZod = (
     );
   }
 
+  const identityElementsName = moduleHasIdentity ? alloc("xmlIdentityElements") : undefined;
+  if (identityElementsName !== undefined) {
+    const entries = Object.values(ir.elements).map(
+      (element) =>
+        `${JSON.stringify(element.name)}: z.lazy(() => ${primitiveToZod(element.typeName, primitiveCtx)})`,
+    );
+    schemaLines.push(`const ${identityElementsName} = { ${entries.join(", ")} };`);
+  }
   for (const root of ir.rootElements) {
     const rootDef = ir.elements[root];
     if (!rootDef) {
@@ -4161,6 +4339,7 @@ export const irToZod = (
     }
     if (moduleHasIdentity) {
       rootMeta.push("hasIdentity: true");
+      rootMeta.push(`identityElements: () => ${identityElementsName}`);
     }
     const rootBlock = parseBlockTokens(rootDef.block);
     if (rootBlock.length > 0) {

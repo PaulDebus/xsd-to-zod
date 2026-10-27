@@ -84,7 +84,7 @@ describe("hoisted registry metadata", () => {
 
   it("dedupes trivial unions of identical member expressions", async () => {
     const schemas = await generate();
-    expect(schemas).toContain("const StringOrStringSchema = z.string()");
+    expect(schemas).toContain("const StringOrStringSchema = z.lazy(() => z.string()");
     expect(schemas).not.toContain("z.union([z.string(), z.string()])");
   });
 
@@ -174,7 +174,7 @@ describe("shared generated shapes", () => {
     const schemas = await generateExtension();
     expect(schemas).toContain("const ConceptTypeChoice0: XmlChoiceMeta =");
     expect(schemas).toContain(
-      'const ConceptTypeChoices: Record<string, XmlChoiceMeta> = { "0": ConceptTypeChoice0 };',
+      'const ConceptTypeChoices: { [key: string]: XmlChoiceMeta } = { "0": ConceptTypeChoice0 };',
     );
     expect(occurrences(schemas, "choices: ConceptTypeChoices")).toBeGreaterThanOrEqual(2);
     expect(schemas).toContain("choices: { ...ConceptTypeChoices,");

@@ -74,9 +74,10 @@ export const orderSchema = z.lazy(() => OrderTypeSchema)
   .register(xmlRegistry, { root: "{urn:example}order" });
 ```
 
-Every complex type becomes an exported interface plus an exported schema annotated
-`z.ZodType<Interface>`, so `z.infer<typeof orderSchema>` is `OrderType` — full
-compile-time types, including for mutually recursive XSD types. Named types from
+Every complex type becomes an exported interface plus an exported schema.
+Non-recursive schemas retain inferred input types; recursive schemas use an
+explicit `z.ZodType<Interface>` annotation to break circular inference. Parsed
+output remains typed, including for mutually recursive XSD types. Named types from
 the schema (simple and complex, e.g. `GuidTypeSchema`) are exported too, so you
 can validate fragments or reuse them in your own schemas without going through
 the root element. Root-element exports and type exports never share a name;
@@ -99,7 +100,10 @@ const data = parseXml(orderSchema, `
 const xml = serializeXml(orderSchema, data);
 ```
 
-`parseXml` throws a `ZodError` on validation failure — validation is enforced by construction, not by remembering to call `.parse()`. Use `safeParseXml(orderSchema, xml)` for a `{ success, data | error }` result object instead.
+`parseXml` validates by construction: schema failures throw a `ZodError`;
+structural/XML lexical failures can throw a plain `Error`. Use
+`safeParseXml(orderSchema, xml)` for a `{ success, data | error }` result object
+instead, and narrow its `unknown` error before reading Zod issues.
 
 ## Features
 
@@ -131,6 +135,11 @@ npm install libxml2-wasm
 
 ## Usage
 
+The next release, 0.4.0, is the last planned 0.x release before the 1.0
+ergonomic-output/API change. It also includes changes from 0.3.1 that require
+migration; see the [0.4 → 1.0 migration preview](docs/MIGRATION.md) before
+regenerating existing schemas.
+
 ### CLI
 
 ```sh
@@ -155,7 +164,7 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--include-libraries` | Include type-definition-only schemas (those without root elements); skipped by default |
 | `--allow-missing-imports` | Suppress warnings for unresolved XSD references; unresolved element refs map to `z.unknown()` in the output instead of being dropped |
 | `--silent` | Suppress informational output (warnings are still shown) |
-| `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.) and serializes back in XSD canonical lexical form |
+| `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.). Date/time instants normalize to UTC; partial dates retain their local fields and actual timezone offset to preserve the XSD value |
 | `--integers <mode>` | `number` (default) maps the `xs:integer` family to `z.number().int()` — JSON-safe, exact below 2⁵³ (larger values are rejected, and the 64-bit `long`/`unsignedLong` outer bounds cannot be expressed and are dropped); `bigint` maps them to `z.bigint()`, exact at any magnitude, but `JSON.stringify` throws on parsed data containing them |
 | `--decimal <mode>` | `number` (default) maps `xs:decimal` to `z.number()` (float64) — exact only to ~16 significant digits; `string` keeps the exact canonical decimal lexical (leading/trailing zeros normalized, never rounded), so arbitrary-precision financial amounts round-trip losslessly. Facets (`totalDigits`, `fractionDigits`, order bounds, enums) are checked against the exact lexical in both modes |
 | `--ergonomic` | Preview the 1.0 output shape: collapse lone-attribute value wrappers (`{ "@value": T }`) to scalars, emit attribute keys without the `@` prefix (`"@id"` → `"id"`; a colliding attribute keeps `@`), and emit repeated `xs:choice` as one array of tagged items (`_choice: ({ a: A } \| { b: B })[]`). Temporary scaffolding flag — not final public API |
@@ -220,13 +229,18 @@ documentation block quotes an import example with the exact same
 `schemaLocation` string as an import that gets relocated, that prose
 occurrence is rewritten along with it.
 
-Bundle all imports and includes into a single self-contained XSD:
+Bundle a compatible same-namespace schema set into a single self-contained XSD:
 
 ```sh
 xsd-to-zod bundle main.xsd                         # → main.bundled.xsd
 xsd-to-zod bundle main.xsd -o dist/schema.xsd      # → dist/schema.xsd
 xsd-to-zod bundle main.xsd --format                # formatted output
 ```
+
+`bundle` fails before writing when namespace contexts, schema defaults,
+redefinitions, foreign-namespace imports, or unresolved dependencies cannot be
+flattened safely. Use `download` to vendor those closures while preserving their
+separate schema documents.
 
 Validate an XML document:
 
@@ -282,9 +296,16 @@ const xml = serializeXml(orderSchema, order);
 
 `serializeXml` takes the schema's *input* type: it validates through the schema before walking, so XSD attribute defaults apply and invalid data fails early with a `ZodError`. Generated modules export an input alias per complex type (`OrderTypeIn = z.input<typeof OrderTypeSchema>`) next to the output interface, so hand-building data typechecks with defaulted fields left out. (Recursive types keep an explicit const annotation to break circular inference; no `*In` alias is emitted for them — `z.input` of an annotated schema degrades to `unknown`.)
 
+Primitive QName root strings cannot distinguish identical spellings parsed under
+different namespace bindings. The runtime retains a bounded per-value context;
+if that context is ambiguous or unavailable, supply it explicitly:
+`serializeXml(schema, value, { rootNamespaces: { p: "urn:codes" } })`.
+Use the empty key (`""`) for the QName value's default namespace. Ambiguous
+values fail serialization instead of silently using another document's bindings.
+
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
-Lexical retention is **opt-in**. By default `serializeXml` derives each lexical from the parsed value in its shortest round-trip form, so `1.0` serializes as `1` and `001` as `1` (and numeric values never use exponent notation, which `xs:decimal` forbids). Fields whose type carries lexical-space facets (`pattern`, `enumeration`, `whiteSpace`, order/fraction digits) keep their parse-time lexical regardless, so serialized output still satisfies the schema. Pass `{ retainLexicals: true }` to `parseXml`/`safeParseXml` to keep every value's original XML lexical and re-emit it verbatim for unchanged values — byte-fidelity for diffs, hashes, and XML content signatures. Retention never changes the parsed data (it only feeds serialization), and QName-valued content is unaffected either way: its prefix bindings are tracked and re-declared independently.
+Lexical retention is **opt-in**. By default `serializeXml` derives each lexical from the parsed value in its shortest round-trip form, so `1.0` serializes as `1` and `001` as `1` (and numeric values never use exponent notation, which `xs:decimal` forbids). Fields whose type carries lexical-space facets (`pattern`, `enumeration`, `whiteSpace`, order/fraction digits) keep their parse-time lexical regardless, so serialized output still satisfies the schema. Pass `{ retainLexicals: true }` to `parseXml`/`safeParseXml` to keep scalar lexical spellings for unchanged values. This does not preserve XML bytes, formatting, comments, namespace spelling, CDATA boundaries, or mixed-content interleaving. Retention never changes the parsed data (it only feeds serialization), and QName prefix bindings are tracked independently.
 
 Identity constraints (`xs:key`, `xs:keyref`, `xs:unique`) are enforced by default: violations fail parsing with a `ZodError` naming the constraint, value, and data path. To parse documents whose referential integrity is knowingly broken (partial exports, data being repaired) while keeping all other validation, use `parseXml(schema, xml, { identityConstraints: false })`.
 
@@ -323,7 +344,7 @@ const inner = orderSchema.def.getter().def.getter();   // root lazy → type laz
 const extended = inner.extend({ extra: z.string() });
 ```
 
-The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSchema)?.root` returns the root element QName. Registered metadata is informational; parsing/serialization never requires touching it.
+The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSchema)?.root` returns the root element QName. Generated schemas register it automatically; the XML runtime requires it. Object composition methods create new schemas: when composing by hand, register the resulting schema with the appropriate root and field metadata before using the XML runtime. A new field needs its own XML mapping; extending a Zod object alone does not define an XML element or attribute.
 
 **Type naming.** A global element with an inline anonymous type lends the type its bare name: `<xs:element name="Library">` with an inline complex type generates `export interface Library`, so `parseXml(LibrarySchema, xml)` is typed `Library`. Nested anonymous types follow the `Parent_Child_Type` scheme. If the friendly name collides with another declaration, the type keeps its synthetic `anonymous_…` name instead — the CLI prints a `naming-collision` warning and the generated file carries a comment at the affected type.
 
@@ -339,17 +360,21 @@ npm test
 
 The 0.4.0 release gate is `npm run test:release` — lint, the full suite with coverage thresholds, and the full W3C corpus. `test:quick` is for the dev loop only.
 
-**Test matrix** (full suite: 4,939 passing, 39 expected failures, 2 skipped; the nightly corpus adds 13,899 valid-instance and 10,942 invalid-instance cases):
+**Test matrix** (the full suite includes the complete NIST datatype selection;
+the corpus gate adds 13,899 valid-instance, 10,942 invalid-instance, and 3,329
+invalid-schema cases). Expected failures are documented pins, not unexplained
+failures; two upstream fixtures remain skipped because their original XML is invalid.
 
 | Category | Count | What it covers |
 |----------|------:|----------------|
 | Curated round-trip | 37 | Declarations, content models, cardinality, types, entities/CDATA, namespaces, imports, cyclic refs, defaults — serialized XML validated against libxml2 |
 | Upstream round-trip | 16 (14 ✅, 2 ⏭️) | [`xmlschema`](https://github.com/brunato/xmlschema) examples + OASIS UBL Invoice/Order |
 | W3C Boeing | 12 (12 ✅) | ipo1–ipo6 discovered from the `.testSet` metadata of the [w3c/xsdtests](https://github.com/w3c/xsdtests) submodule |
-| W3C sun/ms/nist selection | 2,614 (2,581 ✅, 33 ⚠️) | Valid-instance cases from 22 sun/ms test sets + a group-filtered nist datatype pilot; known failures pinned as `it.fails` with categorized reasons |
-| W3C negative (invalid instances) | 1,609 (1,603 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
+| W3C sun/ms/nist selection | 13,035 (13,002 ✅, 33 ⚠️) | Valid-instance cases from 22 test sets including every NIST datatype family; known failures pinned as `it.fails` with categorized reasons |
+| W3C negative (invalid instances) | 10,026 (10,020 ✅, 6 ⚠️) | zod tier must reject; lenient acceptances confirmed invalid by libxml2 and recorded in the negative conformance report |
 | W3C full corpus (main + weekly) | 13,899 (13,879 ✅, 20 ⚠️) | All XSD 1.0 test sets via `suite.xml`; known failures pinned as `it.fails` with categorized reasons in `tests/w3cCorpusKnownFailures.ts` |
 | W3C full-corpus negative (main + weekly) | 10,942 (10,916 ✅, 26 ⚠️) | Invalid instances across all XSD 1.0 test sets; the zod tier rejects or libxml2 confirms the leniency, recorded in the merged negative conformance report; anomalies pinned in `tests/w3cCorpusNegativeKnownAnomalies.ts` |
+| W3C invalid schemas (main + weekly) | 3,329 (392 ⚠️) | Maps generator leniency on invalid schemas; libxml2 is the conformance authority, with known oracle anomalies pinned |
 | Pipeline / CLI / runtime | 680+ | Codegen unit tests, runtime coercion, CLI e2e, conformance tier, facet checks |
 | Negative | 7 | The zod tier's leniency boundary, pinned (missing required → `ZodError`, foreign root → structural error) |
 | Codegen typecheck | 1 | `tsc --noEmit` over all curated fixtures' generated output |
@@ -366,10 +391,6 @@ The 0.4.0 release gate is `npm run test:release` — lint, the full suite with c
 Full license attributions in [`testdata/THIRD_PARTY_NOTICES.md`](testdata/THIRD_PARTY_NOTICES.md). Current suite status and coverage notes live in [`docs/TEST_STATUS.md`](docs/TEST_STATUS.md).
 
 ## Limitations
-
-Not supported by the generator (the conformance tier validates them anyway):
-
-- (none currently — identity constraints moved into the zod tier at 1.0)
 
 Zod-tier specifics worth knowing:
 

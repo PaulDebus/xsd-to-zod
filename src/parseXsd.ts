@@ -3,7 +3,7 @@ import XMLParser from "@nodable/flexible-xml-parser";
 import { childOrderOf } from "./documentOrder.js";
 import { Xsd2ZodError } from "./errors.js";
 import { sanitizeIdentifier } from "./irToZod.js";
-import { clarkToLocal, splitQName, syntheticChildName, toClark } from "./qname.js";
+import { clarkToLocal, splitQName, toClark } from "./qname.js";
 import { readXmlFile } from "./readXmlFile.js";
 import { createOutputBuilder, normalizeLineEndings } from "./runtime.js";
 import type {
@@ -141,6 +141,57 @@ const sanitizeTsIdentifier = sanitizeIdentifier;
 const optProp = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } =>
   value === undefined ? {} : ({ [key]: value } as { [P in K]: V });
 
+// Namespace declarations local to one schema node (e.g. xmlns:imp on an
+// xsd:element or xmlns:s on an xsd:simpleType) — QName-valued attributes
+// resolve against these too, inherited through every visited node.
+const localNsDeclarations = (node: AnyNode): Record<string, string> => {
+  const decls = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "@_xmlns") {
+      decls[""] = String(value);
+    } else if (key.startsWith("@_xmlns:")) {
+      decls[key.slice("@_xmlns:".length)] = String(value);
+    }
+  }
+  return decls;
+};
+
+const withLocalNs = (nsMap: Record<string, string>, node: AnyNode): Record<string, string> =>
+  Object.assign(Object.create(null) as Record<string, string>, nsMap, localNsDeclarations(node));
+
+type SyntheticOwnership = { names: Set<QName> };
+
+const uniqueSyntheticLocal = (
+  base: string,
+  targetNs: string,
+  simpleTypes: Record<string, SimpleTypeDef>,
+  complexTypes: Record<string, ComplexTypeDef>,
+  reserved?: ReadonlySet<QName>,
+): string => {
+  let candidate = base;
+  let n = 2;
+  while (
+    simpleTypes[toClark(targetNs, candidate)] ||
+    complexTypes[toClark(targetNs, candidate)] ||
+    reserved?.has(toClark(targetNs, candidate))
+  ) {
+    candidate = `${base}_${n++}`;
+  }
+  return candidate;
+};
+
+const uniqueSyntheticChildQName = (
+  qname: QName,
+  suffix: string,
+  simpleTypes: Record<string, SimpleTypeDef>,
+  reserved?: ReadonlySet<QName>,
+): QName => {
+  const boundary = qname.indexOf("}");
+  const ns = boundary === -1 ? "" : qname.slice(1, boundary);
+  const local = boundary === -1 ? qname : qname.slice(boundary + 1);
+  return toClark(ns, uniqueSyntheticLocal(`${local}${suffix}`, ns, simpleTypes, {}, reserved));
+};
+
 const NUMBER_FACETS = new Set([
   "length",
   "minLength",
@@ -202,7 +253,7 @@ const resolveTypeQName = (
     return toClark(XSD_NS, "string");
   }
   const { prefix, local } = splitQName(rawType);
-  if (prefix !== "" && nsMap[prefix] === undefined) {
+  if (prefix !== "" && !Object.hasOwn(nsMap, prefix)) {
     report(
       diagnostics,
       "unknown-namespace-prefix",
@@ -213,26 +264,30 @@ const resolveTypeQName = (
   if (prefix === "") {
     return toClark(nsMap[""] ?? "", local);
   }
-  return toClark(nsMap[prefix] ?? "", local);
+  return toClark(Object.hasOwn(nsMap, prefix) ? (nsMap[prefix] ?? "") : "", local);
 };
 
 // Parse the body of an xs:simpleType declaration (restriction / list / union)
-// into a SimpleTypeDef. Inline item/member types are registered in simpleTypes
-// under synthetic names derived from qname.
+// into a SimpleTypeDef. Inline item/member/base types are registered in
+// simpleTypes under synthetic names derived from qname.
 const parseSimpleTypeDef = (
   qname: QName,
   node: AnyNode,
   nsMap: Record<string, string>,
   simpleTypes: Record<string, SimpleTypeDef>,
   diagnostics: Diagnostic[],
+  ownership?: SyntheticOwnership,
+  reserved?: ReadonlySet<QName>,
 ): SimpleTypeDef => {
   const description = extractDocumentation(node);
+  const typeNsMap = withLocalNs(nsMap, node);
   const listChild = nodeChildren(node).find(([key]) => getNodeTagLocalName(key) === "list")?.[1];
   if (listChild) {
+    const listNsMap = withLocalNs(typeNsMap, listChild);
     const itemTypeRaw = listChild["@_itemType"];
     let itemType: QName;
     if (itemTypeRaw) {
-      itemType = resolveTypeQName(String(itemTypeRaw), nsMap, diagnostics);
+      itemType = resolveTypeQName(String(itemTypeRaw), listNsMap, diagnostics);
     } else {
       const inlineSimple = nodeChildren(listChild).find(
         ([key]) => getNodeTagLocalName(key) === "simpleType",
@@ -240,10 +295,12 @@ const parseSimpleTypeDef = (
       itemType = inlineSimple
         ? resolveInlineSimpleType(
             inlineSimple,
-            nsMap,
+            listNsMap,
             simpleTypes,
-            syntheticChildName(qname, "_itemType"),
+            uniqueSyntheticChildQName(qname, "_itemType", simpleTypes, reserved),
             diagnostics,
+            ownership,
+            reserved,
           )
         : toClark(XSD_NS, "string");
     }
@@ -259,11 +316,13 @@ const parseSimpleTypeDef = (
   if (unionChild) {
     // Members are the memberTypes attribute's refs followed by the inline
     // xs:simpleType children, in order (XSD 1.0 §4.1.2.3).
+    const unionNsMap = withLocalNs(typeNsMap, unionChild);
     const memberTypesRaw = unionChild["@_memberTypes"];
     const memberTypes: QName[] = memberTypesRaw
       ? String(memberTypesRaw)
-          .split(/\s+/)
-          .map((mt) => resolveTypeQName(mt, nsMap, diagnostics))
+          .split(/[\t\n\r ]+/)
+          .filter((mt) => mt.length > 0)
+          .map((mt) => resolveTypeQName(mt, unionNsMap, diagnostics))
       : [];
     for (const [key, stNode] of nodeChildren(unionChild)) {
       if (getNodeTagLocalName(key) !== "simpleType") {
@@ -272,10 +331,12 @@ const parseSimpleTypeDef = (
       memberTypes.push(
         resolveInlineSimpleType(
           stNode,
-          nsMap,
+          unionNsMap,
           simpleTypes,
-          syntheticChildName(qname, `_member${memberTypes.length}`),
+          uniqueSyntheticChildQName(qname, `_member${memberTypes.length}`, simpleTypes, reserved),
           diagnostics,
+          ownership,
+          reserved,
         ),
       );
     }
@@ -290,11 +351,25 @@ const parseSimpleTypeDef = (
   const restriction = nodeChildren(node).find(
     ([key]) => getNodeTagLocalName(key) === "restriction",
   )?.[1];
-  const baseType = resolveTypeQName(
-    restriction?.["@_base"] ? String(restriction["@_base"]) : undefined,
-    nsMap,
-    diagnostics,
-  );
+  const restrictionNsMap = restriction ? withLocalNs(typeNsMap, restriction) : typeNsMap;
+  const inlineBase = restriction
+    ? nodeChildren(restriction).find(([key]) => getNodeTagLocalName(key) === "simpleType")?.[1]
+    : undefined;
+  const baseType = inlineBase
+    ? resolveInlineSimpleType(
+        inlineBase,
+        restrictionNsMap,
+        simpleTypes,
+        uniqueSyntheticChildQName(qname, "_base", simpleTypes, reserved),
+        diagnostics,
+        ownership,
+        reserved,
+      )
+    : resolveTypeQName(
+        restriction?.["@_base"] ? String(restriction["@_base"]) : undefined,
+        restrictionNsMap,
+        diagnostics,
+      );
   const facets = restriction ? parseFacets(restriction) : [];
   return {
     name: qname,
@@ -311,13 +386,18 @@ const resolveInlineSimpleType = (
   simpleTypes: Record<string, SimpleTypeDef>,
   syntheticName: QName,
   diagnostics: Diagnostic[],
+  ownership?: SyntheticOwnership,
+  reserved?: ReadonlySet<QName>,
 ): QName => {
+  ownership?.names.add(syntheticName);
   simpleTypes[syntheticName] = parseSimpleTypeDef(
     syntheticName,
     node,
     nsMap,
     simpleTypes,
     diagnostics,
+    ownership,
+    reserved,
   );
   return syntheticName;
 };
@@ -327,20 +407,7 @@ type SyntheticTypeContext = {
   counter: { value: number };
   simpleTypes: Record<string, SimpleTypeDef>;
   complexTypes: Record<string, ComplexTypeDef>;
-};
-
-const uniqueSyntheticLocal = (
-  base: string,
-  targetNs: string,
-  simpleTypes: Record<string, SimpleTypeDef>,
-  complexTypes: Record<string, ComplexTypeDef>,
-): string => {
-  let candidate = base;
-  let n = 2;
-  while (simpleTypes[toClark(targetNs, candidate)] || complexTypes[toClark(targetNs, candidate)]) {
-    candidate = `${base}_${n++}`;
-  }
-  return candidate;
+  reserved?: ReadonlySet<QName>;
 };
 
 // Register an inline xs:simpleType under a synthetic name. nameHint (an
@@ -362,13 +429,21 @@ const synthesizeInlineSimpleType = (
   } else {
     local = `anonymous_${sanitizeTsIdentifier(nameHint)}_SimpleType`;
   }
-  const candidate = uniqueSyntheticLocal(local, ctx.targetNs, ctx.simpleTypes, ctx.complexTypes);
+  const candidate = uniqueSyntheticLocal(
+    local,
+    ctx.targetNs,
+    ctx.simpleTypes,
+    ctx.complexTypes,
+    ctx.reserved,
+  );
   return resolveInlineSimpleType(
     inlineSimple,
     nsMap,
     ctx.simpleTypes,
     toClark(ctx.targetNs, candidate),
     diagnostics,
+    undefined,
+    ctx.reserved,
   );
 };
 
@@ -432,7 +507,7 @@ const resolveDeclaredFieldNamespace = (
 };
 
 const collectNamespaceMap = (schemaNode: AnyNode): Record<string, string> => {
-  const nsMap: Record<string, string> = {};
+  const nsMap = Object.create(null) as Record<string, string>;
   for (const [key, value] of Object.entries(schemaNode)) {
     if (!key.startsWith("@_xmlns")) {
       continue;
@@ -691,6 +766,8 @@ type GroupEntry = {
 
 /** A global attribute declaration: its type plus documentation. */
 type GlobalAttributeDecl = {
+  defaultValue?: string;
+  fixedValue?: string;
   typeName: QName;
   description?: string;
 };
@@ -816,7 +893,7 @@ const valueConstraints = (node: AnyNode): Pick<IrField, "defaultValue" | "fixedV
 const attributeCardinality = (node: AnyNode, inherited: Cardinality): Cardinality =>
   combineCardinality(inherited, {
     minOccurs: node["@_use"] === "required" ? 1 : 0,
-    maxOccurs: 1,
+    maxOccurs: node["@_use"] === "prohibited" ? 0 : 1,
   });
 
 const nestedScope = (
@@ -938,6 +1015,7 @@ const registerInlineComplexType = (
     ctx.syntheticTypes.targetNs,
     ctx.syntheticTypes.simpleTypes,
     ctx.complexTypes,
+    ctx.syntheticTypes.reserved,
   );
   const syntheticName = toClark(ctx.syntheticTypes.targetNs, candidate);
   ctx.complexTypes[syntheticName] = { name: syntheticName, fields: [] };
@@ -977,20 +1055,6 @@ const resolveElementTypeName = (
   }
   // An element with no type declaration is xs:anyType — open content.
   return toClark(XSD_NS, "anyType");
-};
-
-// Namespace declarations local to one schema node (e.g. xmlns:imp on the
-// xsd:element itself) — QName-valued attributes resolve against these too.
-const localNsDeclarations = (node: AnyNode): Record<string, string> => {
-  const decls: Record<string, string> = {};
-  for (const [key, value] of Object.entries(node)) {
-    if (key === "@_xmlns") {
-      decls[""] = String(value);
-    } else if (key.startsWith("@_xmlns:")) {
-      decls[key.slice("@_xmlns:".length)] = String(value);
-    }
-  }
-  return decls;
 };
 
 const collectElementRef = (
@@ -1109,6 +1173,9 @@ const collectElement: FieldHandler = (child, ctx, scope) => {
 };
 
 const collectAttribute: FieldHandler = (child, ctx, scope) => {
+  if (child["@_use"] === "prohibited" && ctx.expansionStack.attributeGroups.size > 0) {
+    return;
+  }
   const name = String(child["@_name"] ?? "");
   const ref = child["@_ref"] ? String(child["@_ref"]) : "";
   if (!name && !ref) {
@@ -1132,6 +1199,8 @@ const collectAttribute: FieldHandler = (child, ctx, scope) => {
       kind: "attribute",
       qname: refQName,
       typeName: referenced?.typeName ?? toClark(XSD_NS, "string"),
+      ...optProp("defaultValue", referenced?.defaultValue),
+      ...optProp("fixedValue", referenced?.fixedValue),
       ...valueConstraints(child),
       ...optProp("description", description),
     });
@@ -1291,9 +1360,12 @@ const collectSimpleContent: FieldHandler = (child, ctx, scope) => {
   }
   const baseAttr = derivation["@_base"];
   if (baseAttr && typeof baseAttr === "string") {
-    const baseType = resolveTypeQName(baseAttr, ctx.nsMap, ctx.diagnostics);
+    const baseType = resolveTypeQName(
+      baseAttr,
+      withLocalNs(ctx.nsMap, derivation),
+      ctx.diagnostics,
+    );
     let textType = baseType;
-    const seenAttrs = new Set<string>();
     // Type-level cycle guard: circular simpleContent bases (invalid XSD)
     // would otherwise spin forever once all types are collected.
     const seenTypes = new Set<QName>([baseType]);
@@ -1303,19 +1375,42 @@ const collectSimpleContent: FieldHandler = (child, ctx, scope) => {
       if (!textField) {
         break;
       }
-      for (const f of current.fields) {
-        if (f.kind === "attribute" && !seenAttrs.has(f.qname)) {
-          seenAttrs.add(f.qname);
-          // Copy the field so the derived type does not alias the base's object.
-          scope.fields.push({ ...f });
-        }
-      }
       textType = textField.typeName;
       if (seenTypes.has(textType)) {
         break;
       }
       seenTypes.add(textType);
       current = ctx.complexTypes[textType];
+    }
+    const facets = parseFacets(derivation);
+    if (
+      nodeChildren(child).some(([tag]) => getNodeTagLocalName(tag) === "restriction") &&
+      (facets.length > 0 ||
+        nodeChildren(derivation).some(([tag]) => getNodeTagLocalName(tag) === "simpleType"))
+    ) {
+      const name = uniqueSyntheticChildQName(
+        toClark(scope.ownerNs, scope.parentTypeName ?? "anonymous"),
+        "_Content",
+        ctx.syntheticTypes.simpleTypes,
+        ctx.syntheticTypes.reserved,
+      );
+      const definition = parseSimpleTypeDef(
+        name,
+        { restriction: derivation },
+        ctx.nsMap,
+        ctx.syntheticTypes.simpleTypes,
+        ctx.diagnostics,
+        undefined,
+        ctx.syntheticTypes.reserved,
+      );
+      if (
+        definition.kind === "restriction" &&
+        !nodeChildren(derivation).some(([tag]) => getNodeTagLocalName(tag) === "simpleType")
+      ) {
+        definition.baseType = textType;
+      }
+      ctx.syntheticTypes.simpleTypes[name] = definition;
+      textType = name;
     }
     scope.fields.push({
       ...scope.inheritedCardinality,
@@ -1699,7 +1794,7 @@ const mergeRepeatedElementFields = (fields: IrField[], wildcards: WildcardDef[])
 // Two fields sharing an object key (same local name, different namespaces)
 // need distinct keys — zod object keys are unique and the fields meta map is
 // keyed the same way. The first occurrence keeps the plain key.
-const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
+const disambiguateFieldKeys = (fields: IrField[], diagnostics: Diagnostic[]): IrField[] => {
   const baseKey = (field: IrField): string =>
     field.kind === "text"
       ? "_text"
@@ -1707,6 +1802,7 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
         ? `@${clarkToLocal(field.qname)}`
         : clarkToLocal(field.qname);
   const used = new Set<string>();
+  const occupied = new Set(fields.map((field) => field.fieldKey ?? baseKey(field)));
   // Same-qname repeats share the key on purpose (see IrField.fieldKey) — the
   // key a qname was assigned, so a later repeat shares it even when the
   // first occurrence was itself disambiguated off the base key.
@@ -1718,6 +1814,22 @@ const disambiguateFieldKeys = (fields: IrField[]): IrField[] => {
       return known === (field.fieldKey ?? baseKey(field)) ? field : { ...field, fieldKey: known };
     }
     const key = field.fieldKey ?? baseKey(field);
+    if (key === "__proto__" || key === "xsiType") {
+      let suffix = 2;
+      while (occupied.has(`${key}${suffix}`) || used.has(`${key}${suffix}`)) {
+        suffix++;
+      }
+      const safe = `${key}${suffix}`;
+      used.add(safe);
+      keyByQName.set(id, safe);
+      report(
+        diagnostics,
+        "naming-collision",
+        `XML field "${key}" uses reserved runtime key; emitted as "${safe}"`,
+        field.qname,
+      );
+      return { ...field, fieldKey: safe };
+    }
     if (!used.has(key)) {
       used.add(key);
       keyByQName.set(id, key);
@@ -1753,8 +1865,13 @@ const collectFields = (
   ctx: FieldCollectionContext,
   scope: CollectFieldsScope,
 ): void => {
+  const context = { ...ctx, nsMap: withLocalNs(ctx.nsMap, container) };
   for (const [tag, child] of nodeChildrenOrdered(container)) {
-    FIELD_HANDLERS[getNodeTagLocalName(tag)]?.(child, ctx, scope);
+    FIELD_HANDLERS[getNodeTagLocalName(tag)]?.(
+      child,
+      { ...context, nsMap: withLocalNs(context.nsMap, child) },
+      scope,
+    );
   }
 };
 
@@ -1785,7 +1902,11 @@ const extractDerivationBase = (
     ? nodeChildren(contentNode).find(([key]) => getNodeTagLocalName(key) === kind)?.[1]
     : undefined;
   return derivationNode?.["@_base"]
-    ? resolveTypeQName(String(derivationNode["@_base"]), nsMap, diagnostics)
+    ? resolveTypeQName(
+        String(derivationNode["@_base"]),
+        withLocalNs(withLocalNs(withLocalNs(nsMap, container), contentNode ?? {}), derivationNode),
+        diagnostics,
+      )
     : undefined;
 };
 
@@ -1861,6 +1982,8 @@ type PendingFile = {
 // Mutable registries shared by all parse phases: declarations land here first,
 // then field collection and redefines rewrite them in place.
 type ParseState = {
+  reserved: Set<QName>;
+  syntheticChildren: Map<QName, Set<QName>>;
   simpleTypes: Record<string, SimpleTypeDef>;
   complexTypes: Record<string, ComplexTypeDef>;
   elements: Record<string, ElementDef>;
@@ -1964,6 +2087,7 @@ const createFieldContext = (
     counter: state.syntheticTypeCounter,
     simpleTypes: state.simpleTypes,
     complexTypes: state.complexTypes,
+    reserved: state.reserved,
   },
   groups: state.groups,
   attributeGroups: state.attributeGroups,
@@ -2122,7 +2246,10 @@ const scanSchemaFiles = async (
       if (!schemaLocation) {
         continue;
       }
-      const ns = localTag === "include" ? targetNs || entry.inheritedTargetNs || "" : undefined;
+      const ns =
+        localTag === "include" || localTag === "redefine"
+          ? targetNs || entry.inheritedTargetNs || ""
+          : undefined;
       await visit({
         location: schemaLocation,
         base: scannedEntry.base,
@@ -2192,6 +2319,18 @@ const collectDeclarations = (
   // Redefine overrides, in the order the xs:redefine elements were seen.
   const redefineOverrides: RedefineOverride[] = [];
 
+  for (const file of files) {
+    const ns = file.targetNs || file.entry.inheritedTargetNs || "";
+    for (const [tag, child] of nodeChildren(file.schemaNode)) {
+      if (
+        (getNodeTagLocalName(tag) === "simpleType" || getNodeTagLocalName(tag) === "complexType") &&
+        child["@_name"]
+      ) {
+        state.reserved.add(toClark(ns, String(child["@_name"])));
+      }
+    }
+  }
+
   for (const {
     entry,
     schemaNode,
@@ -2219,6 +2358,7 @@ const collectDeclarations = (
     const complexTypeNodes: AnyNode[] = [];
     for (const [tag, child] of schemaChildren) {
       const localTag = getNodeTagLocalName(tag);
+      const childNsMap = withLocalNs(resolveNsMap, child);
 
       if (localTag === "import" || localTag === "include" || localTag === "redefine") {
         continue;
@@ -2230,13 +2370,17 @@ const collectDeclarations = (
           continue;
         }
         const qname = toClark(effectiveNs, name);
+        const ownership: SyntheticOwnership = { names: new Set() };
         state.simpleTypes[qname] = parseSimpleTypeDef(
           qname,
           child,
           resolveNsMap,
           state.simpleTypes,
           state.diagnostics,
+          ownership,
+          state.reserved,
         );
+        state.syntheticChildren.set(qname, ownership.names);
         continue;
       }
 
@@ -2259,7 +2403,7 @@ const collectDeclarations = (
         state.groups[qname] = {
           ownerNs: effectiveNs,
           formDefaults: fileFormDefaults,
-          nsMap: resolveNsMap,
+          nsMap: childNsMap,
           node: child,
         };
         continue;
@@ -2274,7 +2418,7 @@ const collectDeclarations = (
         state.attributeGroups[qname] = {
           ownerNs: effectiveNs,
           formDefaults: fileFormDefaults,
-          nsMap: resolveNsMap,
+          nsMap: childNsMap,
           node: child,
         };
         continue;
@@ -2288,7 +2432,7 @@ const collectDeclarations = (
         const qname = toClark(effectiveNs, name);
         let typeName: QName;
         if (child["@_type"]) {
-          typeName = resolveTypeQName(String(child["@_type"]), resolveNsMap, state.diagnostics);
+          typeName = resolveTypeQName(String(child["@_type"]), childNsMap, state.diagnostics);
         } else {
           const inlineSimple = nodeChildren(child).find(
             ([key]) => getNodeTagLocalName(key) === "simpleType",
@@ -2296,12 +2440,13 @@ const collectDeclarations = (
           typeName = inlineSimple
             ? synthesizeInlineSimpleType(
                 inlineSimple,
-                resolveNsMap,
+                childNsMap,
                 {
                   targetNs: effectiveNs,
                   counter: state.syntheticTypeCounter,
                   simpleTypes: state.simpleTypes,
                   complexTypes: state.complexTypes,
+                  reserved: state.reserved,
                 },
                 name,
                 state.diagnostics,
@@ -2311,6 +2456,7 @@ const collectDeclarations = (
         const attrDescription = extractDocumentation(child);
         state.attributes[qname] = {
           typeName,
+          ...valueConstraints(child),
           ...optProp("description", attrDescription),
         };
       }
@@ -2381,13 +2527,14 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
     elementNodes,
   } of pendingFiles) {
     for (const child of elementNodes) {
+      const localNsMap = withLocalNs(resolveNsMap, child);
       const name = String(child["@_name"] ?? "");
       if (!name) {
         continue;
       }
 
       let typeName = child["@_type"]
-        ? resolveTypeQName(String(child["@_type"]), resolveNsMap, state.diagnostics)
+        ? resolveTypeQName(String(child["@_type"]), localNsMap, state.diagnostics)
         : undefined;
 
       if (!typeName) {
@@ -2395,13 +2542,22 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
           ([key]) => getNodeTagLocalName(key) === "complexType",
         )?.[1];
         if (inlineComplex) {
-          typeName = toClark(effectiveNs, `anonymous_${name}_Type`);
+          typeName = toClark(
+            effectiveNs,
+            uniqueSyntheticLocal(
+              `anonymous_${name}_Type`,
+              effectiveNs,
+              state.simpleTypes,
+              state.complexTypes,
+              state.reserved,
+            ),
+          );
           state.complexTypes[typeName] = { name: typeName, fields: [] };
           state.deferredInlineTypes.push({
             typeName,
             container: inlineComplex,
             ownerNs: effectiveNs,
-            nsMap: resolveNsMap,
+            nsMap: localNsMap,
             formDefaults: fileFormDefaults,
           });
         }
@@ -2414,12 +2570,13 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
         if (inlineSimple) {
           typeName = synthesizeInlineSimpleType(
             inlineSimple,
-            resolveNsMap,
+            localNsMap,
             {
               targetNs: effectiveNs,
               counter: state.syntheticTypeCounter,
               simpleTypes: state.simpleTypes,
               complexTypes: state.complexTypes,
+              reserved: state.reserved,
             },
             name,
             state.diagnostics,
@@ -2435,7 +2592,7 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
       const qname = toClark(effectiveNs, name);
       const description = extractDocumentation(child);
       const substitutionGroup = child["@_substitutionGroup"]
-        ? resolveTypeQName(String(child["@_substitutionGroup"]), resolveNsMap, state.diagnostics)
+        ? resolveTypeQName(String(child["@_substitutionGroup"]), localNsMap, state.diagnostics)
         : undefined;
       state.elements[qname] = {
         name: qname,
@@ -2450,7 +2607,7 @@ const collectTopLevelElements = (state: ParseState, pendingFiles: PendingFile[])
           "identityConstraints",
           parseIdentityConstraints(
             child,
-            resolveNsMap,
+            localNsMap,
             effectiveNs,
             state.diagnostics,
             state.unenforcedConstructs,
@@ -2533,7 +2690,9 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
         parentTypeName: clarkToLocal(override.qname),
       });
       const complexContent = nodeChildren(override.node).find(
-        ([key]) => getNodeTagLocalName(key) === "complexContent",
+        ([key]) =>
+          getNodeTagLocalName(key) === "complexContent" ||
+          getNodeTagLocalName(key) === "simpleContent",
       )?.[1];
       const derivationEntry = complexContent
         ? nodeChildren(complexContent).find(([key]) => {
@@ -2618,14 +2777,25 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
       // xs:redefine semantics, not at the override itself.
       const original = state.simpleTypes[override.qname];
 
-      // Drop synthetic inline item/member types created for the previous definition
-      // so swapping list ↔ union (or changing item/member shape) does not leave orphans.
-      const orphanPrefix = `${override.qname}_`;
-      for (const existingName of Object.keys(state.simpleTypes)) {
-        if (existingName.startsWith(orphanPrefix)) {
-          delete state.simpleTypes[existingName];
+      const restriction = nodeChildren(override.node).find(
+        ([tag]) => getNodeTagLocalName(tag) === "restriction",
+      )?.[1];
+      const preservesOriginal =
+        restriction?.["@_base"] !== undefined &&
+        resolveTypeQName(
+          String(restriction["@_base"]),
+          withLocalNs(override.nsMap, restriction),
+          state.diagnostics,
+        ) === override.qname;
+      if (!preservesOriginal) {
+        for (const name of state.syntheticChildren.get(override.qname) ?? []) {
+          delete state.simpleTypes[name];
         }
       }
+      const ownership: SyntheticOwnership = { names: new Set() };
+
+      // Keep original inline dependencies: a preserved self-base can still
+      // reference them. New inline children receive collision-free names.
 
       const def = parseSimpleTypeDef(
         override.qname,
@@ -2633,6 +2803,8 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
         override.nsMap,
         state.simpleTypes,
         state.diagnostics,
+        ownership,
+        state.reserved,
       );
       if (def.kind === "restriction" && def.baseType === override.qname) {
         if (original) {
@@ -2655,6 +2827,7 @@ const applyTypeRedefines = (state: ParseState, overrides: RedefineOverride[]): v
         }
       }
       state.simpleTypes[override.qname] = def;
+      state.syntheticChildren.set(override.qname, ownership.names);
     }
   }
 };
@@ -2720,7 +2893,8 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     if (!type) {
       return [];
     }
-    if (!type.baseType || !state.complexTypes[type.baseType]) {
+    const baseName = type.baseType ?? type.restrictionBase;
+    if (!baseName || !state.complexTypes[baseName]) {
       return type.fields;
     }
     if (stack.has(typeName)) {
@@ -2730,7 +2904,22 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     }
     const nextStack = new Set(stack);
     nextStack.add(typeName);
-    return [...resolveMergedFields(type.baseType, nextStack), ...type.fields];
+    const inherited = resolveMergedFields(baseName, nextStack).filter(
+      (field) => type.baseType !== undefined || field.kind === "attribute",
+    );
+    const merged = [...inherited];
+    for (const own of type.fields) {
+      const index =
+        own.kind === "attribute"
+          ? merged.findIndex((field) => field.kind === "attribute" && field.qname === own.qname)
+          : -1;
+      if (index < 0) {
+        merged.push(own);
+      } else {
+        merged[index] = own;
+      }
+    }
+    return merged;
   };
   // Wildcards inherit down the extension chain, like fields. Extension
   // content follows the base content, so a derived type's wildcard positions
@@ -2821,13 +3010,32 @@ const mergeExtendedTypes = (state: ParseState): Record<string, ComplexTypeDef> =
     const mergedChoiceGroups = resolveMergedChoiceGroups(name, new Set());
     const mergedChoiceGuards = resolveMergedChoiceGuards(name, new Set());
     const mergedOptionalUnits = resolveMergedOptionalUnits(name, new Set());
+    const targetNs = name.slice(1, name.indexOf("}"));
+    const resolvedFields = resolveMergedFields(name, new Set()).filter((field) => {
+      if (field.kind !== "attribute" || field.maxOccurs !== 0) {
+        return true;
+      }
+      const namespace = field.qname.slice(1, field.qname.indexOf("}"));
+      return !mergedWildcards.some(
+        (wildcard) =>
+          wildcard.kind === "anyAttribute" &&
+          wildcard.namespaceConstraint
+            .split(/[\t\n\r ]+/)
+            .some(
+              (token) =>
+                token === "##any" ||
+                (token === "##local" && namespace === "") ||
+                (token === "##targetNamespace" && namespace === targetNs) ||
+                (token === "##other" && namespace !== "" && namespace !== targetNs) ||
+                (token === namespace && namespace !== ""),
+            ),
+      );
+    });
     mergedComplexTypes[name] = {
       ...type,
       fields: disambiguateFieldKeys(
-        mergeRepeatedElementFields(
-          dedupeTextFields(resolveMergedFields(name, new Set())),
-          mergedWildcards,
-        ),
+        mergeRepeatedElementFields(dedupeTextFields(resolvedFields), mergedWildcards),
+        state.diagnostics,
       ),
       ...(mergedChoiceGroups ? { choiceGroups: mergedChoiceGroups } : {}),
       ...(mergedChoiceGuards ? { choiceGroupGuards: mergedChoiceGuards } : {}),
@@ -2879,6 +3087,22 @@ const resolveForwardSimpleContentBases = (state: ParseState): void => {
     }
     if (resolved !== undefined) {
       textField.typeName = resolved;
+    }
+  }
+  for (const simple of Object.values(state.simpleTypes)) {
+    if (simple.kind !== "restriction") {
+      continue;
+    }
+    const seen = new Set<QName>();
+    while (state.complexTypes[simple.baseType] !== undefined && !seen.has(simple.baseType)) {
+      seen.add(simple.baseType);
+      const text = state.complexTypes[simple.baseType]?.fields.find(
+        (field) => field.kind === "text",
+      );
+      if (text === undefined) {
+        break;
+      }
+      simple.baseType = text.typeName;
     }
   }
 };
@@ -2945,6 +3169,8 @@ const resolveIdentityRefs = (
 
 export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise<XsdIr> => {
   const state: ParseState = {
+    reserved: new Set(),
+    syntheticChildren: new Map(),
     simpleTypes: {},
     complexTypes: {},
     elements: {},

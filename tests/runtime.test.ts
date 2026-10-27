@@ -126,13 +126,13 @@ describe("type coercion", () => {
 
   it("rejects invalid xs:int lexicals instead of producing NaN", async () => {
     expect(() => parseXml(doc("<text>x</text><count>abc</count><flag>1</flag>"))).toThrow(
-      "Invalid xs:int lexical",
+      "Invalid xs:integer lexical",
     );
   });
 
   it("rejects empty xs:int elements instead of inventing 0", async () => {
     expect(() => parseXml(doc("<text>x</text><count/><flag>1</flag>"))).toThrow(
-      "Invalid xs:int lexical",
+      "Invalid xs:integer lexical",
     );
   });
 

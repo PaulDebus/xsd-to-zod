@@ -19,6 +19,7 @@ import {
   type XmlFieldMeta,
   type XmlLexicalFacets,
   type XmlMeta,
+  type XmlSimpleTypeMeta,
   type XmlWrappedMeta,
   xmlRegistry,
 } from "./xmlMeta.js";
@@ -29,12 +30,15 @@ import {
   countLexicalTotalDigits,
   xsdDecimalCompare,
   xsdDecimalLexical,
+  xsdOrderCompare,
 } from "./xsdChecks.js";
 import {
   parseXsdDatatype,
   writeXsdDatatype,
+  writeXsdDateTime,
   type XsdDatatypeName,
   type XsdStructuredValue,
+  xsdUtcComparable,
 } from "./xsdDateTime.js";
 import { collapseWhiteSpace } from "./xsdLexicals.js";
 import { xsdPattern } from "./xsdPattern.js";
@@ -124,6 +128,9 @@ export const normalizeLineEndings = (xml: string): string =>
   xml.includes("\r") ? xml.replaceAll("\r\n", "\n").replaceAll("\r", "\n") : xml;
 
 const parser = new XMLParser({
+  // Preserve ordinary XML names such as toString. The parser's independent
+  // critical-property guard remains enabled.
+  sanitizeNames: false,
   // Keep whitespace-only text nodes: they are real character data ('<e>
   // </e>' is not empty), and only the schema's whiteSpace facet may drop
   // them.
@@ -152,11 +159,20 @@ const textOf = (node: Record<string, unknown>): unknown => {
   return `${text === undefined ? "" : String(text)}${cdataText}`;
 };
 
+// CDATA and ordinary character data share one ordered text stream. Escaping
+// only CDATA before parsing preserves literal entity text without grouping it
+// after every ordinary text segment in the compact output.
+const normalizeCdata = (xml: string): string =>
+  xml.replace(
+    /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[([\s\S]*?)\]\]>/g,
+    (part, text: string | undefined) => (text === undefined ? part : escapeXml(text)),
+  );
+
 const hasElementChildren = (node: Record<string, unknown>): boolean =>
   Object.keys(node).some((key) => !key.startsWith("@_") && key !== "#text" && key !== "#cdata");
 
 const collectNamespaceDeclarations = (node: Record<string, unknown>): Record<string, string> => {
-  const namespaces: Record<string, string> = {};
+  const namespaces = Object.create(null) as Record<string, string>;
   for (const [key, value] of Object.entries(node)) {
     if (key === "@_xmlns") {
       namespaces[""] = String(value);
@@ -179,13 +195,16 @@ const withNamespaceContext = (
   // contexts built through this function always carry the xml prefix, so
   // returning the base unchanged is behavior-identical and allocation-free.
   if (node["@_xmlns"] === undefined && !hasXmlnsPrefix(node)) {
-    return baseContext["xml"] === XML_NS ? baseContext : { ...baseContext, xml: XML_NS };
+    return baseContext["xml"] === XML_NS
+      ? baseContext
+      : Object.assign(Object.create(null) as Record<string, string>, baseContext, { xml: XML_NS });
   }
-  return {
-    xml: XML_NS,
-    ...baseContext,
-    ...collectNamespaceDeclarations(node),
-  };
+  return Object.assign(
+    Object.create(null) as Record<string, string>,
+    { xml: XML_NS },
+    baseContext,
+    collectNamespaceDeclarations(node),
+  );
 };
 
 // Any `@_xmlns:<prefix>` entry present?
@@ -230,14 +249,26 @@ const escapeXmlAttrChars = (escaped: string): string =>
   escaped.replaceAll("\t", "&#x9;").replaceAll("\n", "&#xA;");
 
 export const decodeXmlEntities = (xml: string): string =>
-  xml
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)));
+  xml.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (entity, value: string) => {
+    switch (value) {
+      case "amp":
+        return "&";
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "quot":
+        return '"';
+      case "apos":
+        return "'";
+      default: {
+        const point = value.startsWith("#x")
+          ? Number.parseInt(value.slice(2), 16)
+          : Number(value.slice(1));
+        return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+      }
+    }
+  });
 
 const CDATA_SECTION = /<!\[CDATA\[[\s\S]*?\]\]>/g;
 const TAG_NAME = /<\/?[^\s>/]+/g;
@@ -295,12 +326,27 @@ const peelOnce = (schema: AnySchema): AnySchema => {
 // type schema), so callers that need meta look it up *before* unwrapping.
 const unwrapModifiers = (schema: AnySchema): AnySchema => {
   let current = schema;
+  // Brent's cycle check avoids allocating a Set on this per-value hot path.
+  let checkpoint = schema;
+  let span = 1;
+  let steps = 0;
   for (;;) {
     const next = peelOnce(current);
     if (next === current) {
+      if (current._zod.def.type === "lazy") {
+        throw new Error("Cyclic XML schema wrappers have no structural value type");
+      }
       return current;
     }
     current = next;
+    if (current === checkpoint) {
+      throw new Error("Cyclic XML schema wrappers have no structural value type");
+    }
+    if (++steps === span) {
+      checkpoint = current;
+      span *= 2;
+      steps = 0;
+    }
   }
 };
 
@@ -318,12 +364,21 @@ const findMeta = (schema: AnySchema, pick: (meta: XmlMeta) => unknown): XmlMeta 
   if (chain === undefined) {
     chain = [];
     let current = schema;
+    const visited = new Set<AnySchema>();
     for (;;) {
+      if (visited.has(current)) {
+        break;
+      }
+      visited.add(current);
       const meta = xmlRegistry.get(current);
       if (meta !== undefined) {
         chain.push(meta);
       }
-      const next = peelOnce(current);
+      const peeled = peelOnce(current);
+      const next =
+        peeled === current && current._zod.def.type === "pipe"
+          ? (current._zod.def as z.core.$ZodPipeDef).in
+          : peeled;
       if (next === current || chain.length >= META_CHAIN_LIMIT) {
         // Only cache terminating chains; a cycle (self-recursive lazy wrapper)
         // must not poison the cache with a bounded prefix.
@@ -460,6 +515,8 @@ const analyzeFieldCache = new WeakMap<AnySchema, FieldAnalysis>();
 const BOOLEAN_LEXICALS = new Set(["true", "false", "0", "1"]);
 const INTEGER_LEXICAL = /^[+-]?\d+$/;
 const FLOAT_LEXICAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const DECIMAL_LEXICAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+const trimXmlWhitespace = (value: string): string => value.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
 const INT_FORMATS = new Set(["safeint", "int32", "uint32", "int64", "uint64"]);
 
 const isIntChecked = (def: z.core.$ZodNumberDef): boolean =>
@@ -506,7 +563,7 @@ const coerceNumberValue = (trimmed: string): number => {
   // for those types accept them via an explicit union. For plain
   // numeric types the schema validation rejects the non-finite result, which
   // keeps decimal & co. rejecting "INF" coherently.
-  const special = FLOAT_SPECIALS[trimmed];
+  const special = Object.hasOwn(FLOAT_SPECIALS, trimmed) ? FLOAT_SPECIALS[trimmed] : undefined;
   if (special !== undefined) {
     return special;
   }
@@ -517,7 +574,7 @@ const coerceNumberValue = (trimmed: string): number => {
 };
 
 const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
-  const trimmed = raw.trim();
+  const trimmed = trimXmlWhitespace(raw);
   if (isIntChecked(def)) {
     if (!INTEGER_LEXICAL.test(trimmed)) {
       throw new Error(`Invalid xs:int lexical: ${JSON.stringify(trimmed)}`);
@@ -530,7 +587,7 @@ const coerceNumber = (raw: string, def: z.core.$ZodNumberDef): number => {
 };
 
 const coerceBigInt = (raw: string): bigint => {
-  const trimmed = raw.trim();
+  const trimmed = trimXmlWhitespace(raw);
   if (!INTEGER_LEXICAL.test(trimmed)) {
     throw new Error(`Invalid xs:integer lexical: ${JSON.stringify(trimmed)}`);
   }
@@ -538,7 +595,7 @@ const coerceBigInt = (raw: string): bigint => {
 };
 
 const coerceBoolean = (raw: string): boolean => {
-  const trimmed = raw.trim();
+  const trimmed = trimXmlWhitespace(raw);
   if (!BOOLEAN_LEXICALS.has(trimmed)) {
     throw new Error(`Invalid xs:boolean lexical: ${JSON.stringify(trimmed)}`);
   }
@@ -546,15 +603,25 @@ const coerceBoolean = (raw: string): boolean => {
 };
 
 const coerceList = (raw: unknown, itemSchema: AnySchema): unknown[] =>
-  String(raw)
-    .trim()
-    .split(/\s+/)
+  trimXmlWhitespace(String(raw))
+    .split(/[\t\n\r ]+/)
     .filter(Boolean)
     .map((item) => coerceLexical(item, itemSchema));
 
 const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unknown => {
   if (raw === undefined || raw === null) {
     return raw;
+  }
+  const lexicalMeta = findMeta(schema, (m) => m.lexicalType ?? m.simpleType?.lexical);
+  const lexicalType = lexicalMeta?.lexicalType ?? lexicalMeta?.simpleType?.lexical;
+  if (lexicalType === "integer" || lexicalType === "decimal") {
+    const lexical = trimXmlWhitespace(String(raw));
+    if (!(lexicalType === "integer" ? INTEGER_LEXICAL : DECIMAL_LEXICAL).test(lexical)) {
+      throw new Error(`Invalid xs:${lexicalType} lexical: ${JSON.stringify(raw)}`);
+    }
+  }
+  if (lexicalType === "float" || lexicalType === "double") {
+    coerceNumberValue(trimXmlWhitespace(String(raw)));
   }
   if (!skipFacets) {
     const facets = findFacetsMeta(schema);
@@ -575,7 +642,7 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
     case "literal": {
       const value = (def as z.core.$ZodLiteralDef<z.core.util.Literal>).values[0];
       if (typeof value === "number") {
-        return coerceNumberValue(String(raw).trim());
+        return coerceNumberValue(trimXmlWhitespace(String(raw)));
       }
       if (typeof value === "bigint") {
         return coerceBigInt(String(raw));
@@ -595,7 +662,11 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
           const result = coerceLexical(raw, option);
           // A NaN produced for anything but the "NaN" lexical means the
           // numeric option was the wrong branch — try the next one.
-          if (typeof result === "number" && Number.isNaN(result) && String(raw).trim() !== "NaN") {
+          if (
+            typeof result === "number" &&
+            Number.isNaN(result) &&
+            trimXmlWhitespace(String(raw)) !== "NaN"
+          ) {
             continue;
           }
           // Branch agreement: zod's union selects the first VALIDATING
@@ -638,6 +709,10 @@ const coerceLexical = (raw: unknown, schema: AnySchema, skipFacets = false): unk
   }
 };
 
+/** Coerce a declared XML lexical through the same member selection as parsing. */
+export const coerceXmlValue = <S extends z.ZodType>(lexical: string, schema: S): z.output<S> =>
+  schema.parse(coerceLexical(lexical, schema));
+
 // ---------------------------------------------------------------------------
 // Lexical preservation
 // ---------------------------------------------------------------------------
@@ -664,6 +739,22 @@ const valuesEqual = (a: unknown, b: unknown): boolean => {
   }
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((item, i) => valuesEqual(item, b[i]));
+  }
+  if (
+    a !== null &&
+    b !== null &&
+    typeof a === "object" &&
+    typeof b === "object" &&
+    (Object.getPrototypeOf(a) === Object.prototype || Object.getPrototypeOf(a) === null) &&
+    (Object.getPrototypeOf(b) === Object.prototype || Object.getPrototypeOf(b) === null)
+  ) {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    return (
+      keys.length === Object.keys(right).length &&
+      keys.every((key) => Object.hasOwn(right, key) && valuesEqual(left[key], right[key]))
+    );
   }
   return a === b;
 };
@@ -698,7 +789,7 @@ const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
       return coerceBoolean(lexical);
     }
     if (XSD_BIGINT_TYPE_NAMES.has(local) || XSD_SAFE_INTEGER_TYPE_NAMES.has(local)) {
-      const trimmed = lexical.trim();
+      const trimmed = trimXmlWhitespace(lexical);
       if (!INTEGER_LEXICAL.test(trimmed)) {
         throw new Error(`Invalid xs:${local} lexical: ${JSON.stringify(lexical)}`);
       }
@@ -711,7 +802,7 @@ const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
       return canonicalDecimalLexical(lexical);
     }
     if (local === "float" || local === "double") {
-      return coerceNumberValue(lexical.trim());
+      return coerceNumberValue(trimXmlWhitespace(lexical));
     }
     if (STRUCTURED_IDENTITY_TYPES.has(local)) {
       const datatype = local as XsdDatatypeName;
@@ -727,6 +818,13 @@ const openIdentityValue = (lexical: unknown, xsiType: string): unknown => {
 // same way: date/time builtins canonicalize (-00:00 equals +00:00), anything
 // else compares the coerced JS values (decimal 1.0 equals 1.00).
 const enumValue = (lexical: string, schema: AnySchema, facets: XmlLexicalFacets): unknown => {
+  if (facets.decimal === true) {
+    try {
+      return canonicalDecimalLexical(lexical);
+    } catch {
+      return lexical;
+    }
+  }
   if (facets.datatype !== undefined) {
     try {
       return writeXsdDatatype(facets.datatype, parseXsdDatatype(facets.datatype, lexical));
@@ -756,7 +854,10 @@ const checkLexicalFacets = (raw: string, schema: AnySchema, facets: XmlLexicalFa
   if (enumerations.length > 0) {
     const value = enumValue(lexical, schema, facets);
     const member = enumerations.some((allowed) =>
-      valuesEqual(enumValue(applyWhiteSpace(allowed, facets.whiteSpace), schema, facets), value),
+      facets.datatype === undefined
+        ? valuesEqual(enumValue(applyWhiteSpace(allowed, facets.whiteSpace), schema, facets), value)
+        : xsdOrderCompare(facets.datatype, lexical, applyWhiteSpace(allowed, facets.whiteSpace)) ===
+          0,
     );
     if (!member) {
       throw new Error(`Invalid lexical ${JSON.stringify(raw)}: not one of the allowed values`);
@@ -849,24 +950,76 @@ const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>
 type NilAttr = [clark: string, lexical: string, qnameNs: Record<string, string> | undefined];
 const nilAttributeStore = new WeakMap<object, Map<string, (NilAttr[] | undefined)[]>>();
 
+const qnameTokenIndexes = new WeakMap<object, Set<number>>();
+const qnameTokensFor = (lexical: string, schema: AnySchema): boolean[] => {
+  const descriptor = findMeta(schema, (m) => m.simpleType)?.simpleType;
+  const def = unwrapModifiers(schema)._zod.def;
+  if (descriptor?.primitive === "union" && def.type === "union") {
+    for (const option of (def as z.core.$ZodUnionDef).options) {
+      try {
+        if ((option as z.ZodType).safeParse(coerceLexical(lexical, option)).success) {
+          return qnameTokensFor(lexical, option);
+        }
+      } catch {
+        /* Try the next union member. */
+      }
+    }
+    return [];
+  }
+  if (descriptor?.primitive === "list") {
+    const array =
+      def.type === "pipe" ? unwrapModifiers((def as z.core.$ZodPipeDef).out)._zod.def : def;
+    if (array.type === "array") {
+      return trimXmlWhitespace(lexical)
+        .split(/[\t\n\r ]+/)
+        .filter(Boolean)
+        .map((token) =>
+          qnameTokensFor(token, (array as z.core.$ZodArrayDef).element).some(Boolean),
+        );
+    }
+  }
+  // A union member without a descriptor is a non-QName primitive (QName
+  // leaves always carry one), so it must not capture prefix bindings.
+  const isQName =
+    descriptor !== undefined &&
+    (descriptor.primitive === "QName" || descriptor.primitive === "NOTATION");
+  return trimXmlWhitespace(lexical)
+    .split(/[\t\n\r ]+/)
+    .filter(Boolean)
+    .map(() => isQName);
+};
+
 // Prefixes used by a QName lexical (one per whitespace-separated token for
 // list values), resolved against the in-scope namespace context.
 const qnameBindingsOf = (
   lexical: string,
   namespaceContext: Record<string, string>,
+  schema?: AnySchema,
 ): Record<string, string> | undefined => {
   let bindings: Record<string, string> | undefined;
-  for (const token of lexical.trim().split(/\s+/)) {
-    const prefix = splitQName(token).prefix;
-    if (!prefix) {
+  const qnameTokens = schema === undefined ? undefined : qnameTokensFor(lexical, schema);
+  const indexes = new Set<number>();
+  for (const [index, token] of trimXmlWhitespace(lexical)
+    .split(/[\t\n\r ]+/)
+    .filter(Boolean)
+    .entries()) {
+    if (qnameTokens !== undefined && !qnameTokens[index]) {
       continue;
     }
-    const uri = namespaceContext[prefix];
+    if (token === "") {
+      continue;
+    }
+    const prefix = splitQName(token).prefix;
+    const uri = namespaceContext[prefix] ?? (prefix === "" ? "" : undefined);
     if (uri === undefined) {
       continue;
     }
-    bindings ??= {};
+    bindings ??= Object.create(null) as Record<string, string>;
     bindings[prefix] = uri;
+    indexes.add(index);
+  }
+  if (bindings !== undefined && qnameTokens !== undefined) {
+    qnameTokenIndexes.set(bindings, indexes);
   }
   return bindings;
 };
@@ -882,10 +1035,80 @@ const recordQNameNs = (
 // Simple-typed roots have no containing object — keyed by the root schema,
 // guarded by the parsed value so a stale entry can never attach to a
 // different document.
-const rootLexicals = new Map<
-  AnySchema,
-  { data: unknown; lexical?: string; qnameNs?: Record<string, string> | undefined }
->();
+type RootLexicalEntry = {
+  data: unknown;
+  lexical?: string;
+  qnameNs?: Record<string, string> | undefined;
+};
+const rootLexicals = new WeakMap<AnySchema, RootLexicalEntry>();
+const primitiveRootLexicals = new WeakMap<AnySchema, Map<unknown, RootLexicalEntry | null>>();
+const objectRootLexicals = new WeakMap<object, RootLexicalEntry>();
+const expiredRootHistory = new WeakSet<AnySchema>();
+
+const rememberRootLexical = (schema: AnySchema, data: unknown): void => {
+  const entry = rootLexicals.get(schema);
+  if (entry === undefined) {
+    return;
+  }
+  entry.data = data;
+  if (data !== null && typeof data === "object") {
+    objectRootLexicals.set(data, entry);
+    return;
+  }
+  let history = primitiveRootLexicals.get(schema);
+  if (history === undefined) {
+    history = new Map();
+    primitiveRootLexicals.set(schema, history);
+  }
+  const previous = history.get(data);
+  // Plain primitive values cannot carry provenance. Equal QName strings from
+  // different namespace contexts require an explicit serialization context.
+  if (
+    previous === null ||
+    (previous !== undefined && !valuesEqual(previous.qnameNs ?? {}, entry.qnameNs ?? {}))
+  ) {
+    history.set(data, null);
+  } else {
+    history.set(data, entry);
+  }
+  // Avoid retaining every distinct primitive ever parsed with a long-lived schema.
+  if (history.size > 256) {
+    expiredRootHistory.add(schema);
+    history.delete(history.keys().next().value);
+  }
+};
+
+const rootLexicalFor = (
+  schema: AnySchema,
+  data: unknown,
+  explicitNamespaces?: Record<string, string>,
+): RootLexicalEntry | undefined => {
+  if (data === null || data === undefined) {
+    return undefined;
+  }
+  const entry =
+    data !== null && typeof data === "object"
+      ? objectRootLexicals.get(data)
+      : primitiveRootLexicals.get(schema)?.get(data);
+  if (explicitNamespaces !== undefined) {
+    return { ...(entry ?? { data }), qnameNs: explicitNamespaces };
+  }
+  if (entry === null) {
+    throw new Error(
+      "Ambiguous QName root value: pass serializeXml's rootNamespaces option to select its namespace context",
+    );
+  }
+  if (
+    findRootMeta(schema)?.qnameValue &&
+    (typeof data !== "string" || qnameTokensFor(data, peelOnce(schema)).some(Boolean)) &&
+    (entry === undefined || (typeof data !== "object" && expiredRootHistory.has(schema)))
+  ) {
+    throw new Error(
+      "QName root value has no retained namespace context: pass serializeXml's rootNamespaces option",
+    );
+  }
+  return entry;
+};
 
 const recordInto = <V>(
   store: WeakMap<object, Map<string, V>>,
@@ -982,9 +1205,12 @@ const storedLexicalFor = (
   }
   try {
     const whiteSpace = findFacetsMeta(itemSchema)?.whiteSpace;
-    return valuesEqual(coerceLexical(applyWhiteSpace(stored, whiteSpace), itemSchema, true), value)
-      ? stored
-      : undefined;
+    const coerced = coerceLexical(applyWhiteSpace(stored, whiteSpace), itemSchema, true);
+    if (valuesEqual(coerced, value)) {
+      return stored;
+    }
+    const parsed = (itemSchema as z.ZodType).safeParse(coerced);
+    return parsed.success && valuesEqual(parsed.data, value) ? stored : undefined;
   } catch {
     return undefined;
   }
@@ -1010,22 +1236,12 @@ const fixedValueSatisfied = (
     try {
       // coerceLexical returns the pre-transform lexical for structured pipes,
       // so strings go through the normalizing parser first.
-      const canonical = (v: unknown) =>
-        writeXsdDatatype(
-          datatype,
-          typeof v === "string" ? parseXsdDatatype(datatype, v) : (v as XsdStructuredValue),
-        );
       const fixedItems =
-        lexical.trim() === ""
-          ? []
-          : lexical
-              .trim()
-              .split(/\s+/)
-              .map((token) => writeXsdDatatype(datatype, parseXsdDatatype(datatype, token)));
+        trimXmlWhitespace(lexical) === "" ? [] : trimXmlWhitespace(lexical).split(/[\t\n\r ]+/);
       const values = Array.isArray(value) ? value : [value];
       return (
         values.length === fixedItems.length &&
-        values.every((item, i) => canonical(item) === fixedItems[i])
+        values.every((item, i) => xsdOrderCompare(datatype, item, fixedItems[i] ?? "") === 0)
       );
     } catch {
       return false;
@@ -1083,9 +1299,13 @@ const serializeStoredLeaf = (
     storedLexicalFor(fieldMeta.fixedLexical, value, itemSchema) ??
     storedLexicalFor(stored, value, itemSchema) ??
     (fieldMeta.datatype === undefined ? undefined : fieldMeta.fixedLexical);
-  return lexical === undefined
-    ? serializeFieldLeaf(fieldMeta, itemSchema, value)
-    : escapeXml(lexical);
+  const serialized =
+    lexical === undefined ? serializeFieldLeaf(fieldMeta, itemSchema, value) : escapeXml(lexical);
+  const facets = findFacetsMeta(itemSchema);
+  if (facets !== undefined) {
+    checkLexicalFacets(decodeXmlEntities(serialized), itemSchema, facets);
+  }
+  return serialized;
 };
 
 // ---------------------------------------------------------------------------
@@ -1121,19 +1341,17 @@ const findElementValues = (
 ): { value: unknown; qname: QName; rawKey: string }[] => {
   const expected = [qname, ...substitutes].map((q) => splitClark(q));
   const matches: { value: unknown; qname: QName; rawKey: string }[] = [];
-  for (const [key, value] of Object.entries(node)) {
+  for (const [key, item] of orderedNodeEntries(node)) {
     if (key.startsWith("@_") || key === "#text" || key === "#cdata") {
       continue;
     }
     const { prefix, local } = splitQName(key);
-    for (const item of toArray(value)) {
-      const namespace = nsForElement(prefix, contextFor(item, namespaceContext));
-      const match = expected.find(
-        (e) => e.local === local && (namespace === e.namespace || (e.namespace === "" && !prefix)),
-      );
-      if (match !== undefined) {
-        matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
-      }
+    const namespace = nsForElement(prefix, contextFor(item, namespaceContext));
+    const match = expected.find(
+      (e) => e.local === local && (namespace === e.namespace || (e.namespace === "" && !prefix)),
+    );
+    if (match !== undefined) {
+      matches.push({ value: item, qname: `{${match.namespace}}${match.local}`, rawKey: key });
     }
   }
   return matches;
@@ -1195,7 +1413,7 @@ const readXsiTypeAttr = (
   if (typeof raw !== "string") {
     return undefined;
   }
-  const { prefix, local } = splitQName(raw.trim());
+  const { prefix, local } = splitQName(trimXmlWhitespace(raw));
   // An unprefixed value resolves through the default namespace; with none in
   // scope that is the empty namespace (Clark `{}local`), not "unresolvable".
   const namespace = prefix ? namespaceContext[prefix] : (namespaceContext[""] ?? "");
@@ -1643,7 +1861,16 @@ const readObject = (
     }
     if (present) {
       result[key] = value;
-      if (lexical !== undefined && (read.retainLexicals || lexicalRequired(fieldSchema))) {
+      if (
+        lexical !== undefined &&
+        (read.retainLexicals ||
+          lexicalRequired(fieldSchema) ||
+          (fieldMeta.kind === "choice" &&
+            fieldMeta.choice?.branches.some((branch) => {
+              const branchSchema = choiceBranchSchema(fieldSchema, branch.tag);
+              return branchSchema !== undefined && lexicalRequired(branchSchema);
+            })))
+      ) {
         recordLexical(result, key, lexical);
       }
       if (substQNames !== undefined) {
@@ -1677,6 +1904,8 @@ const readObject = (
       anyAttribute: hasAnyAttribute,
       scalarElements,
       scalarFromEnd,
+      targetNamespace,
+      budgets: wildcardBudgets,
     });
   }
   if (recordOrder) {
@@ -1816,6 +2045,8 @@ const sweepWildcards = (
     anyAttribute: boolean;
     scalarElements?: Set<string>;
     scalarFromEnd?: Set<string>;
+    targetNamespace: string;
+    budgets: { wildcard: XmlFieldMeta; claim: WildcardClaimBudget }[];
   },
 ): void => {
   const knownElements = new Set(
@@ -1859,7 +2090,23 @@ const sweepWildcards = (
   }
   walkChildren(result, node, namespaceContext, {
     attribute: wildcards.anyAttribute
-      ? (ns, local) => !knownAttributes.has(`{${ns}}${local}`)
+      ? (ns, local) => {
+          if (knownAttributes.has(`{${ns}}${local}`)) {
+            return false;
+          }
+          if (
+            !fieldList.some(
+              (f) =>
+                f.kind === "anyAttribute" &&
+                wildcardAllows(f.namespaceConstraint ?? "##any", wildcards.targetNamespace, ns),
+            )
+          ) {
+            throw new Error(
+              `attribute "{${ns}}${local}" is not admitted by the wildcard namespace constraint`,
+            );
+          }
+          return true;
+        }
       : () => false,
     element: wildcards.any
       ? (ns, local, prefix) => {
@@ -1869,10 +2116,29 @@ const sweepWildcards = (
             consumed.set(sq, seen);
             return fromEnd.has(sq) ? seen < (totals.get(sq) ?? 1) : seen > 1;
           }
-          return (
+          const extra =
             !knownElements.has(`{${ns}}${local}`) &&
-            (prefix !== "" || !knownElements.has(`{}${local}`))
-          );
+            (prefix !== "" || !knownElements.has(`{}${local}`));
+          if (extra) {
+            const budgets = wildcards.budgets.filter(({ wildcard }) =>
+              wildcardAllows(
+                wildcard.namespaceConstraint ?? "##any",
+                wildcards.targetNamespace,
+                ns,
+              ),
+            );
+            if (
+              !claimWildcardOverflow(
+                1,
+                budgets.map((budget) => budget.claim),
+              ).fits
+            ) {
+              throw new Error(
+                `element "{${ns}}${local}" exceeds the admitting wildcard's namespace or occurrence capacity`,
+              );
+            }
+          }
+          return extra;
         }
       : () => false,
   });
@@ -1921,6 +2187,9 @@ const substituteEmpty = (
   }
   if (fieldMeta.fixedLexical !== undefined) {
     return { substituted: true, ...substituteFixedLexical(field, fieldMeta.fixedLexical) };
+  }
+  if (fieldMeta.defaultLexical !== undefined) {
+    return { substituted: true, ...substituteFixedLexical(field, fieldMeta.defaultLexical) };
   }
   if (fieldMeta.defaultValue !== undefined) {
     return substituted(fieldMeta.defaultValue);
@@ -1995,7 +2264,9 @@ const readOccurrence = (
           ...(wrapped.qnameValue === true ? { qnameValue: true } : {}),
         }),
         lexical: String(raw),
-        qnameNs: wrapped.qnameValue ? qnameBindingsOf(String(raw), childContext) : undefined,
+        qnameNs: wrapped.qnameValue
+          ? qnameBindingsOf(String(raw), childContext, field.itemSchema)
+          : undefined,
       };
     }
     const xsiUnion = xsiTypeUnionDef(field.itemSchema);
@@ -2055,7 +2326,7 @@ const readOccurrence = (
       lexical: text === undefined ? undefined : String(text),
       qnameNs:
         fieldMeta.qnameValue && text !== undefined && text !== ""
-          ? qnameBindingsOf(String(text), childContext)
+          ? qnameBindingsOf(String(text), childContext, field.itemSchema)
           : undefined,
       // xs:anySimpleType: the instance xsi:type is the value's datatype —
       // identity comparison needs it (the zod tier keeps the raw lexical).
@@ -2105,7 +2376,7 @@ const readOccurrence = (
     lexical: String(entry),
     qnameNs:
       fieldMeta.qnameValue && entry !== ""
-        ? qnameBindingsOf(String(entry), namespaceContext)
+        ? qnameBindingsOf(String(entry), namespaceContext, field.itemSchema)
         : undefined,
   };
 };
@@ -2291,7 +2562,17 @@ const readField = (
       // validation transforms (the def default is the transformed object and
       // would fail re-validation as a pipe input).
       if (fieldMeta.defaultValue !== undefined) {
-        return { present: true, value: fieldMeta.defaultValue, lexical };
+        return {
+          present: true,
+          value:
+            lexical === undefined
+              ? fieldMeta.defaultValue
+              : coerceLexical(lexical, field.itemSchema),
+          lexical,
+        };
+      }
+      if (fieldMeta.defaultLexical !== undefined) {
+        return { present: true, ...substituteFixedLexical(field, fieldMeta.defaultLexical) };
       }
       if (field.hasDefault) {
         return { present: true, value: field.defaultValue, lexical };
@@ -2302,7 +2583,9 @@ const readField = (
       present: true,
       value: coerceFieldLexical(raw, field, fieldMeta),
       lexical: String(raw),
-      qnameNs: fieldMeta.qnameValue ? qnameBindingsOf(String(raw), namespaceContext) : undefined,
+      qnameNs: fieldMeta.qnameValue
+        ? qnameBindingsOf(String(raw), namespaceContext, field.itemSchema)
+        : undefined,
     };
   }
 
@@ -2320,6 +2603,9 @@ const readField = (
       present: true,
       value: coerceFieldLexical(text ?? "", field, fieldMeta),
       lexical: text === undefined ? "" : String(text),
+      qnameNs: fieldMeta.qnameValue
+        ? qnameBindingsOf(String(text ?? ""), namespaceContext, field.itemSchema)
+        : undefined,
     };
   }
 
@@ -2478,15 +2764,15 @@ const walkRoot = (
   walk?: WalkCtx,
   read: ReadCtx = NO_LEXICAL_RETENTION,
 ): unknown => {
+  rootLexicals.delete(schema);
   const meta = findRootMeta(schema);
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
   }
   warnOnGeneratorMismatch(meta);
-  const parsed = parser.parse(decodeTagNameCharRefs(normalizeLineEndings(xml))) as Record<
-    string,
-    unknown
-  >;
+  const parsed = parser.parse(
+    decodeTagNameCharRefs(normalizeCdata(normalizeLineEndings(xml))),
+  ) as Record<string, unknown>;
   const { root: rootNode, namespaceContext } = extractRoot(parsed, meta.root);
 
   const nilValue = findAttributeValue(rootNode, `{${XSI_NS}}nil`, namespaceContext);
@@ -2536,12 +2822,17 @@ const walkRoot = (
           ? { lexical: meta.fixedLexical }
           : {}),
         ...(meta.qnameValue
-          ? { qnameNs: qnameBindingsOf(meta.fixedLexical, namespaceContext) }
+          ? { qnameNs: qnameBindingsOf(meta.fixedLexical, namespaceContext, typeSchema) }
           : {}),
       });
       return substituted;
     }
-    const substituted = meta.fixedValue === undefined ? meta.defaultValue : meta.fixedValue;
+    const substituted =
+      meta.fixedValue === undefined
+        ? meta.defaultLexical === undefined
+          ? meta.defaultValue
+          : coerceLexical(meta.defaultLexical, typeSchema)
+        : meta.fixedValue;
     if (substituted !== undefined) {
       const declared = meta.fixedLexical ?? meta.defaultLexical;
       if (declared !== undefined) {
@@ -2550,7 +2841,9 @@ const walkRoot = (
           ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
             ? { lexical: declared }
             : {}),
-          ...(meta.qnameValue ? { qnameNs: qnameBindingsOf(declared, namespaceContext) } : {}),
+          ...(meta.qnameValue
+            ? { qnameNs: qnameBindingsOf(declared, namespaceContext, typeSchema) }
+            : {}),
         });
       }
       return substituted;
@@ -2577,7 +2870,9 @@ const walkRoot = (
       ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
         ? { lexical: String(text) }
         : {}),
-      ...(meta.qnameValue ? { qnameNs: qnameBindingsOf(String(text), namespaceContext) } : {}),
+      ...(meta.qnameValue
+        ? { qnameNs: qnameBindingsOf(String(text), namespaceContext, typeSchema) }
+        : {}),
     });
   }
   return value;
@@ -2644,6 +2939,7 @@ const elementName = (
 };
 
 type SerializeCtx = {
+  allowDefaultQName?: boolean;
   prefixMap: Map<string, string>;
   // Explicit prefix→URI declarations for QName/NOTATION value lexicals
   // (recorded at parse time), emitted at the root alongside prefixMap decls.
@@ -2664,14 +2960,29 @@ const declareQNamePrefixes = (
   // choosePrefix reserves these prefixes (see the reserved argument), so only
   // prefixes already allocated — before the binding was seen — collide.
   const prefixTaken = (prefix: string): boolean =>
-    ctx.qnameNs.has(prefix) || [...ctx.prefixMap.values()].includes(prefix);
+    prefix === "xsi" || ctx.qnameNs.has(prefix) || [...ctx.prefixMap.values()].includes(prefix);
+  const selectedTokens = qnameTokenIndexes.get(bindings);
+  let tokenIndex = 0;
   return lexical
-    .split(/(\s+)/)
+    .split(/([\t\n\r ]+)/)
     .map((token) => {
-      const { prefix, local } = splitQName(token);
-      const uri = prefix ? bindings[prefix] : undefined;
-      if (!prefix || uri === undefined) {
+      if (token === "" || /^[\t\n\r ]+$/.test(token)) {
         return token;
+      }
+      if (selectedTokens !== undefined && !selectedTokens.has(tokenIndex++)) {
+        return token;
+      }
+      const { prefix, local } = splitQName(token);
+      const uri = Object.hasOwn(bindings, prefix) ? bindings[prefix] : undefined;
+      if (uri === undefined || uri === "") {
+        return token;
+      }
+      if (!prefix) {
+        if (ctx.allowDefaultQName && (!ctx.qnameNs.has("") || ctx.qnameNs.get("") === uri)) {
+          ctx.qnameNs.set("", uri);
+          return token;
+        }
+        return `${choosePrefix(uri, ctx.prefixMap, ctx.qnameNs)}:${local}`;
       }
       // The xml prefix is bound by definition and must not be declared.
       if (prefix === "xml") {
@@ -2702,7 +3013,7 @@ const wildcardAllows = (
   targetNamespace: string,
   namespace: string,
 ): boolean => {
-  for (const token of constraint.trim().split(/\s+/)) {
+  for (const token of trimXmlWhitespace(constraint).split(/[\t\n\r ]+/)) {
     if (token === "##any") {
       return true;
     }
@@ -3081,9 +3392,10 @@ const writeObjectFields = (
       usesXsi = true;
       // Nil attributes captured at parse time (identity key fields survive
       // xsi:nil) re-emit alongside the nil marker.
+      const nilFields = Object.values(findFieldsMeta(itemSchema) ?? {});
       const nilAttrs = (occurrenceAt<NilAttr[]>(nilAttributeStore, obj, key, i) ?? []).map(
-        ([clark, lexical]) =>
-          `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
+        ([clark, lexical, bindings]) =>
+          `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declareQNamePrefixes(escapeXml(lexical), nilFields.some((f) => f.kind === "attribute" && f.qname === clark && f.qnameValue) ? bindings : undefined, ctx))}"`,
       );
       const attrStr = nilAttrs.length > 0 ? ` ${nilAttrs.join(" ")}` : "";
       return `<${localName}${attrStr} xsi:nil="true"/>`;
@@ -3242,10 +3554,24 @@ const writeObjectFields = (
   // children in document order (wildcard extras included) so interleaved
   // repeated compositors survive the round-trip. Mutated or hand-built data
   // falls back to schema-order emission below.
+  const isRepeated = (key: string): boolean =>
+    shape[key] !== undefined && analyzeField(shape[key]).isArray;
   const documentOrder =
     xsiCapture === undefined
-      ? documentOrderTracker.usable(obj, fields, anyWildcards.length > 0, isSyntheticKey)
-      : documentOrderTracker.usableCapture(xsiCapture.order, xsiCapture.extras, obj, fields);
+      ? documentOrderTracker.usable(
+          obj,
+          fields,
+          anyWildcards.length > 0,
+          isSyntheticKey,
+          isRepeated,
+        )
+      : documentOrderTracker.usableCapture(
+          xsiCapture.order,
+          xsiCapture.extras,
+          obj,
+          fields,
+          isRepeated,
+        );
   if (documentOrder !== undefined) {
     // Occurrences are built in schema order and only assembled in document
     // order, so namespace prefix allocation observes the same field sequence
@@ -3293,15 +3619,11 @@ const writeObjectFields = (
       // clark key.
       (key) => obj[key] ?? xsiCapture?.extras[key],
       (xml) => elements.push(xml),
-      (key, item) => {
+      (key, item, index) => {
         usesXsi =
-          pushOpenChildren(
-            elements,
-            elementName(key, ctx.prefixMap, ctx.qnameNs),
-            item,
-            ctx,
-            openXsiTypeStore.get(obj)?.get(key),
-          ) || usesXsi;
+          pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx, [
+            openXsiTypeStore.get(obj)?.get(key)?.[index],
+          ]) || usesXsi;
       },
     );
     return { attributes, elements, usesXsi };
@@ -3335,7 +3657,14 @@ const writeObjectFields = (
       const field = analyzeField(fieldSchema);
       const stored = lexicals?.get(key);
       const storedSingle = typeof stored === "string" ? stored : undefined;
-      elements.push(serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle));
+      const bindings = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
+      elements.push(
+        declareQNamePrefixes(
+          serializeStoredLeaf(fieldMeta, field.itemSchema, value, storedSingle),
+          bindings !== undefined && !Array.isArray(bindings) ? bindings : undefined,
+          ctx,
+        ),
+      );
       continue;
     }
 
@@ -3379,15 +3708,11 @@ const writeObjectFields = (
   // declared content rather than being dropped.
   if (xsiCapture !== undefined) {
     for (const [clark, values] of Object.entries(xsiCapture.extras)) {
-      for (const extra of values) {
+      for (const [index, extra] of values.entries()) {
         usesXsi =
-          pushOpenChildren(
-            elements,
-            elementName(clark, ctx.prefixMap, ctx.qnameNs),
-            extra,
-            ctx,
-            openXsiTypeStore.get(obj)?.get(clark),
-          ) || usesXsi;
+          pushOpenChildren(elements, elementName(clark, ctx.prefixMap, ctx.qnameNs), extra, ctx, [
+            openXsiTypeStore.get(obj)?.get(clark)?.[index],
+          ]) || usesXsi;
       }
     }
   }
@@ -3423,6 +3748,8 @@ const IDENTITY_MULTIPLE: unique symbol = Symbol("identity-multiple");
 const IDENTITY_COMPLEX: unique symbol = Symbol("identity-complex");
 
 type IdentityNode = {
+  elementSchemas?: Record<string, AnySchema> | undefined;
+  lexical?: string | undefined;
   value: unknown;
   schema: AnySchema | undefined;
   /** Element qname this node was reached through (undefined for scope roots). */
@@ -3445,6 +3772,21 @@ type IdentityNode = {
   wrapped?: XmlWrappedMeta | undefined;
 };
 
+const identityProvenanceFor = (
+  container: object,
+  key: string,
+  index: number,
+): Pick<IdentityNode, "lexical" | "qnameNs" | "xsiType" | "nilAttributes"> => {
+  const lexical = lexicalStore.get(container)?.get(key);
+  const bindings = qnameNsStore.get(container)?.get(key);
+  return {
+    lexical: Array.isArray(lexical) ? lexical[index] : lexical,
+    qnameNs: Array.isArray(bindings) ? bindings[index] : bindings,
+    xsiType: occurrenceAt<string>(openXsiTypeStore, container, key, index),
+    nilAttributes: occurrenceAt<NilAttr[]>(nilAttributeStore, container, key, index),
+  };
+};
+
 // One element occurrence's identity-constraint table: per constraint name,
 // tuple key → first-seen node path; plus the tuple keys poisoned by
 // propagation conflicts (§3.11.5: conflicting propagated entries vanish).
@@ -3455,6 +3797,7 @@ type IdentityTable = {
 
 type IdentityState = {
   issues: z.core.$ZodIssue[];
+  elementSchemas?: Record<string, AnySchema> | undefined;
 };
 
 // Value-space tuple keys (XSD compares typed values: 1 equals 01 for xs:int).
@@ -3541,6 +3884,14 @@ const identityOccurrenceSchema = (
   const substQName = Array.isArray(substRecord) ? substRecord[index] : substRecord;
   if (typeof substQName === "string") {
     item = substitutionSchemaFor(substQName, item);
+  } else {
+    const def = unwrapModifiers(item)._zod.def;
+    if (def.type === "union") {
+      item =
+        (def as z.core.$ZodUnionDef).options.find(
+          (option) => findSubstElementMeta(option) !== undefined,
+        ) ?? item;
+    }
   }
   const union = xsiTypeUnionDef(item);
   if (union !== undefined) {
@@ -3633,6 +3984,8 @@ const identityChildren = (
               continue;
             }
             out.push({
+              elementSchemas: node.elementSchemas,
+              ...identityProvenanceFor(obj, key, i),
               value: occurrence.value,
               schema: occurrence.schema,
               qname: branch.qname,
@@ -3646,7 +3999,7 @@ const identityChildren = (
       if (fieldMeta.kind !== "element") {
         continue;
       }
-      const isArray = Array.isArray(fieldValue);
+      const isArray = analyzeField(fieldSchema).isArray;
       const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
       const storedTags = substRecord?.get(key);
       occurrences.forEach((occ, i) => {
@@ -3656,6 +4009,8 @@ const identityChildren = (
           return;
         }
         out.push({
+          elementSchemas: node.elementSchemas,
+          ...identityProvenanceFor(obj, key, i),
           value: occ,
           schema: identityOccurrenceSchema(fieldSchema, obj, key, occ, i),
           qname: effectiveQName,
@@ -3679,8 +4034,9 @@ const identityChildren = (
     const occurrences = isArray ? (entryValue as unknown[]) : [entryValue];
     occurrences.forEach((occ, i) => {
       out.push({
+        elementSchemas: node.elementSchemas,
         value: occ,
-        schema: undefined,
+        schema: node.elementSchemas?.[key],
         qname: key as QName,
         path: [...node.path, key, ...(isArray ? [i] : [])],
         xsiType: occurrenceAt<string>(openXsiTypeStore, obj, key, i),
@@ -3743,6 +4099,7 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
     if (meta !== undefined) {
       if (meta.fieldMeta.qnameValue === true) {
         nilQNameNs = found[2];
+        nilSchema = meta.schema;
       } else {
         nilSchema = meta.schema;
         if (nilSchema !== undefined) {
@@ -3756,6 +4113,7 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
     }
     return {
       value: nilValue,
+      lexical: found[1],
       schema: nilSchema,
       qname,
       path: node.path,
@@ -3765,13 +4123,18 @@ const identityAttributeNode = (node: IdentityNode, qname: QName): IdentityNode |
   const obj = value as Record<string, unknown>;
   const meta = findAttributeMeta(node.schema, qname);
   if (meta !== undefined) {
-    const attrValue = obj[meta.key];
+    const info = splitClark(qname);
+    const attrValue = obj[meta.key] ?? obj[`@${info.namespace ? qname : info.local}`];
     if (attrValue === undefined) {
       return undefined;
     }
     const bindings = qnameNsStore.get(obj)?.get(meta.key);
     return {
       value: attrValue,
+      lexical: (() => {
+        const record = lexicalStore.get(obj)?.get(meta.key);
+        return typeof record === "string" ? record : undefined;
+      })(),
       schema: meta.schema,
       qname,
       path: node.path,
@@ -3876,7 +4239,19 @@ const identityAttributeNodes = (node: IdentityNode, namespace?: string): Identit
 // Evaluate one restricted-xpath branch against a context node.
 const identitySelect = (path: IdentityPath, contextNode: IdentityNode): IdentityNode[] => {
   let current: IdentityNode[] = [contextNode];
-  for (const [i, step] of path.steps.entries()) {
+  if (path.descendant) {
+    const stack = [contextNode];
+    current = [];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node === undefined) {
+        break;
+      }
+      current.push(node);
+      stack.push(...identityChildren(node, undefined));
+    }
+  }
+  for (const step of path.steps) {
     if (step.axis === "self") {
       continue;
     }
@@ -3897,21 +4272,6 @@ const identitySelect = (path: IdentityPath, contextNode: IdentityNode): Identity
       }
       const stepQname = "wildcard" in step ? undefined : step.qname;
       const stepNs = "wildcard" in step ? step.namespace : undefined;
-      if (i === 0 && path.descendant) {
-        // Leading .//: the step matches at any depth below the context node.
-        const stack = identityChildren(node, undefined);
-        while (stack.length > 0) {
-          const desc = stack.pop();
-          if (desc === undefined) {
-            break;
-          }
-          if (identityStepMatches(stepQname, stepNs, desc.qname)) {
-            next.push(desc);
-          }
-          stack.push(...identityChildren(desc, undefined));
-        }
-        continue;
-      }
       next.push(...identityChildren(node, stepQname, stepNs));
     }
     current = next;
@@ -3969,6 +4329,106 @@ const xsdIdentityFamily = (typeQName: string): string => {
   return typeQName;
 };
 
+const typedIdentityValue = (node: IdentityNode, descriptor: XmlSimpleTypeMeta): unknown => {
+  const { value, schema, lexical, qnameNs } = node;
+  const def = schema === undefined ? undefined : unwrapModifiers(schema)._zod.def;
+  if (descriptor.primitive === "union" && def?.type === "union") {
+    for (const [i, option] of (def as z.core.$ZodUnionDef).options.entries()) {
+      try {
+        const parsed = (option as z.ZodType).safeParse(
+          lexical === undefined ? value : coerceLexical(lexical, option),
+        );
+        if (!parsed.success) {
+          continue;
+        }
+        const member = findMeta(option, (m) => m.simpleType)?.simpleType ?? descriptor.members?.[i];
+        return member === undefined
+          ? parsed.data
+          : typedIdentityValue({ ...node, value: parsed.data, schema: option }, member);
+      } catch {
+        /* Try the next validating member. */
+      }
+    }
+    return value;
+  }
+  if (descriptor.primitive === "list") {
+    const array =
+      def?.type === "pipe" ? unwrapModifiers((def as z.core.$ZodPipeDef).out)._zod.def : def;
+    const itemSchema = array?.type === "array" ? (array as z.core.$ZodArrayDef).element : undefined;
+    const values = Array.isArray(value)
+      ? value
+      : trimXmlWhitespace(String(value))
+          .split(/[\t\n\r ]+/)
+          .filter(Boolean);
+    const tokens =
+      lexical === undefined
+        ? undefined
+        : trimXmlWhitespace(lexical)
+            .split(/[\t\n\r ]+/)
+            .filter(Boolean);
+    return {
+      $list: values.map((item, i) =>
+        typedIdentityValue(
+          { ...node, value: item, schema: itemSchema, lexical: tokens?.[i] },
+          descriptor.item ?? { primitive: "string" },
+        ),
+      ),
+    };
+  }
+  const raw =
+    lexical ??
+    (typeof value === "string" || typeof value === "number" || typeof value === "bigint"
+      ? String(value)
+      : undefined);
+  let canonical: unknown = value;
+  try {
+    if (descriptor.primitive === "decimal" && raw !== undefined) {
+      canonical = canonicalDecimalLexical(raw);
+    } else if (
+      (descriptor.primitive === "float" || descriptor.primitive === "double") &&
+      typeof value === "string"
+    ) {
+      canonical = coerceNumberValue(trimXmlWhitespace(value));
+    } else if (descriptor.primitive === "boolean" && typeof value === "string") {
+      canonical = coerceBoolean(value);
+    } else if (STRUCTURED_IDENTITY_TYPES.has(descriptor.primitive)) {
+      const datatype = descriptor.primitive as XsdDatatypeName;
+      const structured =
+        typeof value === "string"
+          ? parseXsdDatatype(datatype, value)
+          : (value as XsdStructuredValue);
+      canonical =
+        datatype === "time" || datatype === "duration"
+          ? writeXsdDatatype(datatype, structured)
+          : writeXsdDateTime(xsdUtcComparable(datatype, structured));
+    } else if (
+      (descriptor.primitive === "QName" || descriptor.primitive === "NOTATION") &&
+      typeof value === "string"
+    ) {
+      const name = splitQName(trimXmlWhitespace(value));
+      canonical = `{${qnameNs?.[name.prefix] ?? ""}}${name.local}`;
+    } else if (descriptor.primitive === "hexBinary" && typeof value === "string") {
+      canonical = collapseWhiteSpace(value).toUpperCase();
+    } else if (descriptor.primitive === "base64Binary" && typeof value === "string") {
+      canonical = Buffer.from(value.replace(/[\t\n\r ]/g, ""), "base64").toString("hex");
+    } else if (descriptor.primitive === "string" && typeof value === "string") {
+      const local = descriptor.lexical;
+      canonical =
+        local === "normalizedString"
+          ? value.replace(/[\t\n\r]/g, " ")
+          : local !== undefined && local !== "string" && local !== "anySimpleType"
+            ? collapseWhiteSpace(value)
+            : value;
+    }
+  } catch {
+    return value;
+  }
+  return {
+    $xsiType: `{http://www.w3.org/2001/XMLSchema}${descriptor.primitive}`,
+    $value: canonical,
+  };
+};
+
 // The schema-normalized simple value of a field target: scalars as-is,
 // objects through their text field (simple content). whiteSpace-collapsed
 // types compare their collapsed form; QName-typed values resolve to their
@@ -3985,14 +4445,32 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
   if (value === null || value === undefined) {
     return IDENTITY_ABSENT;
   }
+  if (node.xsiType === undefined && node.schema !== undefined) {
+    const descriptor = findMeta(node.schema, (m) => m.simpleType)?.simpleType;
+    if (descriptor !== undefined) {
+      return typedIdentityValue(node, descriptor);
+    }
+  }
   // An xsi:type-annotated open value compares under its primitive datatype
   // (§3.11.1: equal values must share a primitive type — boolean "1" is not
   // decimal "1"; equal values of one family compare equal — unsignedByte "1"
   // is decimal "1", and decimal "3.0" is decimal "3.00").
   if (node.xsiType !== undefined) {
-    const simple = identitySimpleValue({ ...node, xsiType: undefined });
+    const simple = identitySimpleValue({ ...node, schema: undefined, xsiType: undefined });
     if (simple === IDENTITY_ABSENT || simple === IDENTITY_COMPLEX) {
       return simple;
+    }
+    if (node.xsiType.startsWith("{http://www.w3.org/2001/XMLSchema}")) {
+      const family = splitClark(xsdIdentityFamily(node.xsiType)).local;
+      return typedIdentityValue(
+        {
+          ...node,
+          value: simple,
+          schema: undefined,
+          lexical: typeof simple === "string" ? simple : node.lexical,
+        },
+        { primitive: family, lexical: splitClark(node.xsiType).local },
+      );
     }
     return {
       $xsiType: xsdIdentityFamily(node.xsiType),
@@ -4025,7 +4503,18 @@ const identitySimpleValue = (node: IdentityNode): unknown => {
     for (const [key, fieldMeta] of Object.entries(fields)) {
       if (fieldMeta.kind === "text") {
         const text = (value as Record<string, unknown>)[key];
-        return text === undefined ? IDENTITY_ABSENT : text;
+        const shape = objectDefOf(node.schema as AnySchema)?.shape ?? {};
+        const bindings = qnameNsStore.get(value)?.get(key);
+        const lexical = lexicalStore.get(value)?.get(key);
+        return text === undefined
+          ? IDENTITY_ABSENT
+          : identitySimpleValue({
+              ...node,
+              value: text,
+              schema: shape[key],
+              lexical: typeof lexical === "string" ? lexical : undefined,
+              qnameNs: bindings !== undefined && !Array.isArray(bindings) ? bindings : undefined,
+            });
       }
     }
   }
@@ -4246,9 +4735,16 @@ const walkIdentity = (
   path: readonly (string | number)[],
   constraints: readonly IdentityConstraint[],
   state: IdentityState,
+  provenance: Partial<IdentityNode> = {},
 ): IdentityTable => {
   const own: IdentityTable = { entries: new Map(), poisoned: new Map() };
-  const scopeNode: IdentityNode = { value, schema, path };
+  const scopeNode: IdentityNode = {
+    elementSchemas: state.elementSchemas,
+    ...provenance,
+    value,
+    schema,
+    path,
+  };
   if (
     value !== null &&
     typeof value === "object" &&
@@ -4288,6 +4784,7 @@ const walkIdentity = (
                 [...path, key, i, branch.tag],
                 [],
                 state,
+                identityProvenanceFor(obj, key, i),
               );
               mergeIdentityTable(own, childTable);
             }
@@ -4297,7 +4794,7 @@ const walkIdentity = (
         if (fieldMeta.kind !== "element") {
           continue;
         }
-        const isArray = Array.isArray(fieldValue);
+        const isArray = analyzeField(fieldSchema).isArray;
         const occurrences = isArray ? (fieldValue as unknown[]) : [fieldValue];
         occurrences.forEach((occ, i) => {
           const childTable = walkIdentity(
@@ -4306,6 +4803,7 @@ const walkIdentity = (
             [...path, key, ...(isArray ? [i] : [])],
             fieldMeta.identity ?? [],
             state,
+            { ...identityProvenanceFor(obj, key, i), wrapped: fieldMeta.wrapped },
           );
           mergeIdentityTable(own, childTable);
         });
@@ -4341,8 +4839,18 @@ const walkIdentity = (
 };
 
 const identityIssues = (rootSchema: AnySchema, data: unknown): z.core.$ZodIssue[] => {
-  const state: IdentityState = { issues: [] };
   const meta = findRootMeta(rootSchema);
+  const declarations = meta?.identityElements?.();
+  const elementSchemas =
+    declarations === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(declarations).filter(
+            (entry): entry is [string, AnySchema] =>
+              entry[1] !== null && typeof entry[1] === "object" && "_zod" in entry[1],
+          ),
+        );
+  const state: IdentityState = { issues: [], elementSchemas };
   // Resolve the root occurrence's content schema like the parse walk does
   // (lazy wrapper, then xsi:type union dispatch on the discriminant).
   let schema = peelOnce(rootSchema);
@@ -4350,7 +4858,11 @@ const identityIssues = (rootSchema: AnySchema, data: unknown): z.core.$ZodIssue[
   if (union !== undefined && data !== null && typeof data === "object" && !Array.isArray(data)) {
     schema = identityXsiMember(union.options as readonly AnySchema[], data, schema);
   }
-  walkIdentity(schema, data, [], meta?.identity ?? [], state);
+  const rootEntry = rootLexicals.get(rootSchema);
+  walkIdentity(schema, data, [], meta?.identity ?? [], state, {
+    lexical: rootEntry?.lexical,
+    qnameNs: rootEntry?.qnameNs,
+  });
   return state.issues;
 };
 
@@ -4367,8 +4879,8 @@ export type ParseXmlOptions = {
   // schema validation still runs. For documents whose referential integrity
   // is knowingly broken (partial exports, data being repaired).
   identityConstraints?: false;
-  // Retain the original XML lexicals so serializeXml can re-emit the document
-  // byte-for-byte for unchanged values (diffs, hashes, content signatures).
+  // Retain original scalar lexicals for unchanged values. XML formatting,
+  // comments, namespace spelling and mixed-content interleaving are not retained.
   // Off by default: serializeXml derives lexicals from the parsed values
   // (shortest round-trip form, e.g. "1" for "1.0").
   retainLexicals?: boolean;
@@ -4386,7 +4898,9 @@ export const safeParseXml = <S extends z.ZodType>(
   opts?: ParseXmlOptions,
 ): { success: true; data: z.output<S> } | { success: false; error: unknown } => {
   let data: unknown;
-  const read: ReadCtx = { retainLexicals: opts?.retainLexicals === true };
+  const read: ReadCtx = {
+    retainLexicals: opts?.retainLexicals === true || findRootMeta(schema)?.hasIdentity === true,
+  };
   // Choice groups are validated during the walk (registry-meta driven); the
   // validate:false fast path skips them, exactly as it skipped the refines.
   const walk: WalkCtx | undefined = opts?.validate === false ? undefined : { issues: [], path: [] };
@@ -4396,9 +4910,15 @@ export const safeParseXml = <S extends z.ZodType>(
     return { success: false, error };
   }
   if (opts?.validate === false) {
+    rememberRootLexical(schema, data);
     return { success: true, data: data as z.output<S> };
   }
-  const result = schema.safeParse(data);
+  let result: z.ZodSafeParseResult<z.output<S>>;
+  try {
+    result = schema.safeParse(data);
+  } catch (error) {
+    return { success: false, error };
+  }
   const choiceIssues = walk?.issues ?? [];
   if (!result.success) {
     return {
@@ -4414,10 +4934,7 @@ export const safeParseXml = <S extends z.ZodType>(
   }
   // zod rebuilt the tree during validation — re-key the retained lexicals.
   transferLexicals(data, result.data);
-  const rootEntry = rootLexicals.get(schema);
-  if (rootEntry !== undefined) {
-    rootEntry.data = result.data;
-  }
+  rememberRootLexical(schema, result.data);
   // Identity constraints run on the validated tree (substitution side
   // channels re-keyed onto it above); gated on the module declaring any.
   if (opts?.identityConstraints !== false && findRootMeta(schema)?.hasIdentity === true) {
@@ -4451,7 +4968,16 @@ export const parseXml = <S extends z.ZodType>(
  * input type: the data is validated through the schema first, so defaults
  * apply and invalid data fails with a ZodError before anything is emitted.
  */
-export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): string => {
+export type SerializeXmlOptions = {
+  /** Namespace context for a primitive QName root, including "" for its default namespace. */
+  rootNamespaces?: Record<string, string>;
+};
+
+export const serializeXml = <S extends z.ZodType>(
+  schema: S,
+  data: z.input<S>,
+  opts?: SerializeXmlOptions,
+): string => {
   const meta = findRootMeta(schema);
   if (!meta?.root) {
     throw new Error("schema is not an XML root: no root qname registered in xmlRegistry");
@@ -4471,6 +4997,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
   }
   transferLexicals(data, result.data, "copy");
   const value: z.output<S> = result.data;
+  const rootEntry = rootLexicalFor(schema, data, opts?.rootNamespaces);
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
@@ -4478,6 +5005,12 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
   };
 
   const typeSchema = peelOnce(schema);
+  ctx.allowDefaultQName =
+    rootInfo.namespace !== "" &&
+    (!hasObjectShape(typeSchema) ||
+      Object.values(findFieldsMeta(typeSchema) ?? {}).every(
+        (field) => field.kind === "text" || field.kind === "attribute",
+      ));
   const xsiUnion =
     value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value)
       ? xsiTypeUnionDef(typeSchema)
@@ -4514,7 +5047,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
   } else if (meta.fixedLexical !== undefined) {
     // Fixed root: the declared fixed lexical when it denotes the value, else
     // the retained instance lexical (see serializeStoredLeaf).
-    const entry = rootLexicals.get(schema);
+    const entry = rootEntry;
     // Structured fixed values (datatype set) cannot be compared by the
     // guard — the refine already enforced the constraint; anything else
     // falls back to the canonical form.
@@ -4527,7 +5060,7 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
       body = declareQNamePrefixes(body, entry.qnameNs, ctx);
     }
   } else if (meta.datatype === undefined) {
-    const entry = rootLexicals.get(schema);
+    const entry = rootEntry;
     const stored = storedLexicalFor(entry?.lexical, value, typeSchema);
     body = stored === undefined ? serializeLeaf(typeSchema, value) : escapeXml(stored);
     if (meta.qnameValue && entry?.qnameNs !== undefined) {
@@ -4536,30 +5069,50 @@ export const serializeXml = <S extends z.ZodType>(schema: S, data: z.input<S>): 
   } else {
     // List-typed root: whitespace-joined canonical lexicals, one per item.
     const rootDatatype = meta.datatype;
-    body = Array.isArray(value)
-      ? value.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
-      : serializeDatatypeValue(rootDatatype, value);
+    const stored = storedLexicalFor(rootEntry?.lexical, value, typeSchema);
+    body =
+      stored === undefined
+        ? Array.isArray(value)
+          ? value.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
+          : serializeDatatypeValue(rootDatatype, value)
+        : escapeXml(stored);
   }
 
+  if (
+    !meta.open &&
+    !hasObjectShape(typeSchema) &&
+    xsiUnion === undefined &&
+    value !== null &&
+    value !== undefined
+  ) {
+    const facets = findFacetsMeta(typeSchema);
+    if (facets !== undefined) {
+      checkLexicalFacets(decodeXmlEntities(body), typeSchema, facets);
+    }
+  }
   const nsDecls: string[] = [];
   let rootTag = rootInfo.local;
   if (rootInfo.namespace) {
     const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap, ctx.qnameNs);
     rootTag = `${rootPrefix}:${rootInfo.local}`;
-    nsDecls.push(`xmlns:${rootPrefix}="${rootInfo.namespace}"`);
+    nsDecls.push(`xmlns:${rootPrefix}="${escapeXmlAttrChars(escapeXml(rootInfo.namespace))}"`);
   }
   for (const [uri, prefix] of ctx.prefixMap.entries()) {
     if (!uri || uri === rootInfo.namespace) {
       continue;
     }
-    nsDecls.push(`xmlns:${prefix}="${uri}"`);
+    nsDecls.push(
+      `${prefix === "" ? "xmlns" : `xmlns:${prefix}`}="${escapeXmlAttrChars(escapeXml(uri))}"`,
+    );
   }
   for (const [prefix, uri] of ctx.qnameNs.entries()) {
     // The xml prefix is bound by definition and must not be declared.
     if (prefix === "xml") {
       continue;
     }
-    nsDecls.push(`xmlns:${prefix}="${uri}"`);
+    nsDecls.push(
+      `${prefix === "" ? "xmlns" : `xmlns:${prefix}`}="${escapeXmlAttrChars(escapeXml(uri))}"`,
+    );
   }
   if (usesXsi) {
     nsDecls.push('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');

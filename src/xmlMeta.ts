@@ -2,6 +2,14 @@ import { type $ZodRegistry, registry } from "zod/v4/core";
 import type { IdentityConstraint, QName } from "./types.js";
 import type { XsdDatatypeName } from "./xsdDateTime.js";
 
+/** XSD value-space identity, independent of the JavaScript output shape. */
+export type XmlSimpleTypeMeta = {
+  primitive: string;
+  lexical?: string;
+  item?: XmlSimpleTypeMeta;
+  members?: XmlSimpleTypeMeta[];
+};
+
 /** Lexical-space facets enforced by the runtime. */
 export type XmlLexicalFacets = {
   whiteSpace?: "replace" | "collapse";
@@ -17,6 +25,9 @@ export type XmlLexicalFacets = {
   fractionDigits?: number;
   /** totalDigits on string-backed decimals, counted on the exact lexical. */
   totalDigits?: number;
+  /** Value is an xs:decimal lexical: enumerations and totalDigits compare the
+      exact original lexical (a double can round away the distinction). */
+  decimal?: true;
   datatype?: XsdDatatypeName;
 };
 
@@ -121,6 +132,9 @@ export type XmlChoiceMeta = {
 
 /** XML knowledge attached to generated zod schemas via xmlRegistry. */
 export type XmlMeta = {
+  /** Schema references are opaque here: Zod's registry flattens metadata types. */
+  identityElements?: () => Record<string, unknown>;
+  simpleType?: XmlSimpleTypeMeta;
   qname?: QName;
   root?: QName;
   /** Generator version stamp ("xsd-to-zod@<version>") on generated root schemas. */
@@ -133,6 +147,10 @@ export type XmlMeta = {
   /** Declared default lexical, retained on substitution like fixedLexical. */
   defaultLexical?: string;
   facets?: XmlLexicalFacets;
+  /** Numeric primitive behind a simple alias ("integer" | "decimal" |
+      "float" | "double"), retained even when the generated schema narrows to
+      literal/enum branches that no longer reveal the lexical datatype. */
+  lexicalType?: string;
   substElement?: QName;
   qnameValue?: boolean;
   fields?: Record<string, XmlFieldMeta>;
