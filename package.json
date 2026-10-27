@@ -54,7 +54,9 @@
   "homepage": "https://github.com/PaulDebus/xsd-to-zod#readme",
   "files": [
     "dist",
-    "docs",
+    "docs/1.0-output-defaults.md",
+    "docs/MIGRATION.md",
+    "docs/TEST_STATUS.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
