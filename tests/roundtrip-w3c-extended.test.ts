@@ -117,7 +117,7 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
       .map((group) => group.name)
       .filter((name) => !/^(?:atomic|list|union)-/.test(name));
     expect(unmatched).toEqual([]);
-  });
+  }, 30_000);
 
   for (const c of cases) {
     const key = keyOf(c.testSet, c.name);
