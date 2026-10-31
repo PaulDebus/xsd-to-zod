@@ -23,7 +23,7 @@ Codegen output itself is pinned by **golden snapshots** (`tests/golden.test.ts`)
 | **quick** | `npm run test:quick` | Dev loop | Curated fixtures + unit tests + golden snapshots + W3C Boeing smoke |
 | **full** | `npm test` | Every push/PR (CI) | Everything, incl. xmlschema examples, UBL examples and the expanded W3C selection |
 | **corpus** | `npm run test:corpus` | Merge to main + weekly | Full XSD 1.0 W3C corpus via `suite.xml` discovery — valid instances, invalid instances, and invalid schemas (`tests/corpus/`, excluded from the PR levels) |
-| **release** | `npm run test:release` | 0.4.0 release commit | Lint + full suite with coverage thresholds + full corpus |
+| **release** | `npm run test:release` | Release commit | Lint + full suite with coverage thresholds + full corpus |
 
 ---
 
@@ -164,13 +164,12 @@ features:
 
 ### Release gate
 
-0.4.0 ships only from a commit where `npm run test:release` passes. That runs
+A release ships only from a commit where `npm run test:release` passes. That runs
 lint, the full suite with the coverage thresholds, and the full W3C corpus —
 `test:quick` is the dev loop and is never the release gate. The corpus
 prerequisite fails the gate when the W3C submodule is missing, so a skipped
 corpus cannot pass as green. `npm publish` runs the same gate through
-`prepublishOnly`; `npm pack` and the publish/tag steps stay in the release
-issue.
+`prepublishOnly`; the publish/tag steps are in [`docs/RELEASE.md`](RELEASE.md).
 
 ---
 

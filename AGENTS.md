@@ -9,10 +9,18 @@ Published on npm as `xsd-to-zod`.
 
 - **Branching**: all PRs must branch from `origin/main` into a new branch. No direct pushes to `main`.
 - **Style**: be concise. Prefer short, focused edits over verbose explanations.
-- **Delegation**: hand clear-cut, well-defined tasks (small fixes, mechanical edits, docs touch-ups) to the `coder-simple` subagent (DeepSeek free tier). Reserve the main agent for analysis, design, and ambiguous work.
-- **Testing**: all PRs must pass the full testsuite before they can be submitted for review, including test coverage check. Use `npm run test:quick` for the dev loop (skips the heavy upstream/W3C corpus round-trips). Releases gate on `npm run test:release` (lint + full coverage suite + corpus), never on quick alone.
-- Dont amend commits unless it is not pushed and the change was missing from it. commits show the progress
+- **Delegation**: hand clear-cut, well-defined tasks (small fixes, mechanical edits, docs touch-ups) to the `general` subagent; use `explore` for codebase search and `reviewer` for review. Reserve the main agent for analysis, design, and ambiguous work. In T3, `delegate_task` is the equivalent escape hatch.
+- **Testing**: all PRs must pass the full testsuite before they can be submitted for review, including test coverage check. Use `npm run test:quick` for the dev loop (skips the heavy upstream/W3C corpus round-trips). Releases gate on `npm run test:release` (lint + full coverage suite + corpus), never on quick alone. Give heavy synchronous W3C/corpus tests an explicit generous timeout; do not rely on vitest's 5s default.
+- **Release**: follow `docs/RELEASE.md`. Bump `package.json`, `package-lock.json`, and `src/version.ts` together with `npm run version:set -- <version>`.
+- **Work tracking**: GitHub Issues via the `gh` CLI (`gh issue list/view/create/close`). Link issues and PRs; close out with the GitHub release and issue close.
+- Don't amend commits unless it is not pushed and the change was missing from it. Commits show the progress.
+
+## Where to look
+- Release checklist: `docs/RELEASE.md`
+- 1.0 output decisions: `docs/1.0-output-defaults.md`
+- Upgrade path: `docs/MIGRATION.md`
+- Conformance status: `docs/TEST_STATUS.md`
 
 ## Coding standards
 - **Strict TypeScript**: `strict: true` in tsconfig. No `any`, no `// @ts-{ignore,expect-error}` — fix the types properly.
-- **No tracker ids in code**: never mention tracker ids (e.g. `IRE-20`, `GH#161`, `#123`) in code comments, test names (`describe`/`it` strings), or generated output — comments and names must stand for themselves. Tracker ids belong in commit messages, PR titles/bodies, and Linear only.
+- **No tracker ids in code**: never mention tracker ids (e.g. `GH#161`, `#123`) in code comments, test names (`describe`/`it` strings), or generated output — comments and names must stand for themselves. Tracker ids belong in commit messages, PR titles/bodies, and GitHub issues.

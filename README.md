@@ -358,7 +358,7 @@ Run it locally (`npm run test:quick` runs the dev-loop subset without the heavy 
 npm test
 ```
 
-The 0.4.0 release gate is `npm run test:release` — lint, the full suite with coverage thresholds, and the full W3C corpus. `test:quick` is for the dev loop only.
+The release gate is `npm run test:release` — lint, the full suite with coverage thresholds, and the full W3C corpus. `test:quick` is for the dev loop only.
 
 **Test matrix** (the full suite includes the complete NIST datatype selection;
 the corpus gate adds 13,899 valid-instance, 10,942 invalid-instance, and 3,329
