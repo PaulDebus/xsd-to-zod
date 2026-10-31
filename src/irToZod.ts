@@ -1,5 +1,6 @@
 import { Xsd2ZodError } from "./errors.js";
 import { clarkToLocal, trySplitClark } from "./qname.js";
+import { standaloneHelperExportNames, standaloneHelperSource } from "./standaloneHelpers.js";
 import type {
   ChoiceArrayField,
   ComplexTypeDef,
@@ -428,6 +429,8 @@ interface PrimitiveEmitCtx {
   datatypeCtx: DatatypeEmitCtx | undefined;
   /** Identity comparison needs value-space descriptors for every simple type. */
   identityMode: boolean;
+  /** Emit self-contained schemas: no registry or xsd-to-zod imports. */
+  standalone: boolean;
 }
 
 // Most simple-type descriptors exist for identity comparison, so only emit
@@ -503,6 +506,9 @@ const simpleTypeMeta = (
 
 const primitiveToZod = (typeName: QName, ctx: PrimitiveEmitCtx): string => {
   const expr = primitiveToZodRaw(typeName, ctx);
+  if (ctx.standalone) {
+    return expr;
+  }
   const descriptor = simpleTypeMeta(typeName);
   if (descriptor === undefined || !needsSimpleMeta(descriptor, ctx.identityMode)) {
     return expr;
@@ -1525,6 +1531,7 @@ const withCardinality = (
   usedHelpers: Set<string>,
   integers: IntegersMode,
   decimal: DecimalMode,
+  standalone = false,
 ): string => {
   const kind = resolvePrimitiveKind(field.typeName, ir, integers, decimal);
   if (field.kind === "attribute" && field.maxOccurs === 0) {
@@ -1588,7 +1595,7 @@ const withCardinality = (
   }
   if (field.fixedValue !== undefined) {
     const descriptor = simpleTypeMeta(field.typeName, ir);
-    if (descriptor !== undefined) {
+    if (descriptor !== undefined && !standalone) {
       const lexical = descriptor.lexical;
       result = `z.lazy(() => ${result}).register(xmlRegistry, { simpleType: ${JSON.stringify(descriptor)}${lexical === "integer" || lexical === "decimal" || lexical === "float" || lexical === "double" ? `, lexicalType: ${JSON.stringify(lexical)}` : ""} })`;
     }
@@ -3005,8 +3012,15 @@ const tsFieldLine = (
  * `metaExpr` is the full meta argument expression — an object literal or a
  * reference to a hoisted meta const.
  */
-const registered = (expr: string, description: string | undefined, metaExpr: string): string =>
-  `${withDescription(expr, description)}.register(xmlRegistry, ${metaExpr})`;
+const registered = (
+  expr: string,
+  description: string | undefined,
+  metaExpr: string,
+  standalone = false,
+): string =>
+  standalone
+    ? withDescription(expr, description)
+    : `${withDescription(expr, description)}.register(xmlRegistry, ${metaExpr})`;
 
 // Names TS forbids as interface identifiers (primitive/literal type keywords),
 // plus the generated module's own imports — an interface named like an import
@@ -3128,6 +3142,10 @@ export type IrToZodOptions = {
   // value wrappers to scalars and emit repeated choices as one tagged array.
   // Deliberately not part of the documented public API; removed at the flip.
   ergonomic?: boolean;
+  // Emit a self-contained module that imports only zod: registry metadata and
+  // the XML runtime are gone, helper checks are inlined, and xs:choice is
+  // enforced by generated refinements instead of parseXml.
+  standalone?: boolean;
 };
 
 export const irToZod = (
@@ -3139,6 +3157,13 @@ export const irToZod = (
   const structured = opts?.datatypes === "structured";
   const integers: IntegersMode = opts?.integers ?? "number";
   const decimal: DecimalMode = opts?.decimal ?? "number";
+  const standalone = opts?.standalone === true;
+  if (standalone && opts?.js === true) {
+    throw new Xsd2ZodError(
+      "standalone-js-unsupported",
+      "standalone output inlines TypeScript helper code and cannot be combined with js mode",
+    );
+  }
   const schemaLines: string[] = [];
   const definedTypes = new Set<string>([
     ...Object.keys(ir.simpleTypes),
@@ -3255,7 +3280,13 @@ export const irToZod = (
     }
   }
   const familyTypes = new Set<QName>([...variantSets.values()].flat());
-  const usedNames = new Set<string>(exportNames.values());
+  const standaloneHelperNames = standalone
+    ? new Set(standaloneHelperExportNames())
+    : new Set<string>();
+  const usedNames = new Set<string>([...exportNames.values(), ...standaloneHelperNames]);
+  const reservedTypeNames = standalone
+    ? new Set([...TS_TYPE_RESERVED, ...standaloneHelperNames])
+    : TS_TYPE_RESERVED;
   const alloc = (base: string): string => {
     let name = base;
     let n = 2;
@@ -3280,6 +3311,7 @@ export const irToZod = (
     decimal,
     datatypeCtx,
     identityMode: moduleHasIdentity,
+    standalone,
   };
   const sortedSimpleTypes = sortSimpleTypes(ir);
 
@@ -3325,7 +3357,7 @@ export const irToZod = (
     const local = sanitizeIdentifier(clarkToLocal(qname));
     constName.set(qname, alloc(`${local}Schema`));
     if (withIface) {
-      ifaceName.set(qname, alloc(TS_TYPE_RESERVED.has(local) ? `${local}Type` : local));
+      ifaceName.set(qname, alloc(reservedTypeNames.has(local) ? `${local}Type` : local));
     }
   };
   const allocAnonymousType = (qname: QName, base: string, withIface: boolean): void => {
@@ -3334,7 +3366,7 @@ export const irToZod = (
     const constCandidate = ownerElementLocalByType.has(qname)
       ? `${base}TypeSchema`
       : `${base}Schema`;
-    const ifaceCandidate = TS_TYPE_RESERVED.has(base) ? `${base}Type` : base;
+    const ifaceCandidate = reservedTypeNames.has(base) ? `${base}Type` : base;
     if (usedNames.has(constCandidate) || (withIface && usedNames.has(ifaceCandidate))) {
       const kept = sanitizeIdentifier(clarkToLocal(qname));
       namingFallbacks.set(qname, { wanted: base, kept });
@@ -3420,14 +3452,14 @@ export const irToZod = (
   // Hoisted consts are annotated in TS mode: a standalone object literal
   // widens (kind: string) without the contextual type .register() provides.
   const metaConstAnnotation = (typeName: "XmlMeta" | "XmlFieldMeta" | "XmlChoiceMeta"): string => {
-    if (opts?.js) {
+    if (opts?.js || standalone) {
       return "";
     }
     usedTypes.add(typeName);
     return typeName === "XmlMeta" ? ": XmlMeta" : `: { [key: string]: ${typeName} }`;
   };
   const metaGroupAnnotation = (): string => {
-    if (opts?.js) {
+    if (opts?.js || standalone) {
       return "";
     }
     usedTypes.add("XmlChoiceMeta");
@@ -3457,6 +3489,7 @@ export const irToZod = (
     }
     return metaConst;
   };
+  const standaloneChoicesByType = new Map<QName, string>();
   {
     const fieldsEntriesByType = new Map<QName, string[]>();
     const choicesBodyByType = new Map<QName, string>();
@@ -3487,6 +3520,11 @@ export const irToZod = (
     const processed: QName[] = [];
     for (const t of Object.values(ir.complexTypes)) {
       const entries = fieldsEntriesByType.get(t.name) ?? [];
+      if (standalone) {
+        fieldsExprByType.set(t.name, `{ ${entries.join(", ")} }`);
+        processed.push(t.name);
+        continue;
+      }
       let best: QName | undefined;
       let bestLength = 1; // sharing a single entry doesn't pay for its const
       for (const prev of processed) {
@@ -3632,12 +3670,16 @@ export const irToZod = (
       const fieldsExpr = fieldsConstByType.get(t.name) ?? ownExpr;
       const metaBody = `qname: ${JSON.stringify(t.name)}, fields: ${fieldsExpr}${choicesExpr === undefined ? "" : `, choices: ${choicesExpr}`}`;
       metaBodyByType.set(t.name, metaBody);
-      if (familyTypes.has(t.name)) {
+      if (familyTypes.has(t.name) && !standalone) {
         const metaConst = alloc(`${effectiveBaseLocal(t.name)}Meta`);
         metaConstByType.set(t.name, metaConst);
         hoistedLinesFor(t.name).push(
           `const ${metaConst}${metaConstAnnotation("XmlMeta")} = { ${metaBody} };`,
         );
+      }
+      const standaloneChoices = choicesConstByType.get(t.name) ?? choicesExprByType.get(t.name);
+      if (standaloneChoices !== undefined) {
+        standaloneChoicesByType.set(t.name, standaloneChoices);
       }
     }
   }
@@ -3682,7 +3724,9 @@ export const irToZod = (
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
   schemaLines.push(
-    "// Generator version stamp — the runtime warns when its major version differs.",
+    standalone
+      ? "// Generator version stamp."
+      : "// Generator version stamp — the runtime warns when its major version differs.",
     `export const generatedBy = "xsd-to-zod@${PACKAGE_VERSION}";`,
     "",
   );
@@ -3797,7 +3841,9 @@ export const irToZod = (
       return eagerHeadExpr;
     }
     const option = (expr: string, qname: QName): string =>
-      `z.lazy(() => ${expr}).register(xmlRegistry, { substElement: ${JSON.stringify(qname)} })`;
+      standalone
+        ? `z.lazy(() => ${expr})`
+        : `z.lazy(() => ${expr}).register(xmlRegistry, { substElement: ${JSON.stringify(qname)} })`;
     const options = [
       ...substMembers.map((m) => option(primitiveToZod(m.typeName, primitiveCtx), m.name)),
       option(headExpr, field.qname),
@@ -3821,6 +3867,7 @@ export const irToZod = (
         usedHelpers,
         integers,
         decimal,
+        standalone,
       ),
       field.description,
     );
@@ -3850,6 +3897,21 @@ export const irToZod = (
   };
   const objectPropsExpr = (complexType: ComplexTypeDef, eager: boolean): string =>
     objectPropEntries(complexType, eager).join(", ");
+
+  // Standalone output has no runtime to read the choice metadata, so the same
+  // pure checker runs as a generated refinement. Registry-backed output keeps
+  // the check in parseXml, where it can also see XML-level context.
+  const standaloneChoiceCheck = (complexType: ComplexTypeDef): string => {
+    if (!standalone) {
+      return "";
+    }
+    const choices = standaloneChoicesByType.get(complexType.name);
+    if (choices === undefined) {
+      return "";
+    }
+    const value = opts?.js ? "val" : "(val as Record<string, unknown>)";
+    return `.superRefine((val, ctx) => { for (const message of choiceGroupIssues(${choices}, ${value})) { ctx.addIssue({ code: "custom", message }); } })`;
+  };
 
   // Which extension-derived types can emit `.extend({ own props })` over the
   // base shape. The merge flattens extension into one field list, so prove
@@ -4146,6 +4208,7 @@ export const irToZod = (
               expr,
               simpleType.description,
               `{ qname: ${JSON.stringify(simpleType.name)}${descriptorMeta}, facets: ${JSON.stringify(merged)} }`,
+              standalone,
             )};`,
           ),
         );
@@ -4155,7 +4218,7 @@ export const irToZod = (
     schemaLines.push(
       withNamingComment(
         simpleType.name,
-        `export const ${constName.get(simpleType.name)} = ${registered(`z.lazy(() => ${expr})`, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)}${descriptorMeta} }`)};`,
+        `export const ${constName.get(simpleType.name)} = ${registered(`z.lazy(() => ${expr})`, simpleType.description, `{ qname: ${JSON.stringify(simpleType.name)}${descriptorMeta} }`, standalone)};`,
       ),
     );
   }
@@ -4219,9 +4282,10 @@ export const irToZod = (
         withNamingComment(
           complexType.name,
           `export const ${constName.get(complexType.name)}${annotation} = ${registered(
-            `z.lazy(() => ${shapeName}${check})`,
+            `z.lazy(() => ${shapeName}${check})${standaloneChoiceCheck(complexType)}`,
             complexType.description,
-            metaConstFor(complexType.name),
+            standalone ? "" : metaConstFor(complexType.name),
+            standalone,
           )};`,
         ),
       );
@@ -4236,9 +4300,10 @@ export const irToZod = (
       withNamingComment(
         complexType.name,
         `export const ${constName.get(complexType.name)}${annotation} = ${registered(
-          `z.lazy(() => ${shape})`,
+          `z.lazy(() => ${shape})${standaloneChoiceCheck(complexType)}`,
           complexType.description,
           `{ ${metaBodyFor(complexType.name)} }`,
+          standalone,
         )};`,
       ),
     );
@@ -4263,7 +4328,7 @@ export const irToZod = (
     }
     const discriminant = JSON.stringify(complexType.name);
     schemaLines.push(
-      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) })${optionalUnitsCheck(complexType, opts?.js === true)}.register(xmlRegistry, ${metaConstFor(complexType.name)});`,
+      `const ${variantConstName.get(complexType.name)} = ${objectConstName.get(complexType.name)}.extend({ "xsiType": z.literal(${discriminant}) })${optionalUnitsCheck(complexType, opts?.js === true)}${standaloneChoiceCheck(complexType)}${standalone ? "" : `.register(xmlRegistry, ${metaConstFor(complexType.name)})`};`,
     );
   }
   for (const complexType of Object.values(ir.complexTypes)) {
@@ -4277,7 +4342,7 @@ export const irToZod = (
       ? `z.literal(${discriminant}).default(${discriminant})`
       : `z.literal(${discriminant}).optional()`;
     schemaLines.push(
-      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} })${optionalUnitsCheck(complexType, opts?.js === true)}.register(xmlRegistry, ${metaConstFor(typeName)});`,
+      `const ${declaredVariantConstName.get(typeName)} = ${objectConstName.get(typeName)}.extend({ "xsiType": ${xsiTypeProp} })${optionalUnitsCheck(complexType, opts?.js === true)}${standaloneChoiceCheck(complexType)}${standalone ? "" : `.register(xmlRegistry, ${metaConstFor(typeName)})`};`,
     );
     const derived = variants
       .slice(1)
@@ -4303,13 +4368,14 @@ export const irToZod = (
     }
     const unionExpr = `z.discriminatedUnion("xsiType", [${options}], { unionFallback: true })`;
     schemaLines.push(
-      unionMeta.length > 0
+      unionMeta.length > 0 && !standalone
         ? `const ${unionConstName.get(typeName)} = ${unionExpr}.register(xmlRegistry, { ${unionMeta.join(", ")} });`
         : `const ${unionConstName.get(typeName)} = ${unionExpr};`,
     );
   }
 
-  const identityElementsName = moduleHasIdentity ? alloc("xmlIdentityElements") : undefined;
+  const identityElementsName =
+    moduleHasIdentity && !standalone ? alloc("xmlIdentityElements") : undefined;
   if (identityElementsName !== undefined) {
     const entries = Object.values(ir.elements).map(
       (element) =>
@@ -4388,24 +4454,39 @@ export const irToZod = (
       ir.simpleTypes[rootDef.typeName]?.description;
     const jsDoc = description ? `${formatJsDoc(description, 0)}\n` : "";
     schemaLines.push(
-      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `{ ${rootMeta.join(", ")} }`)};`,
+      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `{ ${rootMeta.join(", ")} }`, standalone)};`,
     );
   }
 
-  const xsdImports = [
-    usage.totalDigits ? "xsdTotalDigits" : undefined,
-    usage.fractionDigits ? "xsdFractionDigits" : undefined,
-    ...[...usedHelpers].sort(),
-  ].filter((name): name is string => name !== undefined);
-  const typeImport =
-    usedTypes.size > 0
-      ? `\nimport type { ${[...usedTypes].sort().join(", ")} } from 'xsd-to-zod';`
-      : "";
-  schemaLines[importLineIndex] =
-    `import { z } from 'zod';\n` +
-    `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
+  if (standalone) {
+    const helperSource = standaloneHelperSource(usedHelpers, {
+      totalDigits: usage.totalDigits,
+      fractionDigits: usage.fractionDigits,
+      coerceXmlValue: usedHelpers.has("coerceXmlValue"),
+      choices: standaloneChoicesByType.size > 0,
+    });
+    schemaLines[importLineIndex] = `import { z } from 'zod';\n${helperSource}`;
+  } else {
+    const xsdImports = [
+      usage.totalDigits ? "xsdTotalDigits" : undefined,
+      usage.fractionDigits ? "xsdFractionDigits" : undefined,
+      ...[...usedHelpers].sort(),
+    ].filter((name): name is string => name !== undefined);
+    const typeImport =
+      usedTypes.size > 0
+        ? `\nimport type { ${[...usedTypes].sort().join(", ")} } from 'xsd-to-zod';`
+        : "";
+    schemaLines[importLineIndex] =
+      `import { z } from 'zod';\n` +
+      `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
+  }
 
   const warnings = [
+    ...(standalone && lexicalFacetsByType.size > 0
+      ? [
+          "[standalone] schemas carry no runtime metadata, so value-space facets that need the original lexical (xs:decimal order/digit facets, enumerations on structured/union types) are not enforced; regenerate with the default runtime-backed mode when those matter",
+        ]
+      : []),
     ...[...namingFallbacks].map(
       ([qname, f]) =>
         `[naming-collision] ${qname}: friendly name "${f.wanted}" is already taken in the generated module; kept the synthetic name "${f.kept}"`,

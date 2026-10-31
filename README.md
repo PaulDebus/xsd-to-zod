@@ -168,6 +168,7 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--integers <mode>` | `number` (default) maps the `xs:integer` family to `z.number().int()` — JSON-safe, exact below 2⁵³ (larger values are rejected, and the 64-bit `long`/`unsignedLong` outer bounds cannot be expressed and are dropped); `bigint` maps them to `z.bigint()`, exact at any magnitude, but `JSON.stringify` throws on parsed data containing them |
 | `--decimal <mode>` | `number` (default) maps `xs:decimal` to `z.number()` (float64) — exact only to ~16 significant digits; `string` keeps the exact canonical decimal lexical (leading/trailing zeros normalized, never rounded), so arbitrary-precision financial amounts round-trip losslessly. Facets (`totalDigits`, `fractionDigits`, order bounds, enums) are checked against the exact lexical in both modes |
 | `--ergonomic` | Preview the 1.0 output shape: collapse lone-attribute value wrappers (`{ "@value": T }`) to scalars, emit attribute keys without the `@` prefix (`"@id"` → `"id"`; a colliding attribute keeps `@`), and emit repeated `xs:choice` as one array of tagged items (`_choice: ({ a: A } \| { b: B })[]`). Temporary scaffolding flag — not final public API |
+| `--standalone` | Emit a self-contained module that imports only `zod`: no `xmlRegistry` metadata and no `xsd-to-zod` import, with helper checks inlined and `xs:choice` enforced by generated refinements. `parseXml`/`serializeXml` are unavailable for these schemas; value-space facets that need the original XML lexical (e.g. `xs:decimal` order/digit facets) are not enforced |
 | `--fetch` | Resolve remote imports/includes from local schema inputs. Remote entry URLs always fetch; local inputs never use the network without this flag |
 | `--no-fetch` | Fetch only a remote entry schema and skip its remote imports/includes |
 | `--frozen` | Verify every cached or fetched remote schema against `xsd-to-zod.lock.json`; fail on missing entries or drift and never update the lockfile |
@@ -177,6 +178,20 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--allow-host <host>` | Repeatable host allowlist for every fetched schema, including the entry URL |
 
 Remote fetches are logged to stderr, use `HTTPS_PROXY`/`HTTP_PROXY` when set, and are capped at 100 files, 10 MB per file, 50 MB total, 32 import levels, and 30 seconds per request. In mixed runs local inputs still stay offline unless `--fetch` is passed.
+
+### Standalone schemas
+
+`--standalone` is for consumers that only want typed Zod validation and never
+call `parseXml` / `serializeXml`. Each generated file imports `zod` and nothing
+else; the helper checks it needs (`xsdPattern`, lexical validators, digit/order
+checks, structured date/time parsing) are inlined from the generator's own
+helpers, and `xs:choice` exclusivity runs as a generated `.superRefine`
+instead of registry metadata. What is lost: XML I/O, namespace/tag dispatch,
+document order and lexical retention, and runtime-enforced value-space facets
+that need the original lexical (for example `xs:decimal` `totalDigits`,
+`fractionDigits`, and order bounds, or enumerations on structured/union types).
+Those schemas are still valid reusable Zod schemas (`z.infer`, `.parse`,
+fragment validation), just with a smaller feature set than the default output.
 
 Successful fetches write `xsd-to-zod.lock.json` in the current directory and populate the user cache; commit the lockfile for reviewable, reproducible remote schemas. Use `--frozen` in CI and `--offline` when network access is unavailable. Entries record the requested URL, final post-redirect URL, SHA-256 digest, fetch timestamp, and optional ETag:
 

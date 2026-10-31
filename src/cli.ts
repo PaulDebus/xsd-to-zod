@@ -483,6 +483,7 @@ type GenerateOptions = {
   integers?: string;
   decimal?: string;
   ergonomic?: boolean;
+  standalone?: boolean;
   fetch?: boolean;
   frozen?: boolean;
   offline?: boolean;
@@ -683,6 +684,7 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     integers,
     decimal,
     ergonomic: opts.ergonomic === true,
+    standalone: opts.standalone === true,
   });
   reportWarnings(warnings);
 
@@ -827,6 +829,10 @@ const addGenerateOptions = (command: Command): Command =>
     .option(
       "--ergonomic",
       'Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars, drop the "@" prefix from attribute keys (colliding attributes keep it), and emit repeated choices as one tagged array',
+    )
+    .option(
+      "--standalone",
+      "Emit a self-contained module that imports only zod: no xmlRegistry metadata, no parseXml/serializeXml, helper checks inlined, and xs:choice enforced by generated refinements",
     )
     .option("--fetch", "Resolve remote imports/includes for local schema inputs")
     .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")

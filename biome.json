@@ -67,6 +67,12 @@
     }
   ],
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/testdata"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/testdata",
+      "!src/standaloneHelperSources.generated.ts"
+    ]
   }
 }
