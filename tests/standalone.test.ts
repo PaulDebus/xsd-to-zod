@@ -3,8 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { irToZod, parseXsd } from "../src/compiler.js";
-import { STANDALONE_HELPER_SOURCES } from "../src/standaloneHelperSources.generated.js";
-import { standaloneHelperExportNames } from "../src/standaloneHelpers.js";
+import {
+  STANDALONE_HELPER_MODULE_NAMES,
+  STANDALONE_HELPER_SOURCES,
+} from "../src/standaloneHelperSources.generated.js";
+import { standaloneHelperExportNames, standaloneHelperSource } from "../src/standaloneHelpers.js";
 import { expectTscPasses, importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 const XSD = `<?xml version="1.0"?>
@@ -150,18 +153,28 @@ describe("--standalone output", () => {
   });
 
   it("keeps the embedded helper sources in sync with src", () => {
-    const helpers = [
-      "xsdLexicals.ts",
-      "xsdDateTime.ts",
-      "xsdChecks.ts",
-      "xsdPattern.ts",
-      "choiceCheck.ts",
-    ];
-    for (const file of helpers) {
+    for (const file of STANDALONE_HELPER_MODULE_NAMES) {
       expect(STANDALONE_HELPER_SOURCES[file]).toBe(
         fs.readFileSync(path.resolve("src", file), "utf8"),
       );
     }
+  });
+
+  it("inlines every helper module without duplicate top-level names or imports", () => {
+    const source = standaloneHelperSource(
+      new Set(["parseXsdDate", "xsdPattern", "xsdOrderCompare", "choiceGroupIssues"]),
+      { totalDigits: true, fractionDigits: true, coerceXmlValue: true, choices: true },
+    );
+    expect(source).not.toMatch(/^import\b/m);
+    const declarations = [
+      ...source.matchAll(
+        /^(?:export\s+)?(?:const|let|var|function|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm,
+      ),
+    ].map((match) => match[1]);
+    const duplicates = declarations.filter(
+      (name, index) => name !== undefined && declarations.indexOf(name) !== index,
+    );
+    expect(duplicates).toEqual([]);
   });
 
   it("reserves inlined helper names for generated type identifiers", async () => {

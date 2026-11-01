@@ -1,18 +1,14 @@
-import { STANDALONE_HELPER_SOURCES } from "./standaloneHelperSources.generated.js";
+import {
+  STANDALONE_HELPER_MODULE_NAMES,
+  STANDALONE_HELPER_SOURCES,
+} from "./standaloneHelperSources.generated.js";
 
 // Helpers that generated standalone modules inline instead of importing from
 // this package. The helper sources are embedded at build time by
 // scripts/embed-standalone-helpers.mjs, so codegen stays filesystem-free while
-// the inlined copy still comes from the runtime implementation.
-const MODULES = [
-  "xsdLexicals.ts",
-  "xsdDateTime.ts",
-  "xsdChecks.ts",
-  "xsdPattern.ts",
-  "choiceCheck.ts",
-] as const;
-
-type ModuleName = (typeof MODULES)[number];
+// the inlined copy still comes from the runtime implementation. The generated
+// module list is the single source of truth for which files are embedded.
+type ModuleName = (typeof STANDALONE_HELPER_MODULE_NAMES)[number];
 
 // Modules whose code references names from another helper module.
 const MODULE_DEPENDENCIES: ReadonlyMap<ModuleName, readonly ModuleName[]> = new Map<
@@ -24,20 +20,8 @@ const MODULE_DEPENDENCIES: ReadonlyMap<ModuleName, readonly ModuleName[]> = new 
   ["xsdPattern.ts", ["xsdLexicals.ts"]],
 ]);
 
-// Names defined in both xsdLexicals.ts and xsdDateTime.ts with different
-// definitions; the latter's private regexes get a module prefix when inlined.
-const DUPLICATE_DATE_TIME_NAMES = [
-  "DATE_RE",
-  "DATE_TIME_RE",
-  "TIME_RE",
-  "G_YEAR_RE",
-  "G_YEAR_MONTH_RE",
-  "G_MONTH_RE",
-  "G_MONTH_DAY_RE",
-  "G_DAY_RE",
-] as const;
-
 const exportNamesCache = new Map<ModuleName, string[]>();
+const topLevelNamesCache = new Map<ModuleName, string[]>();
 
 const moduleSource = (file: ModuleName): string => {
   const source = STANDALONE_HELPER_SOURCES[file];
@@ -49,6 +33,10 @@ const moduleSource = (file: ModuleName): string => {
 
 const EXPORT_DECLARATION =
   /^export\s+(?:const|function|type|interface|class)\s+([A-Za-z_$][\w$]*)/gm;
+// Top-level declarations sit at column 0 in these sources; nested ones are
+// indented, so the anchor distinguishes them.
+const TOP_LEVEL_DECLARATION =
+  /^(?:export\s+)?(?:const|let|var|function|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
 
 const moduleExportNames = (file: ModuleName): string[] => {
   const cached = exportNamesCache.get(file);
@@ -66,10 +54,26 @@ const moduleExportNames = (file: ModuleName): string[] => {
   return names;
 };
 
+const moduleTopLevelNames = (file: ModuleName): string[] => {
+  const cached = topLevelNamesCache.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const names: string[] = [];
+  for (const match of moduleSource(file).matchAll(TOP_LEVEL_DECLARATION)) {
+    const name = match[1];
+    if (name !== undefined) {
+      names.push(name);
+    }
+  }
+  topLevelNamesCache.set(file, names);
+  return names;
+};
+
 /** Every top-level name the inlined helper modules can introduce. */
 export const standaloneHelperExportNames = (): string[] => {
   const names = new Set<string>();
-  for (const file of MODULES) {
+  for (const file of STANDALONE_HELPER_MODULE_NAMES) {
     for (const name of moduleExportNames(file)) {
       names.add(name);
     }
@@ -122,20 +126,30 @@ type XmlChoiceMeta = {
 };
 `;
 
-const stripImports = (source: string): string =>
-  source.replace(/^import\b[\s\S]*?\bfrom\s+["'][^"']+["'];?[ \t]*\r?\n/gm, "");
-
-const renameDuplicateNames = (source: string): string => {
-  let out = source;
-  for (const name of DUPLICATE_DATE_TIME_NAMES) {
-    out = out.replace(new RegExp(`\\b${name}\\b`, "g"), `DT_${name}`);
+// Helper modules must use only statement imports (`import ... from "..."`);
+// side-effect imports and re-exports have no module graph to resolve against in
+// the inlined copy, so fail loudly instead of emitting a broken import.
+const stripImports = (source: string): string => {
+  const stripped = source.replace(/^import\b[\s\S]*?\bfrom\s+["'][^"']+["'];?[ \t]*\r?\n/gm, "");
+  if (/^import\b/m.test(stripped) || /^export\b.*\bfrom\s+["']/m.test(stripped)) {
+    throw new Error(
+      "standalone helper module contains an import or re-export that cannot be inlined",
+    );
   }
-  return out;
+  return stripped;
 };
 
-const normalizeModule = (file: ModuleName, source: string): string => {
-  const stripped = stripImports(source);
-  return file === "xsdDateTime.ts" ? renameDuplicateNames(stripped) : stripped;
+const moduleStem = (file: ModuleName): string =>
+  file.replace(/\.ts$/, "").replace(/[^A-Za-z0-9_]/g, "_");
+
+const uniqueReplacement = (base: string, taken: ReadonlySet<string>): string => {
+  let candidate = base;
+  let n = 2;
+  while (taken.has(candidate)) {
+    candidate = `${base}${n}`;
+    n += 1;
+  }
+  return candidate;
 };
 
 export type StandaloneHelperUsage = {
@@ -175,21 +189,52 @@ export const standaloneHelperSource = (
       includeModule(dependency);
     }
   };
-  for (const file of MODULES) {
+  for (const file of STANDALONE_HELPER_MODULE_NAMES) {
     if (moduleExportNames(file).some((name) => needed.has(name))) {
       includeModule(file);
     }
   }
 
   const blocks: string[] = [];
-  for (const file of MODULES) {
+  // Concatenated modules share one scope. Rename later modules' private
+  // top-level declarations that collide with an already-inlined name so that
+  // inlining never produces a duplicate identifier. Exported names cannot be
+  // renamed safely (generated code refers to them), so a collision there is a
+  // hard error rather than a silent break.
+  const seen = new Set<string>();
+  for (const file of STANDALONE_HELPER_MODULE_NAMES) {
     if (!included.has(file)) {
       continue;
     }
     if (file === "choiceCheck.ts") {
       blocks.push(CHOICE_META_TYPE);
+      seen.add("XmlChoiceMeta");
     }
-    blocks.push(normalizeModule(file, moduleSource(file)));
+    const exported = new Set(moduleExportNames(file));
+    const declarations = moduleTopLevelNames(file);
+    const renames = new Map<string, string>();
+    const taken = new Set([...seen, ...declarations]);
+    for (const name of declarations) {
+      if (!seen.has(name)) {
+        continue;
+      }
+      if (exported.has(name)) {
+        throw new Error(
+          `standalone helper module ${file} exports "${name}", which collides with an earlier inlined module`,
+        );
+      }
+      const replacement = uniqueReplacement(`__${moduleStem(file)}_${name}`, taken);
+      renames.set(name, replacement);
+      taken.add(replacement);
+    }
+    let block = stripImports(moduleSource(file));
+    for (const [from, to] of renames) {
+      block = block.replace(new RegExp(`\\b${from}\\b`, "g"), to);
+    }
+    for (const name of declarations) {
+      seen.add(renames.get(name) ?? name);
+    }
+    blocks.push(block);
   }
   if (usage.coerceXmlValue) {
     blocks.push(COERCE_XML_VALUE_SOURCE);

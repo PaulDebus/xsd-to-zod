@@ -3909,8 +3909,9 @@ export const irToZod = (
     if (choices === undefined) {
       return "";
     }
-    const value = opts?.js ? "val" : "(val as Record<string, unknown>)";
-    return `.superRefine((val, ctx) => { for (const message of choiceGroupIssues(${choices}, ${value})) { ctx.addIssue({ code: "custom", message }); } })`;
+    // standalone output is always TypeScript (standalone + js is rejected
+    // above), so the checker's value parameter needs an explicit cast.
+    return `.superRefine((val, ctx) => { for (const message of choiceGroupIssues(${choices}, (val as Record<string, unknown>))) { ctx.addIssue({ code: "custom", message }); } })`;
   };
 
   // Which extension-derived types can emit `.extend({ own props })` over the
