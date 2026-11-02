@@ -187,11 +187,14 @@ else; the helper checks it needs (`xsdPattern`, lexical validators, digit/order
 checks, structured date/time parsing) are inlined from the generator's own
 helpers, and `xs:choice` exclusivity runs as a generated `.superRefine`
 instead of registry metadata. What is lost: XML I/O, namespace/tag dispatch,
-document order and lexical retention, and runtime-enforced value-space facets
-that need the original lexical (for example `xs:decimal` `totalDigits`,
-`fractionDigits`, and order bounds, or enumerations on structured/union types).
-Those schemas are still valid reusable Zod schemas (`z.infer`, `.parse`,
-fragment validation), just with a smaller feature set than the default output.
+document order and lexical retention, identity constraints (`xs:key`,
+`xs:unique`, `xs:keyref`), and runtime-enforced value-space facets that need the
+original lexical (for example `xs:decimal` `totalDigits`, `fractionDigits`, and
+order bounds, or enumerations on structured/union types). Generation warns with
+the specific unsupported feature; use the default runtime-backed output when
+those matter. Those schemas are still valid reusable Zod schemas (`z.infer`,
+`.parse`, fragment validation), just with a smaller feature set than the default
+output.
 
 Successful fetches write `xsd-to-zod.lock.json` in the current directory and populate the user cache; commit the lockfile for reviewable, reproducible remote schemas. Use `--frozen` in CI and `--offline` when network access is unavailable. Entries record the requested URL, final post-redirect URL, SHA-256 digest, fetch timestamp, and optional ETag:
 

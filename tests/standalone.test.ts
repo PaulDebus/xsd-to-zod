@@ -71,6 +71,31 @@ describe("--standalone output", () => {
     expect(source).toContain("xsdPattern(");
   });
 
+  it("warns about identity constraints it cannot enforce without the runtime", async () => {
+    const identityXsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="id" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="itemKey"><xs:selector xpath="item"/><xs:field xpath="@id"/></xs:key>
+  </xs:element>
+</xs:schema>`;
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, identityXsd);
+      const result = irToZod(await parseXsd([file]), { standalone: true });
+      expect(result.warnings.join("\n")).toContain("identity constraints");
+      expect(result.schemas).toContain("identity constraints (xs:key, xs:unique, xs:keyref)");
+    });
+  });
+
   it("keeps the registry-backed output unchanged when the flag is off", async () => {
     const source = await generatedFor(XSD);
     expect(source).toContain("from 'xsd-to-zod'");

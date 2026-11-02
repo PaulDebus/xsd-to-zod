@@ -3190,6 +3190,8 @@ export const irToZod = (
     Object.values(ir.complexTypes).some((t) =>
       t.fields.some((f) => (f.identityConstraints?.length ?? 0) > 0),
     );
+  const standaloneIdentityWarning =
+    "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
 
   // Ergonomic output. The identity pass understands collapsed wrapper slots
   // and synthetic choice arrays, so the shape does not depend on whether the
@@ -3721,6 +3723,9 @@ export const irToZod = (
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   // The warning scrolls away; the comment lives with the artifact.
   schemaLines.push(...unenforcedConstructsMessages(ir).header);
+  if (standalone && moduleHasIdentity) {
+    schemaLines.push(`// [standalone] ${standaloneIdentityWarning}`);
+  }
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
   schemaLines.push(
@@ -4483,6 +4488,7 @@ export const irToZod = (
   }
 
   const warnings = [
+    ...(standalone && moduleHasIdentity ? [`[standalone] ${standaloneIdentityWarning}`] : []),
     ...(standalone && lexicalFacetsByType.size > 0
       ? [
           "[standalone] schemas carry no runtime metadata, so value-space facets that need the original lexical (xs:decimal order/digit facets, enumerations on structured/union types) are not enforced; regenerate with the default runtime-backed mode when those matter",
