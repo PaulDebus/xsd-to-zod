@@ -40,6 +40,12 @@ the same pure checks. The default runtime keeps its `identityConstraints: false`
 opt-out; that is why the checks must remain callable/skippable rather than being
 unconditionally embedded in `.parse`.
 
+Standalone diagnostics are **warnings, not hard errors**. When a schema uses a
+feature the standalone target cannot enforce, generation names the feature and
+points at the default runtime-backed output. Users decide whether the narrower
+target is acceptable; the tool does not silently drop a check and does not
+refuse to generate.
+
 ## Non-goals
 
 - Do not move XML-representation checks (lexicals, namespaces, order, mixed
@@ -56,8 +62,10 @@ unconditionally embedded in `.parse`.
   `serializeXml`, and `xmlRegistry` stay. `identityConstraints: false` still
   works. The root entry no longer pulls in Node-only dependencies.
 - **Standalone users:** identity constraints are enforced when they are
-  data-shape constraints. XML I/O remains unavailable. Checks that need the
-  original XML representation warn instead of silently disappearing.
+  data-shape constraints after the refactor. Until then, and for constraints
+  that need the original XML representation, generation warns with the specific
+  unsupported feature. XML I/O remains unavailable. Users decide whether the
+  narrower target is acceptable.
 - **Programmatic compiler users:** import from `xsd-to-zod/compiler`.
 - **Generated-code users:** regenerate. Default output should stay
   behaviorally equivalent; standalone output gains identity validation.
@@ -68,8 +76,9 @@ unconditionally embedded in `.parse`.
 ## Sequencing
 
 1. Compiler split: #342.
-2. Standalone target: #340, with an explicit warning or hard error for identity
-   constraints until the shared checker exists.
+2. Standalone target: #340, with explicit warnings for unsupported features
+   (identity constraints, lexical-dependent facets) until the shared checker
+   exists.
 3. Refactor PR: extract the shared validation module (choice, identity),
    generate descriptors from `IdentityConstraint` / `IdentityPath`, make the
    runtime call the shared checks, and let standalone reuse them.
