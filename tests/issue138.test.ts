@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseXsd, safeParseXml } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
+import { safeParseXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for the circular simple-type fix: a union whose

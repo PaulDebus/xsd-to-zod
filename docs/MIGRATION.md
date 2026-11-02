@@ -48,11 +48,14 @@ are finalized.
 
 ## Planned 1.0 boundary
 
-1. Settle the public API contract before removing exports. Helpers imported by
-   generated files are runtime API, even if not individually documented in the
-   README, including the branch-agreed default helper `coerceXmlValue`.
-   Inventory generated imports across all modes first. Decide whether
-   compiler APIs stay at `.` or move to a documented compiler subpath.
+1. **Compiler subpath (decided).** Build-time APIs move to
+   `xsd-to-zod/compiler`: `parseXsd`, `irToZod`, `IrToZodOptions`,
+   `ParseXsdOptions`, the IR types, `runPostGenerationFormatting`,
+   `readXmlFile`, `Xsd2ZodError`, and the remote fetch/download helpers. The
+   root keeps only the runtime and everything generated modules import,
+   including `coerceXmlValue` and the datatype/facet helpers. `./validate` is
+   unchanged. Generated files are unchanged; programmatic consumers change one
+   import path.
 2. Make ergonomic output the default: attribute keys without `@` (collision
    fallback keeps it), scalar value wrappers, and ordered tagged arrays for
    supported repeated choices. Delete the temporary flag at that boundary.

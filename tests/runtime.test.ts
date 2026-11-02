@@ -2,12 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { z } from "zod";
-import {
-  irToZod,
-  parseXml as parseXmlRuntime,
-  parseXsd,
-  serializeXml as serializeXmlRuntime,
-} from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml as parseXmlRuntime, serializeXml as serializeXmlRuntime } from "../src/index.js";
 import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 const XSD = `<?xml version="1.0"?>

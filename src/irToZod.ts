@@ -3106,8 +3106,10 @@ export const unenforcedConstructsMessages = (ir: XsdIr): { cli: string[]; header
 };
 
 export type IrToZodOptions = {
-  // Emit plain JavaScript (no TS type annotations) so the output can be
-  // imported directly as .mjs — used by the CLI validate subcommand.
+  // Emit plain JavaScript (no TS type annotations or type-only imports) so the
+  // output can be imported directly as .mjs. This is a compiler/language target
+  // used by the CLI validate subcommand; it still emits the registry-backed
+  // runtime output. Not combinable with a future registry-free target.
   js?: boolean;
   // "structured" parses the XSD date/time builtins into plain objects
   // (xsdDateTime.ts) via a transform after the lexical check; "string"

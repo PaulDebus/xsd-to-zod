@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { W3cInvalidSchemaCase } from "./w3cDriver.js";
 
-vi.mock("../src/index.js", () => ({
+vi.mock("../src/compiler.js", () => ({
   parseXsd: vi.fn(),
   readXmlFile: vi.fn(() => '<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"/>'),
 }));
@@ -10,7 +10,7 @@ vi.mock("../src/validate.js", () => ({
   validateSchema: vi.fn(),
 }));
 
-import { parseXsd } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
 import { validateSchema } from "../src/validate.js";
 import { evaluateInvalidSchemaCase } from "./w3cSchemaValidity.js";
 

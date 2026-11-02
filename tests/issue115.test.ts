@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for length facet units: octets for hex/base64 binary,

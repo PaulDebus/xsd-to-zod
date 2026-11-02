@@ -1,4 +1,4 @@
-import { readXmlFile } from "../src/index.js";
+import { readXmlFile } from "../src/compiler.js";
 import { extractRootInfo, findRootSchema, generateAndImport } from "./helpers.js";
 import type { W3cCase } from "./w3cDriver.js";
 

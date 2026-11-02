@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseXsd } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
 import { runRoundTrip } from "./helpers.js";
 import { discoverValidCases } from "./w3cDriver.js";
 

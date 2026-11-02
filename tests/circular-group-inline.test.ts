@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseXsd } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
 import { generateAndImport } from "./helpers.js";
 
 // Regression: circular group refs whose cycle passes through an element's

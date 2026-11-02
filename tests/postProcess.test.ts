@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runPostGenerationFormatting } from "../src/index.js";
+import { runPostGenerationFormatting } from "../src/compiler.js";
 import { withTempDir } from "./helpers.js";
 
 // Fake formatter bins: shell scripts that log their invocation into the temp

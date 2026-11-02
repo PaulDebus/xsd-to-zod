@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import type { XsdIr } from "../src/index.js";
-import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
+import type { XsdIr } from "../src/compiler.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Optional group particles are optional as a unit: an occurrence contributes

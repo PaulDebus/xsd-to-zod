@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { irToZod, parseXml, parseXsd, serializeXml, xmlRegistry } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml, xmlRegistry } from "../src/index.js";
 import {
   asRestriction,
   generateAndImport,

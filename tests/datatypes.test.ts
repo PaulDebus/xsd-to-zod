@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXml, parseXsd, safeParseXml, serializeXml } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, safeParseXml, serializeXml } from "../src/index.js";
 import type { IrToZodOptions } from "../src/irToZod.js";
 import {
   xsdBase64Binary,

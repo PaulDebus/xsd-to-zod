@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { irToZod, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
 import { TS_TYPE_RESERVED, XSD_LEXICAL_VALIDATORS, XSD_STRUCTURED_TYPES } from "../src/irToZod.js";
 import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 

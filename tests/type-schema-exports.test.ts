@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXsd, xmlRegistry } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { xmlRegistry } from "../src/index.js";
 import { importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 const generate = async (

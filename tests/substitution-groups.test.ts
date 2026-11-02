@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { parseXml, parseXsd, serializeXml } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Substitution groups: a member element is accepted wherever its head is

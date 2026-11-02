@@ -5,15 +5,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import type { z } from "zod";
-import {
-  irToZod,
-  parseXml,
-  parseXsd,
-  readXmlFile,
-  safeParseXml,
-  serializeXml,
-  xmlRegistry,
-} from "../src/index.js";
+import { irToZod, parseXsd, readXmlFile } from "../src/compiler.js";
+import { parseXml, safeParseXml, serializeXml, xmlRegistry } from "../src/index.js";
 import type { IrToZodOptions } from "../src/irToZod.js";
 import { decodeTagNameCharRefs } from "../src/runtime.js";
 import type { SimpleTypeDef } from "../src/types.js";

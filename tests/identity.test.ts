@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { IrToZodOptions } from "../src/index.js";
+import type { IrToZodOptions } from "../src/compiler.js";
 import { parseXsd } from "../src/parseXsd.js";
 import { parseXml, safeParseXml, serializeXml } from "../src/runtime.js";
 import { findRootSchema, generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
