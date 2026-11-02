@@ -34,7 +34,8 @@
     "prepublishOnly": "npm run test:release && npm run build",
     "pretest:corpus": "node scripts/require-w3c-corpus.mjs && node scripts/clean-corpus-reports.mjs && npm run build",
     "test:corpus": "vitest run --config vitest.corpus.config.ts && node scripts/merge-negative-reports.mjs",
-    "test:release": "npm run lint && npm run test:coverage && npm run test:corpus"
+    "test:release": "npm run lint && npm run test:coverage && npm run test:corpus",
+    "gen:standalone": "node scripts/embed-standalone-helpers.mjs"
   },
   "repository": {
     "type": "git",

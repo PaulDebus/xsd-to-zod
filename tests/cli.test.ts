@@ -257,6 +257,22 @@ describe("CLI e2e", () => {
     });
   });
 
+  it("--standalone emits a self-contained zod-only module", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "test.xsd");
+      fs.writeFileSync(xsdFile, XSD);
+      const r = await runCli([xsdFile, "-o", dir, "--name", "standalone", "--standalone"]);
+
+      expect(r.code).toBe(0);
+      const source = fs.readFileSync(path.join(dir, "standalone.zod.ts"), "utf8");
+      expect(source.split("\n").filter((line) => line.startsWith("import"))).toEqual([
+        "import { z } from 'zod';",
+      ]);
+      expect(source).not.toContain("from 'xsd-to-zod'");
+      expect(source).not.toContain(".register(xmlRegistry");
+    });
+  });
+
   it("defaults output name to input file stem", async () => {
     await withTempDirAsync(async (dir) => {
       const xsdFile = path.join(dir, "my-stem.xsd");
