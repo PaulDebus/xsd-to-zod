@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXml, parseXsd, Xsd2ZodError } from "../src/index.js";
+import { irToZod, parseXsd, Xsd2ZodError } from "../src/compiler.js";
+import { parseXml } from "../src/index.js";
 import { generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for codegen fixes.

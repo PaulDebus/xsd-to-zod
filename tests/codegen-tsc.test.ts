@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "vitest";
-import { irToZod, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
 import { discoverCuratedCases, expectTscPasses } from "./helpers.js";
 
 // Smoke test: generated .zod.ts output must typecheck under the project's strict

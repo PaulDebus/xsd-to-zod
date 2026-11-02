@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for the W3C sun/ms undefinedValue bucket: XML-namespace

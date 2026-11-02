@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseXsd } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
 import { withTempDirAsync } from "./helpers.js";
 
 // Regression tests for redefine self-references: a group/attributeGroup/

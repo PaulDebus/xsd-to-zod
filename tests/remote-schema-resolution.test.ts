@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SchemaResolutionBase } from "../src/index.js";
-import { parseXsd, type Xsd2ZodError } from "../src/index.js";
+import type { SchemaResolutionBase } from "../src/compiler.js";
+import { parseXsd, type Xsd2ZodError } from "../src/compiler.js";
 import { withTempDirAsync } from "./helpers.js";
 
 const MAIN_XSD = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"

@@ -1,55 +1,10 @@
-export type { DownloadedSchemaClosure, DownloadSchemaOptions } from "./download.js";
-export { downloadSchemaClosure } from "./download.js";
-export { Xsd2ZodError } from "./errors.js";
-export type { FetchSchemaResolver, FetchSchemaResolverOptions } from "./fetchSchema.js";
-export { createFetchSchemaResolver, describeSchemaBase } from "./fetchSchema.js";
-export type { IrToZodOptions } from "./irToZod.js";
-export {
-  fieldKeyFromIr,
-  irToZod,
-  rootSchemaExportNames,
-  sanitizeIdentifier,
-} from "./irToZod.js";
-export type {
-  ParseXsdOptions,
-  ResolvedSchema,
-  ResolveSchema,
-  SchemaResolutionBase,
-} from "./parseXsd.js";
-export { parseXsd } from "./parseXsd.js";
-export { runPostGenerationFormatting } from "./postProcess.js";
-export { readXmlFile } from "./readXmlFile.js";
-export type {
-  CachedRemoteSchema,
-  FetchedRemoteSchema,
-  RemoteSchemaLockEntry,
-  RemoteSchemaStoreOptions,
-} from "./remoteSchemaStore.js";
-export { REMOTE_SCHEMA_LOCKFILE, RemoteSchemaStore } from "./remoteSchemaStore.js";
+// Runtime API: everything generated modules import, plus the XML parse /
+// serialize surface. The compiler lives at `xsd-to-zod/compiler`; codegen
+// internals and build-time-only dependencies must not leak into this entry.
+
 export type { ParseXmlOptions, SerializeXmlOptions } from "./runtime.js";
-export {
-  coerceXmlValue,
-  decodeTagNameCharRefs,
-  decodeXmlEntities,
-  parseXml,
-  safeParseXml,
-  serializeXml,
-} from "./runtime.js";
-export type {
-  Cardinality,
-  ChoiceArrayBranch,
-  ChoiceArrayField,
-  ComplexTypeDef,
-  Diagnostic,
-  DiagnosticKind,
-  ElementDef,
-  Facet,
-  FieldKind,
-  IrField,
-  QName,
-  SimpleTypeDef,
-  XsdIr,
-} from "./types.js";
+export { coerceXmlValue, parseXml, safeParseXml, serializeXml } from "./runtime.js";
+export type { QName } from "./types.js";
 export type {
   XmlChoiceArrayMeta,
   XmlChoiceBranchMeta,
@@ -64,9 +19,6 @@ export type {
 export { xmlRegistry } from "./xmlMeta.js";
 export type { XsdOrderDatatype } from "./xsdChecks.js";
 export {
-  countFractionDigits,
-  countTotalDigits,
-  xsdDecimalCompare,
   xsdDecimalLexical,
   xsdFractionDigits,
   xsdOrderCompare,

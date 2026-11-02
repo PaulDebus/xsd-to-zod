@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ZodError, type z } from "zod";
-import { irToZod, parseXml, parseXsd, serializeXml, xmlRegistry } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml, xmlRegistry } from "../src/index.js";
 import {
   parseXsdDate,
   parseXsdDateTime,

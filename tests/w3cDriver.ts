@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import XMLParser from "@nodable/flexible-xml-parser";
-import { readXmlFile } from "../src/index.js";
+import { readXmlFile } from "../src/compiler.js";
 import { splitQName } from "../src/qname.js";
 import { createOutputBuilder } from "../src/runtime.js";
 

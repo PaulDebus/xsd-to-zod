@@ -249,10 +249,18 @@ xsd-to-zod validate data.xml --xsd schema.xsd                    # zod tier (typ
 xsd-to-zod validate data.xml --xsd schema.xsd -e libxml2         # conformance tier
 ```
 
+### Package entry points
+
+| Import | Use |
+|--------|-----|
+| `xsd-to-zod` | Runtime: `parseXml` / `safeParseXml` / `serializeXml`, `xmlRegistry`, and every helper generated modules import. Generated files only use this entry. |
+| `xsd-to-zod/compiler` | Build-time: `parseXsd`, `irToZod`, remote schema fetching/downloading, post-generation formatting. |
+| `xsd-to-zod/validate` | Optional libxml2 conformance tier. |
+
 ### Programmatic API
 
 ```ts
-import { parseXsd, irToZod, runPostGenerationFormatting } from 'xsd-to-zod';
+import { parseXsd, irToZod, runPostGenerationFormatting } from 'xsd-to-zod/compiler';
 import { writeFileSync } from 'node:fs';
 
 const ir = await parseXsd(['schema.xsd']);
@@ -264,15 +272,20 @@ runPostGenerationFormatting(['schema.zod.ts']);
 
 `parseXsd` is asynchronous and never fetches from the network itself. Library
 consumers can supply `resolveSchema(location, base)` to materialize an http(s)
-entry schema or remote import — `createFetchSchemaResolver` from `'xsd-to-zod'`
-provides the same fetching, caps, and host policy the CLI uses; returning
-`undefined` preserves the default "remote schemaLocation skipped" diagnostic.
+entry schema or remote import — `createFetchSchemaResolver` from
+`'xsd-to-zod/compiler'` provides the same fetching, caps, and host policy the
+CLI uses; returning `undefined` preserves the default "remote schemaLocation
+skipped" diagnostic.
+
+`irToZod(ir, { js: true })` emits plain JavaScript (no type annotations) for
+direct `.mjs` import; the CLI `validate` command uses it internally. It still
+emits the registry-backed runtime output.
 
 The vendoring flow is available too, with the same lockfile/cache store the CLI
 uses:
 
 ```ts
-import { downloadSchemaClosure, RemoteSchemaStore } from 'xsd-to-zod';
+import { downloadSchemaClosure, RemoteSchemaStore } from 'xsd-to-zod/compiler';
 
 const store = await RemoteSchemaStore.open({ cwd: process.cwd() });
 const result = await downloadSchemaClosure('https://example.com/schema.xsd', {

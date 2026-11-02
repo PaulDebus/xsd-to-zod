@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { irToZod, parseXsd, safeParseXml } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { safeParseXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Targeted regression tests for facet codegen fixes: facet

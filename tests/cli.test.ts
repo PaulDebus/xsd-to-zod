@@ -210,6 +210,23 @@ describe("CLI e2e", () => {
     expect(r.code).toBe(0);
   });
 
+  it("supports an explicit generate subcommand", async () => {
+    await withTempDirAsync(async (dir) => {
+      const xsdFile = path.join(dir, "test.xsd");
+      fs.writeFileSync(xsdFile, XSD);
+      const r = await runCli(["generate", xsdFile, "-o", dir, "--name", "sub"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Wrote");
+      expect(fs.existsSync(path.join(dir, "sub.zod.ts"))).toBe(true);
+    });
+  });
+
+  it("reports no files for the generate subcommand like the default command", async () => {
+    const r = await runCliQuiet(["generate"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("no .xsd files found");
+  });
+
   it("exits with error when no files given", async () => {
     const r = await runCliQuiet([]);
     expect(r.code).toBe(1);

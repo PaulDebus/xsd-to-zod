@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { parseXsd } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
 import type { ComplexTypeDef, IrField, QName } from "../src/types.js";
 import { asRestriction } from "./helpers.js";
 

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { irToZod, parseXml, parseXsd, serializeXml } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml } from "../src/index.js";
 import { expectTscPasses, importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 // serializeXml takes the schema's input type: it validates before walking, so

@@ -1,4 +1,4 @@
-import { parseXsd, readXmlFile } from "../src/index.js";
+import { parseXsd, readXmlFile } from "../src/compiler.js";
 import type { W3cInvalidSchemaCase } from "./w3cDriver.js";
 
 // Schema-validity outcome for a schema the suite marks invalid (XSD 1.0):

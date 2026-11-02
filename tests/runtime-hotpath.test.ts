@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXml, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml } from "../src/index.js";
 import { importGeneratedSchemas, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Codegen wraps every generated type in z.lazy, whose getter builds the whole

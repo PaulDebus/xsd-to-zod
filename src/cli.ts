@@ -794,60 +794,69 @@ const validate = async (xmlFile: string, opts: ValidateOptions): Promise<void> =
   console.log(JSON.stringify(parsed.data, null, 2));
 };
 
+const addGenerateOptions = (command: Command): Command =>
+  command
+    .argument(
+      "[files-or-dirs...]",
+      "XSD schema files or directories (directories are recursively expanded)",
+    )
+    .option("-o, --out <dir>", "Output directory", ".")
+    .option("-n, --name <name>", "Basename for the generated file (default: stem of first input)")
+    .option("-f, --format", "Run formatter on the generated file")
+    .option(
+      "--include-libraries",
+      "Include type-definition-only schemas (those without root elements)",
+    )
+    .option(
+      "--allow-missing-imports",
+      "Suppress warnings for unresolved XSD references; unresolved element refs map to z.unknown() instead of being dropped",
+    )
+    .option("--silent", "Suppress informational output (warnings are still shown)")
+    .option(
+      "--datatypes <mode>",
+      'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
+    )
+    .option(
+      "--integers <mode>",
+      'Mapping for the xs:integer family: "number" (default; JSON-safe, exact below 2^53, long/unsignedLong outer bounds dropped) or "bigint" (exact at any magnitude, but JSON.stringify throws on the parsed data)',
+    )
+    .option(
+      "--decimal <mode>",
+      'Mapping for xs:decimal: "number" (default; float64, lossy beyond ~16 significant digits) or "string" (exact canonical decimal lexical)',
+    )
+    .option(
+      "--ergonomic",
+      'Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars, drop the "@" prefix from attribute keys (colliding attributes keep it), and emit repeated choices as one tagged array',
+    )
+    .option("--fetch", "Resolve remote imports/includes for local schema inputs")
+    .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
+    .option("--frozen", "Verify remote schemas against xsd-to-zod.lock.json without updating it")
+    .option("--offline", "Resolve remote schemas from the local cache only")
+    .option(
+      "--revalidate",
+      "Revalidate cached remote schemas against the server (ETag/If-None-Match) instead of serving them from the cache unchecked",
+    )
+    .option("--allow-http", "Permit insecure http:// schema URLs")
+    .option(
+      "--allow-host <host>",
+      "Allow fetching from a host (repeatable; applies to entry URLs too)",
+      collectOption,
+      [],
+    )
+    .action(generate);
+
 const program = new Command()
   .name("xsd-to-zod")
   .version(PACKAGE_VERSION)
   .exitOverride()
   .enablePositionalOptions()
-  .description("Turn XSD schemas into strongly-typed Zod parsers for XML.")
-  .argument(
-    "[files-or-dirs...]",
-    "XSD schema files or directories (directories are recursively expanded)",
-  )
-  .option("-o, --out <dir>", "Output directory", ".")
-  .option("-n, --name <name>", "Basename for the generated file (default: stem of first input)")
-  .option("-f, --format", "Run formatter on the generated file")
-  .option(
-    "--include-libraries",
-    "Include type-definition-only schemas (those without root elements)",
-  )
-  .option(
-    "--allow-missing-imports",
-    "Suppress warnings for unresolved XSD references; unresolved element refs map to z.unknown() instead of being dropped",
-  )
-  .option("--silent", "Suppress informational output (warnings are still shown)")
-  .option(
-    "--datatypes <mode>",
-    'Mapping for the XSD date/time builtins: "string" (default) or "structured" (parse into plain objects, serialize canonically)',
-  )
-  .option(
-    "--integers <mode>",
-    'Mapping for the xs:integer family: "number" (default; JSON-safe, exact below 2^53, long/unsignedLong outer bounds dropped) or "bigint" (exact at any magnitude, but JSON.stringify throws on the parsed data)',
-  )
-  .option(
-    "--decimal <mode>",
-    'Mapping for xs:decimal: "number" (default; float64, lossy beyond ~16 significant digits) or "string" (exact canonical decimal lexical)',
-  )
-  .option(
-    "--ergonomic",
-    'Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars, drop the "@" prefix from attribute keys (colliding attributes keep it), and emit repeated choices as one tagged array',
-  )
-  .option("--fetch", "Resolve remote imports/includes for local schema inputs")
-  .option("--no-fetch", "Fetch only remote entry schemas; skip their remote imports/includes")
-  .option("--frozen", "Verify remote schemas against xsd-to-zod.lock.json without updating it")
-  .option("--offline", "Resolve remote schemas from the local cache only")
-  .option(
-    "--revalidate",
-    "Revalidate cached remote schemas against the server (ETag/If-None-Match) instead of serving them from the cache unchecked",
-  )
-  .option("--allow-http", "Permit insecure http:// schema URLs")
-  .option(
-    "--allow-host <host>",
-    "Allow fetching from a host (repeatable; applies to entry URLs too)",
-    collectOption,
-    [],
-  )
-  .action(generate);
+  .description("Turn XSD schemas into strongly-typed Zod parsers for XML.");
+
+addGenerateOptions(program);
+
+addGenerateOptions(program.command("generate")).description(
+  "Generate Zod schemas from XSD files (same as the default command)",
+);
 
 program
   .command("download")

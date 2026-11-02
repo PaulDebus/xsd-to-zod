@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseXml, parseXsd, serializeXml } from "../src/index.js";
+import { parseXsd } from "../src/compiler.js";
+import { parseXml, serializeXml } from "../src/index.js";
 import { findRootSchema, generateAndImport, withTempDirAsync } from "./helpers.js";
 
 // Mixed content models (complexType mixed="true"): character data lands in an

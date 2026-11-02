@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import iconv from "iconv-lite";
 import { describe, expect, it } from "vitest";
-import { readXmlFile } from "../src/index.js";
+import { readXmlFile } from "../src/compiler.js";
 import { withTempDir } from "./helpers.js";
 
 const withTempFile = (name: string, content: Buffer, fn: (filePath: string) => void): void => {

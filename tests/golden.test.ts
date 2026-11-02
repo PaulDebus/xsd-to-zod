@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { irToZod, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
 import { PACKAGE_VERSION } from "../src/version.js";
 import { discoverCuratedCases } from "./helpers.js";
 

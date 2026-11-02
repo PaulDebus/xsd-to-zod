@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { irToZod, parseXml, parseXsd } from "../src/index.js";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { parseXml } from "../src/index.js";
 import { generateAndImport, importGeneratedSchemas, withTempDirAsync } from "./helpers.js";
 
 // Integer-mapping acceptance, shaped on the ISO 23387 data templates whose
