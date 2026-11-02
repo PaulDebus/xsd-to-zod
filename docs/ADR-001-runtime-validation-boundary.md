@@ -1,0 +1,91 @@
+# ADR-001: Runtime and validation boundary
+
+- **Status:** Accepted (pre-1.0)
+- **Date:** 2026-11-02
+- **Related:** #340 (standalone target), #341 (types target), #342 (compiler
+  split), `docs/1.0-output-defaults.md`, `docs/MIGRATION.md`
+
+## Context
+
+The compiler split established two entry points: the root runtime and
+`xsd-to-zod/compiler`. The standalone target showed a remaining coupling: the
+identity-constraint pass is data-shape validation living inside the XML runtime.
+As a result, standalone output silently dropped `xs:key`, `xs:unique`, and
+`xs:keyref`.
+
+The same question applies to other checks. Before 1.0 freezes the generated
+schema and runtime API, we need a stable boundary between:
+
+- what is true of the **data shape**, and
+- what is true of the **XML representation**.
+
+## Decision
+
+Split responsibilities as follows:
+
+| Layer | Owns |
+|---|---|
+| Compiler (`xsd-to-zod/compiler`) | XSD → IR → codegen; no XML runtime |
+| Generated schema + types | Data model |
+| Shared validation module | Pure data-shape checks over the data + generated descriptors: choice exclusivity, identity constraints, value-expressible facets |
+| Runtime (`xsd-to-zod`) | XML ↔ data; calls shared checks where appropriate; representation checks: lexicals, namespaces, tag matching, document order, mixed-content interleaving, `xsi:type`, element defaults, serialization |
+| Standalone output | Generated schema + shared checks; no XML metadata, no `xsd-to-zod` import |
+| Types output | Types only; no checks, no runtime |
+
+The generated schema is the **data contract**. The runtime is the **XML
+adapter**, not a second data validator.
+
+The shared validation module is the seam: both the schema and the runtime use
+the same pure checks. The default runtime keeps its `identityConstraints: false`
+opt-out; that is why the checks must remain callable/skippable rather than being
+unconditionally embedded in `.parse`.
+
+## Non-goals
+
+- Do not move XML-representation checks (lexicals, namespaces, order, mixed
+  content, `xsi:type` spelling) into the generated schema. That would require
+  carrying an XML tree and recreate the current coupling.
+- Do not inline the whole runtime into standalone output.
+- Do not keep a second implementation of choice or identity validation.
+- Do not change default `parseXml` / `serializeXml` results as part of this
+  refactor. A behavior change there is a bug, not the intent.
+
+## User impact
+
+- **Default runtime users:** no API or behavior change. `parseXml`,
+  `serializeXml`, and `xmlRegistry` stay. `identityConstraints: false` still
+  works. The root entry no longer pulls in Node-only dependencies.
+- **Standalone users:** identity constraints are enforced when they are
+  data-shape constraints. XML I/O remains unavailable. Checks that need the
+  original XML representation warn instead of silently disappearing.
+- **Programmatic compiler users:** import from `xsd-to-zod/compiler`.
+- **Generated-code users:** regenerate. Default output should stay
+  behaviorally equivalent; standalone output gains identity validation.
+- **Types users:** new future target with no runtime dependency.
+- **Error-message consumers:** standalone identity errors are new and need a
+  documented path/message contract. Default runtime errors stay stable.
+
+## Sequencing
+
+1. Compiler split: #342.
+2. Standalone target: #340, with an explicit warning or hard error for identity
+   constraints until the shared checker exists.
+3. Refactor PR: extract the shared validation module (choice, identity),
+   generate descriptors from `IdentityConstraint` / `IdentityPath`, make the
+   runtime call the shared checks, and let standalone reuse them.
+4. Rebase #340 onto the shared checker and remove the temporary warning/error
+   where identity is now enforced.
+5. Ergonomic output flip and the 1.0 release gate.
+
+## Open questions
+
+- Which identity constraints are purely data-shape, and which still need XML
+  provenance (expanded QNames, lexical exactness, `xsi:type`, nil attributes)?
+  Those that need provenance must stay runtime-only and warn in standalone.
+- How should `identityConstraints: false` interact with the shared checker in
+  each target?
+- Does `xmlRegistry` keep identity metadata for inspection/compatibility, or
+  does the runtime read generated descriptors instead?
+- How do standalone identity error paths and messages relate to the runtime
+  ones?
+- Does the types target (#341) share the same descriptor/type allocation path?
