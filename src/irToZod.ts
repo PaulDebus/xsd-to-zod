@@ -3190,9 +3190,6 @@ export const irToZod = (
     Object.values(ir.complexTypes).some((t) =>
       t.fields.some((f) => (f.identityConstraints?.length ?? 0) > 0),
     );
-  const standaloneIdentityWarning =
-    "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
-
   // Ergonomic output. The identity pass understands collapsed wrapper slots
   // and synthetic choice arrays, so the shape does not depend on whether the
   // module declares an identity constraint.
@@ -3723,9 +3720,6 @@ export const irToZod = (
   schemaLines.push("// AUTO-GENERATED — DO NOT EDIT");
   // The warning scrolls away; the comment lives with the artifact.
   schemaLines.push(...unenforcedConstructsMessages(ir).header);
-  if (standalone && moduleHasIdentity) {
-    schemaLines.push(`// [standalone] ${standaloneIdentityWarning}`);
-  }
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
   schemaLines.push(
@@ -4380,14 +4374,50 @@ export const irToZod = (
     );
   }
 
-  const identityElementsName =
-    moduleHasIdentity && !standalone ? alloc("xmlIdentityElements") : undefined;
+  const identityElementsName = moduleHasIdentity ? alloc("xmlIdentityElements") : undefined;
   if (identityElementsName !== undefined) {
     const entries = Object.values(ir.elements).map(
       (element) =>
         `${JSON.stringify(element.name)}: z.lazy(() => ${primitiveToZod(element.typeName, primitiveCtx)})`,
     );
     schemaLines.push(`const ${identityElementsName} = { ${entries.join(", ")} };`);
+  }
+  const identityMetaName = standalone && moduleHasIdentity ? alloc("identityMeta") : undefined;
+  const identityCtxName = standalone && moduleHasIdentity ? alloc("identityCtx") : undefined;
+  if (identityMetaName !== undefined && identityCtxName !== undefined) {
+    schemaLines.push(`const ${identityMetaName} = new Map<unknown, unknown>();`);
+    for (const [typeName, metaBody] of metaBodyByType) {
+      const schemaConst = constName.get(typeName);
+      if (schemaConst === undefined) {
+        continue;
+      }
+      schemaLines.push(`${identityMetaName}.set(${schemaConst}, { ${metaBody} });`);
+    }
+    schemaLines.push(
+      `const ${identityCtxName}: IdentityContext = {`,
+      `  getRootMeta: (schema) => ${identityMetaName}.get(schema) as IdentityRootMeta | undefined,`,
+      `  getFieldsMeta: (schema) => (${identityMetaName}.get(schema) as IdentityTypeMeta | undefined)?.fields,`,
+      `  getProvenance: () => ({}),`,
+      `  getSubstQName: () => undefined,`,
+      `  getRootLexical: () => undefined,`,
+      `  simpleValue: (node) => simpleIdentityValue(node, ${identityCtxName}),`,
+      `  coerceLexical: (lexical) => lexical,`,
+      `  getSubstitutionSchema: (_qname, item) => item,`,
+      `  getSubstitutionMemberMeta: () => undefined,`,
+      `  getChoiceBranchSchema: (fieldSchema, tag) => {`,
+      `    const def = unwrapModifiers(fieldSchema)._zod.def;`,
+      `    if (def.type !== "array") return undefined;`,
+      `    const union = unwrapModifiers((def as z.core.$ZodArrayDef).element)._zod.def;`,
+      `    if (!("options" in union)) return undefined;`,
+      `    for (const option of (union as z.core.$ZodUnionDef).options) {`,
+      `      const shape = objectDefOf(option as AnySchema)?.shape;`,
+      `      if (shape?.[tag] !== undefined) return shape[tag] as AnySchema;`,
+      `    }`,
+      `    return undefined;`,
+      `  },`,
+      `  getXsiTypeOptionQName: (schema) => (${identityMetaName}.get(schema) as { qname?: string } | undefined)?.qname as QName | undefined,`,
+      `};`,
+    );
   }
   for (const root of ir.rootElements) {
     const rootDef = ir.elements[root];
@@ -4459,9 +4489,17 @@ export const irToZod = (
       ir.complexTypes[rootDef.typeName]?.description ??
       ir.simpleTypes[rootDef.typeName]?.description;
     const jsDoc = description ? `${formatJsDoc(description, 0)}\n` : "";
+    const rootName = exportNames.get(root);
+    const identityCheck =
+      standalone && identityCtxName !== undefined
+        ? `.superRefine((value, ctx) => { for (const issue of identityIssues(${identityCtxName}, ${rootName}, value)) ctx.addIssue(issue as z.core.$ZodIssue); })`
+        : "";
     schemaLines.push(
-      `${jsDoc}export const ${exportNames.get(root)} = ${registered(expr, rootDef.description, `{ ${rootMeta.join(", ")} }`, standalone)};`,
+      `${jsDoc}export const ${rootName} = ${registered(`${expr}${identityCheck}`, rootDef.description, `{ ${rootMeta.join(", ")} }`, standalone)};`,
     );
+    if (identityMetaName !== undefined && rootName !== undefined) {
+      schemaLines.push(`${identityMetaName}.set(${rootName}, { ${rootMeta.join(", ")} });`);
+    }
   }
 
   if (standalone) {
@@ -4470,6 +4508,7 @@ export const irToZod = (
       fractionDigits: usage.fractionDigits,
       coerceXmlValue: usedHelpers.has("coerceXmlValue"),
       choices: standaloneChoicesByType.size > 0,
+      identity: moduleHasIdentity,
     });
     schemaLines[importLineIndex] = `import { z } from 'zod';\n${helperSource}`;
   } else {
@@ -4488,7 +4527,6 @@ export const irToZod = (
   }
 
   const warnings = [
-    ...(standalone && moduleHasIdentity ? [`[standalone] ${standaloneIdentityWarning}`] : []),
     ...(standalone && lexicalFacetsByType.size > 0
       ? [
           "[standalone] schemas carry no runtime metadata, so value-space facets that need the original lexical (xs:decimal order/digit facets, enumerations on structured/union types) are not enforced; regenerate with the default runtime-backed mode when those matter",

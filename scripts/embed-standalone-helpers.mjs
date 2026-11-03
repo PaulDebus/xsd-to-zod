@@ -13,6 +13,8 @@ const MODULES = [
   "xsdChecks.ts",
   "xsdPattern.ts",
   "choiceCheck.ts",
+  "schemaUtils.ts",
+  "identityCheck.ts",
 ];
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

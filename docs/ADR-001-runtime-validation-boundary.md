@@ -1,6 +1,6 @@
 # ADR-001: Runtime and validation boundary
 
-- **Status:** Accepted (pre-1.0)
+- **Status:** Accepted (pre-1.0); shared checker implemented in `src/identityCheck.ts`
 - **Date:** 2026-11-02
 - **Related:** #340 (standalone target), #341 (types target), #342 (compiler
   split), `docs/1.0-output-defaults.md`, `docs/MIGRATION.md`
@@ -62,10 +62,10 @@ refuse to generate.
   `serializeXml`, and `xmlRegistry` stay. `identityConstraints: false` still
   works. The root entry no longer pulls in Node-only dependencies.
 - **Standalone users:** identity constraints are enforced when they are
-  data-shape constraints after the refactor. Until then, and for constraints
-  that need the original XML representation, generation warns with the specific
-  unsupported feature. XML I/O remains unavailable. Users decide whether the
-  narrower target is acceptable.
+  data-shape constraints. The generated module uses the shared checker with a
+  data-shape value fallback; QName/lexical provenance is unavailable, so those
+  comparisons can differ from the XML runtime. XML I/O remains unavailable.
+  Users decide whether the narrower target is acceptable.
 - **Programmatic compiler users:** import from `xsd-to-zod/compiler`.
 - **Generated-code users:** regenerate. Default output should stay
   behaviorally equivalent; standalone output gains identity validation.
@@ -76,14 +76,13 @@ refuse to generate.
 ## Sequencing
 
 1. Compiler split: #342.
-2. Standalone target: #340, with explicit warnings for unsupported features
-   (identity constraints, lexical-dependent facets) until the shared checker
-   exists.
-3. Refactor PR: extract the shared validation module (choice, identity),
-   generate descriptors from `IdentityConstraint` / `IdentityPath`, make the
-   runtime call the shared checks, and let standalone reuse them.
-4. Rebase #340 onto the shared checker and remove the temporary warning/error
-   where identity is now enforced.
+2. Standalone target: #340, initially with an explicit identity warning while
+   the checker was still runtime-only.
+3. Refactor: `src/schemaUtils.ts` holds the pure zod-schema helpers;
+   `src/identityCheck.ts` is the shared data-shape engine. The runtime supplies
+   parsed-tree provenance; standalone supplies a data-shape fallback and a
+   generated meta map.
+4. Standalone identity is enforced; the temporary identity warning is removed.
 5. Ergonomic output flip and the 1.0 release gate.
 
 ## Open questions
