@@ -632,45 +632,6 @@ const identitySelect = (
   return current;
 };
 
-// Data-shape simple-value fallback for the standalone target. It has no
-// lexicals or QName bindings; the runtime passes its full provenance-aware
-// implementation through `IdentityContext.simpleValue`.
-export const simpleIdentityValue = (node: IdentityNode, ctx: IdentityContext): unknown => {
-  if (node.wrapped !== undefined && node.wrapped.kind === "attribute") {
-    return IDENTITY_COMPLEX;
-  }
-  const { value } = node;
-  if (value === null || value === undefined) {
-    return IDENTITY_ABSENT;
-  }
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "bigint" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return IDENTITY_ABSENT;
-  }
-  if (typeof value === "object") {
-    const fields = node.schema === undefined ? undefined : ctx.getFieldsMeta(node.schema);
-    if (fields !== undefined) {
-      for (const [key, fieldMeta] of Object.entries(fields)) {
-        if (fieldMeta.kind === "text") {
-          const text = (value as Record<string, unknown>)[key];
-          return text === undefined
-            ? IDENTITY_ABSENT
-            : simpleIdentityValue({ ...node, value: text, schema: undefined }, ctx);
-        }
-      }
-    }
-    return IDENTITY_COMPLEX;
-  }
-  return value;
-};
-
 // One field's value for a selected node: the union of all branch targets.
 // Zero targets is ABSENT (key reports, unique/keyref skip); more than one is
 // a violation per §3.11.4 (a key sequence needs exactly one value per field).

@@ -1,6 +1,7 @@
 # ADR-001: Runtime and validation boundary
 
-- **Status:** Accepted (pre-1.0); shared checker implemented in `src/identityCheck.ts`
+- **Status:** Accepted (pre-1.0); identity checker extracted to
+  `src/identityCheck.ts`, runtime-only
 - **Date:** 2026-11-02
 - **Related:** #340 (standalone target), #341 (types target), #342 (compiler
   split), `docs/1.0-output-defaults.md`, `docs/MIGRATION.md`
@@ -27,18 +28,18 @@ Split responsibilities as follows:
 |---|---|
 | Compiler (`xsd-to-zod/compiler`) | XSD → IR → codegen; no XML runtime |
 | Generated schema + types | Data model |
-| Shared validation module | Pure data-shape checks over the data + generated descriptors: choice exclusivity, identity constraints, value-expressible facets |
+| Shared validation module | Pure data-shape checks over the data + generated descriptors: choice exclusivity, value-expressible facets, and identity constraints when XML provenance is available |
 | Runtime (`xsd-to-zod`) | XML ↔ data; calls shared checks where appropriate; representation checks: lexicals, namespaces, tag matching, document order, mixed-content interleaving, `xsi:type`, element defaults, serialization |
-| Standalone output | Generated schema + shared checks; no XML metadata, no `xsd-to-zod` import |
+| Standalone output | Generated schema + shared checks that need no XML provenance; identity constraints warn; no XML metadata, no `xsd-to-zod` import |
 | Types output | Types only; no checks, no runtime |
 
 The generated schema is the **data contract**. The runtime is the **XML
 adapter**, not a second data validator.
 
-The shared validation module is the seam: both the schema and the runtime use
-the same pure checks. The default runtime keeps its `identityConstraints: false`
-opt-out; that is why the checks must remain callable/skippable rather than being
-unconditionally embedded in `.parse`.
+The shared validation module is the seam: the runtime uses it, and any target
+that carries the required XML provenance can reuse it. The default runtime keeps
+its `identityConstraints: false` opt-out; that is why the checks must remain
+callable/skippable rather than being unconditionally embedded in `.parse`.
 
 Standalone diagnostics are **warnings, not hard errors**. When a schema uses a
 feature the standalone target cannot enforce, generation names the feature and
@@ -61,28 +62,31 @@ refuse to generate.
 - **Default runtime users:** no API or behavior change. `parseXml`,
   `serializeXml`, and `xmlRegistry` stay. `identityConstraints: false` still
   works. The root entry no longer pulls in Node-only dependencies.
-- **Standalone users:** identity constraints are enforced when they are
-  data-shape constraints. The generated module uses the shared checker with a
-  data-shape value fallback; QName/lexical provenance is unavailable, so those
-  comparisons can differ from the XML runtime. XML I/O remains unavailable.
+- **Standalone users:** identity constraints stay runtime-only. The data shape
+  carries neither the expanded QName nor the lexical/value-space provenance that
+  `xs:key`/`xs:unique`/`xs:keyref` comparisons need, so enforcing them there
+  would reject valid data and miss duplicates. Generation warns; users pick the
+  runtime-backed output when identity matters. XML I/O remains unavailable.
   Users decide whether the narrower target is acceptable.
 - **Programmatic compiler users:** import from `xsd-to-zod/compiler`.
 - **Generated-code users:** regenerate. Default output should stay
-  behaviorally equivalent; standalone output gains identity validation.
+  behaviorally equivalent; standalone output is unchanged apart from the
+  identity warning.
 - **Types users:** new future target with no runtime dependency.
-- **Error-message consumers:** standalone identity errors are new and need a
-  documented path/message contract. Default runtime errors stay stable.
+- **Error-message consumers:** standalone identity errors remain absent.
+  Default runtime errors stay stable.
 
 ## Sequencing
 
 1. Compiler split: #342.
-2. Standalone target: #340, initially with an explicit identity warning while
-   the checker was still runtime-only.
-3. Refactor: `src/schemaUtils.ts` holds the pure zod-schema helpers;
-   `src/identityCheck.ts` is the shared data-shape engine. The runtime supplies
-   parsed-tree provenance; standalone supplies a data-shape fallback and a
-   generated meta map.
-4. Standalone identity is enforced; the temporary identity warning is removed.
+2. Standalone target: #340, with explicit warnings for unsupported features
+   (identity constraints, lexical-dependent facets).
+3. Refactor: extract the identity walk into `src/identityCheck.ts` and the pure
+   zod-schema helpers into `src/schemaUtils.ts`; the runtime supplies
+   provenance through an `IdentityContext`.
+4. Standalone keeps warning for identity: a provenance-free data shape cannot
+   reproduce value-space comparisons (expanded QNames, lexicals, nil
+   attributes, substitution tags).
 5. Ergonomic output flip and the 1.0 release gate.
 
 ## Open questions
@@ -94,6 +98,4 @@ refuse to generate.
   each target?
 - Does `xmlRegistry` keep identity metadata for inspection/compatibility, or
   does the runtime read generated descriptors instead?
-- How do standalone identity error paths and messages relate to the runtime
-  ones?
 - Does the types target (#341) share the same descriptor/type allocation path?

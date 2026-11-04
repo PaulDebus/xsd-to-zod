@@ -18,7 +18,6 @@ const MODULE_DEPENDENCIES: ReadonlyMap<ModuleName, readonly ModuleName[]> = new 
   ["xsdDateTime.ts", ["xsdLexicals.ts"]],
   ["xsdChecks.ts", ["xsdDateTime.ts"]],
   ["xsdPattern.ts", ["xsdLexicals.ts"]],
-  ["identityCheck.ts", ["schemaUtils.ts"]],
 ]);
 
 const exportNamesCache = new Map<ModuleName, string[]>();
@@ -158,7 +157,6 @@ export type StandaloneHelperUsage = {
   fractionDigits: boolean;
   coerceXmlValue: boolean;
   choices: boolean;
-  identity: boolean;
 };
 
 /**
@@ -179,9 +177,6 @@ export const standaloneHelperSource = (
   }
   if (usage.choices) {
     needed.add("choiceGroupIssues");
-  }
-  if (usage.identity) {
-    needed.add("identityIssues");
   }
 
   const included = new Set<ModuleName>();

@@ -71,7 +71,7 @@ describe("--standalone output", () => {
     expect(source).toContain("xsdPattern(");
   });
 
-  it("enforces identity constraints on the data shape", async () => {
+  it("warns about identity constraints it cannot enforce without the runtime", async () => {
     const identityXsd = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="root">
@@ -91,12 +91,10 @@ describe("--standalone output", () => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, identityXsd);
       const result = irToZod(await parseXsd([file]), { standalone: true });
-      expect(result.warnings.join("\n")).not.toContain("identity constraints");
-      expect(result.schemas).toContain("identityIssues");
-      const mod = await importGeneratedSchemas(result.schemas);
-      const root = mod["rootSchema"] as z.ZodType;
-      expect(root.safeParse({ item: [{ "@id": "a" }, { "@id": "a" }] }).success).toBe(false);
-      expect(root.safeParse({ item: [{ "@id": "a" }, { "@id": "b" }] }).success).toBe(true);
+      expect(result.warnings.join("\n")).toContain("identity constraints");
+      expect(result.schemas).toContain("identity constraints (xs:key, xs:unique, xs:keyref)");
+      expect(result.schemas).not.toContain("identityIssues");
+      expect(result.schemas).not.toContain("identityMeta");
     });
   });
 
@@ -197,7 +195,6 @@ describe("--standalone output", () => {
         fractionDigits: true,
         coerceXmlValue: true,
         choices: true,
-        identity: true,
       },
     );
     expect(source).not.toMatch(/^import\b/m);
