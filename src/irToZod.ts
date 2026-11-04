@@ -3192,6 +3192,7 @@ export const irToZod = (
     );
   const standaloneIdentityWarning =
     "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
+
   // Ergonomic output. The identity pass understands collapsed wrapper slots
   // and synthetic choice arrays, so the shape does not depend on whether the
   // module declares an identity constraint.
