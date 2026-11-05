@@ -83,19 +83,16 @@ refuse to generate.
    (identity constraints, lexical-dependent facets).
 3. Refactor: extract the identity walk into `src/identityCheck.ts` and the pure
    zod-schema helpers into `src/schemaUtils.ts`; the runtime supplies
-   provenance through an `IdentityContext`.
-4. Standalone keeps warning for identity: a provenance-free data shape cannot
-   reproduce value-space comparisons (expanded QNames, lexicals, nil
-   attributes, substitution tags).
-5. Ergonomic output flip and the 1.0 release gate.
+   provenance through an `IdentityContext`. Standalone keeps its identity
+   warning and does not gain a data-shape fallback.
+4. Ergonomic output flip and the 1.0 release gate.
 
 ## Open questions
 
-- Which identity constraints are purely data-shape, and which still need XML
-  provenance (expanded QNames, lexical exactness, `xsi:type`, nil attributes)?
-  Those that need provenance must stay runtime-only and warn in standalone.
-- How should `identityConstraints: false` interact with the shared checker in
-  each target?
+- Is identity enforcement ever in scope for a non-XML target? Doing it correctly
+  needs parsed-tree provenance (expanded QNames, lexical exactness, `xsi:type`,
+  nil attributes, substitution tags), which the standalone data shape does not
+  carry. Standalone stays runtime-only and warns until a target can supply it.
 - Does `xmlRegistry` keep identity metadata for inspection/compatibility, or
   does the runtime read generated descriptors instead?
 - Does the types target (#341) share the same descriptor/type allocation path?
