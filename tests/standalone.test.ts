@@ -93,6 +93,8 @@ describe("--standalone output", () => {
       const result = irToZod(await parseXsd([file]), { standalone: true });
       expect(result.warnings.join("\n")).toContain("identity constraints");
       expect(result.schemas).toContain("identity constraints (xs:key, xs:unique, xs:keyref)");
+      expect(result.schemas).not.toContain("identityIssues");
+      expect(result.schemas).not.toContain("identityMeta");
     });
   });
 
@@ -188,7 +190,12 @@ describe("--standalone output", () => {
   it("inlines every helper module without duplicate top-level names or imports", () => {
     const source = standaloneHelperSource(
       new Set(["parseXsdDate", "xsdPattern", "xsdOrderCompare", "choiceGroupIssues"]),
-      { totalDigits: true, fractionDigits: true, coerceXmlValue: true, choices: true },
+      {
+        totalDigits: true,
+        fractionDigits: true,
+        coerceXmlValue: true,
+        choices: true,
+      },
     );
     expect(source).not.toMatch(/^import\b/m);
     const declarations = [
