@@ -37,7 +37,7 @@ const RUNNER = `import { parseXml, safeParseXml } from "xsd-to-zod";
 import { catalogSchema } from "./gen/schema.zod.ts";
 
 const parsed = parseXml(catalogSchema, '<catalog><item id="1"/><item id="2"/></catalog>');
-if (JSON.stringify(parsed) !== '{"item":[{"@id":1},{"@id":2}]}') {
+if (JSON.stringify(parsed) !== '{"item":[1,2]}') {
   throw new Error(\`unexpected parse result: \${JSON.stringify(parsed)}\`);
 }
 

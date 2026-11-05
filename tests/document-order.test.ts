@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { parseXml, serializeXml } from "../src/index.js";
+import { parseXml, safeParseXml, serializeXml } from "../src/index.js";
 import { generateAndImport, onlyRootSchema, withTempDirAsync } from "./helpers.js";
 
 // Interleaved repeated compositors: the grouped data shape loses cross-tag
@@ -172,5 +172,42 @@ describe("document order of interleaved repeated compositors", () => {
     );
     const xml = "<t><head>1</head><member>2</member><head>3</head></t>";
     expect(serializeXml(schema, parseXml(schema, xml))).toBe(xml);
+  });
+});
+
+describe("occurrence floor of an eligible repeated choice", () => {
+  const ALL_REQUIRED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:choice minOccurs="1" maxOccurs="unbounded">
+      <xs:element name="a" type="xs:string"/>
+      <xs:element name="b" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="t" type="T"/>
+</xs:schema>`;
+
+  const OPTIONAL_BRANCH_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:choice minOccurs="1" maxOccurs="unbounded">
+      <xs:element name="a" type="xs:string"/>
+      <xs:element name="b" type="xs:string" minOccurs="0"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="t" type="T"/>
+</xs:schema>`;
+
+  it("rejects empty content when every branch is required", async () => {
+    const schema = await schemaFor(ALL_REQUIRED_XSD);
+    expect(parseXml(schema, "<t><a>1</a></t>")).toEqual({ _choice: [{ a: "1" }] });
+    expect(safeParseXml(schema, "<t/>").success).toBe(false);
+  });
+
+  it("accepts empty content when one branch is optional", async () => {
+    const schema = await schemaFor(OPTIONAL_BRANCH_XSD);
+    expect(parseXml(schema, "<t/>")).toEqual({});
+    expect(safeParseXml(schema, "<t/>").success).toBe(true);
+    expect(parseXml(schema, "<t><b>2</b></t>")).toEqual({ _choice: [{ b: "2" }] });
   });
 });

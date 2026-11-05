@@ -1754,6 +1754,10 @@ const choiceFlags = (
   const flat = entries.flatMap(([, fields]) => fields);
   const card = type.choiceGroups?.[group];
   const repeated = card !== undefined && (card.maxOccurs === "unbounded" || card.maxOccurs > 1);
+  // "required" reads the branches: a group is required only when every branch
+  // field is mandatory. A group with no mapped branches has no branch evidence,
+  // so it falls back to the cardinality's own minOccurs (unknown groups count as
+  // required), keeping the two meanings of "required" aligned.
   const required =
     flat.length > 0 ? flat.every((f) => f.minOccurs > 0) : card === undefined || card.minOccurs > 0;
   return { required, repeated, flat, branches: entries };
