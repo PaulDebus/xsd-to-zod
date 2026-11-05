@@ -40,7 +40,7 @@ describe("mixed content models", () => {
     // The parser concatenates the text segments; interleaving with the child
     // elements is not preserved.
     expect(parseXml(schema, xml)).toEqual({
-      "@lang": "en",
+      lang: "en",
       _text: "Dear , hi",
       b: ["reader"],
     });
@@ -50,7 +50,7 @@ describe("mixed content models", () => {
     const mod = await importFor(NOTE_SCHEMA);
     const xml = `<note xmlns="urn:mixed" lang="en"><b>x</b></note>`;
     const data = parseXml(findRootSchema(mod, xml), xml) as Record<string, unknown>;
-    expect(data).toEqual({ "@lang": "en", b: ["x"] });
+    expect(data).toEqual({ lang: "en", b: ["x"] });
     expect("_text" in data).toBe(false);
   });
 

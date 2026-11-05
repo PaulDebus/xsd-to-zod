@@ -482,7 +482,6 @@ type GenerateOptions = {
   datatypes?: string;
   integers?: string;
   decimal?: string;
-  ergonomic?: boolean;
   standalone?: boolean;
   fetch?: boolean;
   frozen?: boolean;
@@ -683,7 +682,6 @@ const generate = async (filesOrDirs: string[], opts: GenerateOptions): Promise<v
     datatypes,
     integers,
     decimal,
-    ergonomic: opts.ergonomic === true,
     standalone: opts.standalone === true,
   });
   reportWarnings(warnings);
@@ -825,10 +823,6 @@ const addGenerateOptions = (command: Command): Command =>
     .option(
       "--decimal <mode>",
       'Mapping for xs:decimal: "number" (default; float64, lossy beyond ~16 significant digits) or "string" (exact canonical decimal lexical)',
-    )
-    .option(
-      "--ergonomic",
-      'Preview the 1.0 output shape: collapse lone-attribute value wrappers to scalars, drop the "@" prefix from attribute keys (colliding attributes keep it), and emit repeated choices as one tagged array',
     )
     .option(
       "--standalone",

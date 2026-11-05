@@ -39,7 +39,7 @@ describe("lexical retention", () => {
   it("derives canonical lexicals from values by default", async () => {
     const schema = await load();
     const parsed = parseXml(schema, XML);
-    expect(parsed).toEqual({ amount: 1.5, count: 1, ref: "a:foo", "@code": 7 });
+    expect(parsed).toEqual({ amount: 1.5, count: 1, ref: "a:foo", code: 7 });
     const serialized = serializeXml(schema, parsed);
     expect(serialized).toContain("<amount>1.5</amount>");
     expect(serialized).toContain("<count>1</count>");
@@ -53,7 +53,7 @@ describe("lexical retention", () => {
   it("re-emits the original lexicals when retainLexicals is on", async () => {
     const schema = await load();
     const parsed = parseXml(schema, XML, { retainLexicals: true });
-    expect(parsed).toEqual({ amount: 1.5, count: 1, ref: "a:foo", "@code": 7 });
+    expect(parsed).toEqual({ amount: 1.5, count: 1, ref: "a:foo", code: 7 });
     const serialized = serializeXml(schema, parsed);
     expect(serialized).toContain("<amount>1.50</amount>");
     expect(serialized).toContain("<count>001</count>");

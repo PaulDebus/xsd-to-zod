@@ -1,4 +1,10 @@
 {
-  "A": ["hello"],
-  "B": ["world"]
+  "_choice": [
+    {
+      "A": "hello"
+    },
+    {
+      "B": "world"
+    }
+  ]
 }

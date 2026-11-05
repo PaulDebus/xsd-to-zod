@@ -54,7 +54,7 @@ describe("xs:any / xs:anyAttribute wildcards", () => {
   <xs:element name="doc" type="Doc"/>
 </xs:schema>`);
     const parsed = parseXml(schema, '<doc id="7" extra="yes"/>') as Record<string, unknown>;
-    expect(parsed).toEqual({ "@id": 7, "@extra": "yes" });
+    expect(parsed).toEqual({ id: 7, "@extra": "yes" });
     const serialized = serializeXml(schema, parsed);
     expect(serialized).toContain('extra="yes"');
     expect(parseXml(schema, serialized)).toEqual(parsed);
@@ -74,7 +74,7 @@ describe("xs:any / xs:anyAttribute wildcards", () => {
       schema,
       '<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="7" xsi:type="xs:string"><x/></doc>',
     ) as Record<string, unknown>;
-    expect(parsed).toEqual({ "@id": 7, "{}x": "" });
+    expect(parsed).toEqual({ id: 7, "{}x": "" });
   });
 });
 

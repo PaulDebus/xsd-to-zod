@@ -55,11 +55,11 @@ describe("serializeXml validates its input", () => {
     expect(parseXml(orderSchema, serialized)).toEqual({
       item: "x",
       quantity: 1,
-      "@currency": "EUR",
-      "@version": "1.0",
+      currency: "EUR",
+      version: "1.0",
     });
     // A non-default value is emitted.
-    expect(serializeXml(orderSchema, { item: "x", quantity: 2, "@currency": "USD" })).toContain(
+    expect(serializeXml(orderSchema, { item: "x", quantity: 2, currency: "USD" })).toContain(
       'currency="USD"',
     );
   });
@@ -68,7 +68,7 @@ describe("serializeXml validates its input", () => {
     const mod = await generate(DEFAULTS_XSD);
     const orderSchema = mod["orderSchema"] as z.ZodType;
     expect(() => serializeXml(orderSchema, { quantity: 1 })).toThrow(z.ZodError);
-    expect(() => serializeXml(orderSchema, { item: "x", quantity: 1, "@version": "2.0" })).toThrow(
+    expect(() => serializeXml(orderSchema, { item: "x", quantity: 1, version: "2.0" })).toThrow(
       z.ZodError,
     );
   });

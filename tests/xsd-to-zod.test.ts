@@ -215,7 +215,7 @@ describe("xsd-to-zod v1 pipeline", () => {
     ) as Record<string, unknown>;
 
     expect(parsed["_text"]).toBe(42);
-    expect(parsed["@currency"]).toBe("USD");
+    expect(parsed["currency"]).toBe("USD");
   });
 
   it("flattens multi-level complex type extension chains", async () => {
@@ -1398,14 +1398,14 @@ describe("xsd-to-zod v1 pipeline", () => {
         `<container xmlns="urn:listunion" tags="a b c">42</container>`,
       ) as Record<string, unknown>;
       expect(parsed["_text"]).toBe(42);
-      expect(parsed["@tags"]).toEqual(["a", "b", "c"]);
+      expect(parsed["tags"]).toEqual(["a", "b", "c"]);
 
       const stringParsed = parseXml(
         containerSchema,
         `<container xmlns="urn:listunion" tags="x y">hello</container>`,
       ) as Record<string, unknown>;
       expect(stringParsed["_text"]).toBe("hello");
-      expect(stringParsed["@tags"]).toEqual(["x", "y"]);
+      expect(stringParsed["tags"]).toEqual(["x", "y"]);
 
       const serialized = serializeXml(containerSchema, parsed);
       const reparsed = parseXml(containerSchema, serialized);

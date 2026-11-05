@@ -23,12 +23,12 @@ const XSD = `<?xml version="1.0"?>
   <xs:element name="root" type="Root"/>
 </xs:schema>`;
 
-const generatedFor = async (ergonomic: boolean): Promise<string> => {
+const generatedFor = async (): Promise<string> => {
   let source = "";
   await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, XSD);
-    source = irToZod(await parseXsd([file]), { ergonomic }).schemas;
+    source = irToZod(await parseXsd([file])).schemas;
   });
   return source;
 };
@@ -38,31 +38,26 @@ const moduleFor = async (): Promise<Record<string, unknown>> => {
   await withTempDirAsync(async (dir) => {
     const file = path.join(dir, "schema.xsd");
     fs.writeFileSync(file, XSD);
-    mod = await generateAndImport([file], { ergonomic: true });
+    mod = await generateAndImport([file]);
   });
   return mod;
 };
 
-describe("--ergonomic output shape", () => {
+describe("default output shape", () => {
   it("collapses a lone-attribute wrapper slot to its scalar type", async () => {
-    const source = await generatedFor(true);
+    const source = await generatedFor();
     expect(source).toContain(`"count": number;`);
     expect(source).not.toContain(`"count": ValueType;`);
   });
 
   it("drops the @ prefix from attribute keys", async () => {
-    const source = await generatedFor(true);
+    const source = await generatedFor();
     expect(source).toContain(`"text": number;`);
     expect(source).not.toContain(`"@text"`);
   });
 
-  it("keeps the wrapper object without the flag", async () => {
-    const source = await generatedFor(false);
-    expect(source).toContain(`"count": ValueType;`);
-  });
-
   it("emits a repeated choice as one tagged array", async () => {
-    const source = await generatedFor(true);
+    const source = await generatedFor();
     expect(source).toContain(`"_choice": ({ "a": number } | { "b": string })[];`);
     expect(source).not.toContain(`"a"?:`);
   });
@@ -81,7 +76,7 @@ describe("--ergonomic output shape", () => {
     });
   });
 
-  it("serializes the ergonomic shape back to the original XML", async () => {
+  it("serializes the collapsed shape back to the original XML", async () => {
     const mod = await moduleFor();
     const schema = mod["rootSchema"] as never;
     const xml = `<root><count text="7"/><a>1</a><b>x</b><a>2</a><tail>z</tail></root>`;
@@ -89,7 +84,7 @@ describe("--ergonomic output shape", () => {
     expect(serialized).toBe(xml);
   });
 
-  it("serializes hand-built ergonomic data", async () => {
+  it("serializes hand-built collapsed data", async () => {
     const mod = await moduleFor();
     const schema = mod["rootSchema"] as never;
     expect(
@@ -150,13 +145,13 @@ const WRAPPER_ARRAY_XSD = `<?xml version="1.0"?>
   </xs:element>
 </xs:schema>`;
 
-describe("--ergonomic output shape (optional and object branches)", () => {
+describe("default output shape (optional and object branches)", () => {
   it("makes an optional choice array omit when empty and round-trip object branches", async () => {
     let mod: Record<string, unknown> = {};
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, OPTIONAL_XSD);
-      mod = await generateAndImport([file], { ergonomic: true });
+      mod = await generateAndImport([file]);
     });
     const schema = mod["rootSchema"] as never;
     expect(parseXml(schema, `<root><p><x>1</x></p><q>a</q></root>`)).toEqual({
@@ -176,7 +171,7 @@ describe("--ergonomic output shape (optional and object branches)", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, WRAPPER_ARRAY_XSD);
-      mod = await generateAndImport([file], { ergonomic: true });
+      mod = await generateAndImport([file]);
     });
     const schema = mod["rootSchema"] as never;
     const parsed = parseXml(schema, `<root><w text="1.50"/><w text="2.25"/></root>`);
@@ -210,14 +205,14 @@ const WILDCARD_ATTRIBUTE_XSD = `<?xml version="1.0"?>
   <xs:element name="root" type="Item"/>
 </xs:schema>`;
 
-describe("--ergonomic attribute keys", () => {
+describe("default attribute keys", () => {
   it("keeps @ on an attribute whose bare key collides with an element", async () => {
     let source = "";
     let warnings: string[] = [];
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, ATTRIBUTE_NAMING_XSD);
-      const result = irToZod(await parseXsd([file]), { ergonomic: true });
+      const result = irToZod(await parseXsd([file]));
       source = result.schemas;
       warnings = result.warnings;
     });
@@ -236,7 +231,7 @@ describe("--ergonomic attribute keys", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, ATTRIBUTE_NAMING_XSD);
-      mod = await generateAndImport([file], { ergonomic: true });
+      mod = await generateAndImport([file]);
     });
     const schema = mod["rootSchema"] as never;
     const xml = `<root name="attr" xsiType="t" id="x"><name>elem</name></root>`;
@@ -250,7 +245,7 @@ describe("--ergonomic attribute keys", () => {
     await withTempDirAsync(async (dir) => {
       const file = path.join(dir, "schema.xsd");
       fs.writeFileSync(file, WILDCARD_ATTRIBUTE_XSD);
-      mod = await generateAndImport([file], { ergonomic: true });
+      mod = await generateAndImport([file]);
     });
     const schema = mod["rootSchema"] as never;
     const xml = `<root id="1" extra="yes"><name>x</name></root>`;

@@ -45,7 +45,9 @@ describe("document order of interleaved repeated compositors", () => {
   it("round-trips a repeating choice in document order", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
     const xml = "<t><a>1</a><b>2</b><a>3</a><b>4</b></t>";
-    expect(parseXml(schema, xml)).toEqual({ a: ["1", "3"], b: ["2", "4"] });
+    expect(parseXml(schema, xml)).toEqual({
+      _choice: [{ a: "1" }, { b: "2" }, { a: "3" }, { b: "4" }],
+    });
     expect(serializeXml(schema, parseXml(schema, xml))).toBe(xml);
   });
 
@@ -89,50 +91,46 @@ describe("document order of interleaved repeated compositors", () => {
     expect(serializeXml(schema, data)).toBe(xml);
   });
 
-  it("in-place edits keep the recorded order", async () => {
+  it("in-place edits keep their array position", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
     const data = parseXml(schema, "<t><a>1</a><b>2</b><a>3</a></t>") as {
-      a: string[];
-      b: string[];
+      _choice: ({ a: string } | { b: string })[];
     };
-    data.a[1] = "changed";
+    data._choice[2] = { a: "changed" };
     expect(serializeXml(schema, data)).toBe("<t><a>1</a><b>2</b><a>changed</a></t>");
   });
 
-  it("reordering within one field's array is honored", async () => {
+  it("reordering the choice array is honored", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
     const data = parseXml(schema, "<t><a>1</a><b>2</b><a>3</a></t>") as {
-      a: string[];
-      b: string[];
+      _choice: ({ a: string } | { b: string })[];
     };
-    data.a.reverse();
+    data._choice.reverse();
     expect(serializeXml(schema, data)).toBe("<t><a>3</a><b>2</b><a>1</a></t>");
   });
 
-  it("added occurrences fall back to schema order", async () => {
+  it("added occurrences serialize at the end", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
     const data = parseXml(schema, "<t><a>1</a><b>2</b><a>3</a></t>") as {
-      a: string[];
-      b: string[];
+      _choice: ({ a: string } | { b: string })[];
     };
-    data.a.push("9");
-    expect(serializeXml(schema, data)).toBe("<t><a>1</a><a>3</a><a>9</a><b>2</b></t>");
+    data._choice.push({ a: "9" });
+    expect(serializeXml(schema, data)).toBe("<t><a>1</a><b>2</b><a>3</a><a>9</a></t>");
   });
 
-  it("removed occurrences fall back to schema order", async () => {
+  it("removed occurrences leave the remaining order intact", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
     const data = parseXml(schema, "<t><a>1</a><b>2</b><a>3</a></t>") as {
-      a?: string[];
-      b?: string[];
+      _choice: ({ a: string } | { b: string })[];
     };
-    delete data.b;
+    data._choice.splice(1, 1);
     expect(serializeXml(schema, data)).toBe("<t><a>1</a><a>3</a></t>");
   });
 
-  it("hand-built data serializes in schema order", async () => {
+  it("hand-built data serializes in array order", async () => {
     const schema = await schemaFor(REPEATING_CHOICE_XSD);
-    expect(serializeXml(schema, { a: ["1", "3"], b: ["2"] })).toBe(
-      "<t><a>1</a><a>3</a><b>2</b></t>",
+    expect(serializeXml(schema, { _choice: [{ a: "1" }, { b: "2" }, { a: "3" }] })).toBe(
+      "<t><a>1</a><b>2</b><a>3</a></t>",
     );
   });
 

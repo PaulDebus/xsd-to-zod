@@ -36,22 +36,20 @@ describe("emptiable choice groups", () => {
   it("accepts the empty instance when any branch is optional", async () => {
     const schema = await schemaFor(CONCEPT_XSD);
     // Absent repeated-choice branches are omitted from the parsed object.
-    expect(parseXml(schema, '<Concept id="x"/>')).toEqual({
-      "@id": "x",
-    });
+    expect(parseXml(schema, '<Concept id="x"/>')).toEqual({ id: "x" });
   });
 
   it("still accepts single and repeated branch selections", async () => {
     const schema = await schemaFor(CONCEPT_XSD);
     expect(parseXml(schema, '<Concept id="x"><Name>n</Name></Concept>')).toEqual({
-      "@id": "x",
-      Name: ["n"],
+      id: "x",
+      _choice: [{ Name: "n" }],
     });
     expect(
       parseXml(schema, '<Concept id="x"><LanguageOfCreator>en</LanguageOfCreator></Concept>'),
     ).toEqual({
-      "@id": "x",
-      LanguageOfCreator: ["en"],
+      id: "x",
+      _choice: [{ LanguageOfCreator: "en" }],
     });
     expect(
       parseXml(
@@ -59,9 +57,8 @@ describe("emptiable choice groups", () => {
         '<Concept id="x"><Name>a</Name><Name>b</Name><Definition>d</Definition></Concept>',
       ),
     ).toEqual({
-      "@id": "x",
-      Name: ["a", "b"],
-      Definition: ["d"],
+      id: "x",
+      _choice: [{ Name: "a" }, { Name: "b" }, { Definition: "d" }],
     });
   });
 
@@ -76,7 +73,7 @@ describe("emptiable choice groups", () => {
   </xs:complexType>
   <xs:element name="t" type="T"/>
 </xs:schema>`);
-    expect(parseXml(schema, "<t><B>b</B></t>")).toEqual({ B: ["b"] });
+    expect(parseXml(schema, "<t><B>b</B></t>")).toEqual({ _choice: [{ B: "b" }] });
     expect(() => parseXml(schema, "<t/>")).toThrow(/choice/);
   });
 });

@@ -1,5 +1,5 @@
 {
-  "@id": "ABC-123",
-  "@color": "red",
-  "@size": 42
+  "id": "ABC-123",
+  "color": "red",
+  "size": 42
 }

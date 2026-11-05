@@ -20,7 +20,7 @@ describe("generator validation and typing regressions", () => {
       `<xs:simpleType name="U"><xs:union memberTypes="xs:boolean xs:int"/></xs:simpleType><xs:element name="root"><xs:complexType><xs:sequence><xs:element name="v" type="U" default="2"/><xs:element name="flag" type="xs:boolean" default=" true "/></xs:sequence><xs:attribute name="a" type="U" default="2"/><xs:attribute name="enabled" type="xs:boolean" default=" 1 "/></xs:complexType></xs:element>`,
     );
     const value = parseXml(schema, "<root><v/><flag/></root>");
-    expect(value).toEqual({ v: 2, flag: true, "@a": 2, "@enabled": true });
+    expect(value).toEqual({ v: 2, flag: true, a: 2, enabled: true });
     expect(await validateXml(serializeXml(schema, value), xsd)).toEqual({ valid: true });
     expect(parseXml(schema, serializeXml(schema, { v: 2, flag: true }))).toEqual(value);
   });

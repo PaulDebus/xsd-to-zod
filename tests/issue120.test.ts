@@ -60,7 +60,7 @@ describe("empty simpleContent", () => {
   it("parses an attribute-only element as empty-string content", async () => {
     const schema = await schemaFor(SIMPLE_CONTENT_XSD);
     const parsed = parseXml(schema, '<doc xmlns="urn:sc" a="1"/>') as Record<string, unknown>;
-    expect(parsed).toEqual({ _text: "", "@a": "1" });
+    expect(parsed).toEqual({ _text: "", a: "1" });
     expect(serializeXml(schema, parsed)).toContain('a="1"');
   });
 });

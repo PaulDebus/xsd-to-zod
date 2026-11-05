@@ -50,8 +50,7 @@ describe("inherited repeated-choice refinements", () => {
         '<ns:Root xmlns:ns="https://example.org/ns"><ns:Name>A</ns:Name><ns:Def>B</ns:Def></ns:Root>',
       ),
     ).toEqual({
-      Name: ["A"],
-      Def: ["B"],
+      _choice: [{ Name: "A" }, { Def: "B" }],
     });
   });
 
@@ -63,7 +62,7 @@ describe("inherited repeated-choice refinements", () => {
         '<ns:Root xmlns:ns="https://example.org/ns"><ns:Name>A</ns:Name><ns:Extra>B</ns:Extra></ns:Root>',
       ),
     ).toEqual({
-      Name: ["A"],
+      _choice: [{ Name: "A" }],
       Extra: ["B"],
     });
   });
@@ -118,7 +117,7 @@ describe("inherited repeated-choice refinements", () => {
     expect(
       parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"><ns:A>a</ns:A></ns:Root>'),
     ).toEqual({
-      A: ["a"],
+      _choice: [{ A: "a" }],
     });
     expect(() => parseXml(schema, '<ns:Root xmlns:ns="https://example.org/ns"/>')).toThrow(
       /choice/,

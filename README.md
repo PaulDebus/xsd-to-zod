@@ -56,18 +56,18 @@ import { xmlRegistry } from 'xsd-to-zod';
 export interface OrderType {
   item: string[];
   sku: string;
-  "@id": number;
+  id: number;
 }
 export const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({
   "item": z.array(z.string()),
   "sku": z.string(),
-  "@id": z.number().int(),
+  "id": z.number().int(),
 })).register(xmlRegistry, {
   qname: "{urn:example}OrderType",
   fields: {
     item: { kind: "element", qname: "{urn:example}item" },
     sku:  { kind: "element", qname: "{urn:example}sku" },
-    "@id": { kind: "attribute", qname: "id" },
+    id:   { kind: "attribute", qname: "id" },
   },
 });
 export const orderSchema = z.lazy(() => OrderTypeSchema)
@@ -95,7 +95,7 @@ const data = parseXml(orderSchema, `
     <sku>W-001</sku>
   </order>
 `);
-// data is fully typed: { item: string[], sku: string, '@id': number }
+// data is fully typed: { item: string[], sku: string, id: number }
 
 const xml = serializeXml(orderSchema, data);
 ```
@@ -107,7 +107,7 @@ instead, and narrow its `unknown` error before reading Zod issues.
 
 ## Features
 
-- **XSD constructs**: `sequence`, `choice` (→ runtime-enforced from registry metadata), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, substitution groups (a head element's field becomes a union over its member elements), mixed content (`mixed="true"` → optional `_text` field next to the child elements)
+- **XSD constructs**: `sequence`, `choice` (→ runtime-enforced from registry metadata; a repeated choice becomes one `_choice` array of tagged items), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, substitution groups (a head element's field becomes a union over its member elements), mixed content (`mixed="true"` → optional `_text` field next to the child elements)
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), on the ordered date/time/duration and string-derived builtins (→ value-space comparison via `xsdOrderCompare`; timezone-less vs timezoned and indeterminate duration pairs reject), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
@@ -120,6 +120,23 @@ instead, and narrow its `unknown` error before reading Zod issues.
 - **Cyclic references**: every emitted complex-type schema is wrapped in `z.lazy(() => ...)` so forward references and true cycles (e.g. `Person.manager: Person`) load without `ReferenceError`
 - **Two validation tiers**: the zod tier (typed parse, user-friendly `ZodError`s) and an optional libxml2 conformance tier (full XSD semantics, line-numbered errors)
 - **Builtin datatype lexicals**: the zod tier validates the XSD 1.0 lexical space of the date/time set, `duration`, `hexBinary`/`base64Binary`, `language`, and the `Name`/`NCName`/`NMTOKEN` family (values stay the original strings — no canonicalization). Integers map to `z.number().int()` with value-space bounds (exact and JSON-serializable below 2⁵³; zod's int check rejects larger values instead of rounding them). The arbitrary-precision `xs:integer` family and the 64-bit `long`/`unsignedLong` can opt into `z.bigint()` with `--integers bigint` — exact at any magnitude, and the only mode that enforces the 64-bit `long`/`unsignedLong` outer bounds — at the cost of `JSON.stringify` throwing on the parsed data. `xs:decimal` maps to `z.number()` (float64, lossy beyond ~16 significant digits); `--decimal string` keeps the exact canonical decimal lexical instead
+
+## Output shape
+
+The generated shape is fixed at 1.0 — there is no compat or naming mode:
+
+- **Value wrappers collapse.** A type with no element content and a single
+  required simple attribute becomes a scalar field instead of
+  `{ "@value": T }`.
+- **Attribute keys drop `@`.** `"@id"` is emitted as `"id"`. When an attribute
+  would shadow a sibling element, the element wins the bare name and the
+  attribute keeps its `@` prefix; codegen warns and comments on the fallback.
+- **Repeated choices are ordered arrays.** An eligible `xs:choice` with
+  `maxOccurs > 1` becomes `_choice: ({ a: A } | { b: B })[]`, preserving
+  document order and static exclusivity.
+- **Root anonymous types use the element's bare name.** `<xs:element name="Library">`
+  with an inline type exports `Library`; nested anonymous types keep the
+  `Parent_Child_Type` scheme.
 
 ## Install
 
@@ -135,10 +152,11 @@ npm install libxml2-wasm
 
 ## Usage
 
-0.4.0 is the last planned 0.x release before the 1.0 ergonomic-output/API
-change. It also includes changes from 0.3.1 that require migration; see the
-[0.4 → 1.0 migration preview](docs/MIGRATION.md) before regenerating existing
-schemas. See the [CHANGELOG](CHANGELOG.md) for the full release notes.
+1.0 is a deliberate clean break: the ergonomic output shape is the only shape,
+attribute keys drop the `@` prefix, and the public API is trimmed. Regenerate
+existing artifacts with the version you run, or pin `@0.x` to stay on the old
+shape. See the [migration guide](docs/MIGRATION.md) before upgrading and the
+[CHANGELOG](CHANGELOG.md) for release notes.
 
 ### CLI
 
@@ -167,7 +185,6 @@ npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 | `--datatypes <mode>` | `string` (default) keeps the XSD date/time builtins as validated strings; `structured` parses them into plain objects (`XsdDateTime` & co.). Date/time instants normalize to UTC; partial dates retain their local fields and actual timezone offset to preserve the XSD value |
 | `--integers <mode>` | `number` (default) maps the `xs:integer` family to `z.number().int()` — JSON-safe, exact below 2⁵³ (larger values are rejected, and the 64-bit `long`/`unsignedLong` outer bounds cannot be expressed and are dropped); `bigint` maps them to `z.bigint()`, exact at any magnitude, but `JSON.stringify` throws on parsed data containing them |
 | `--decimal <mode>` | `number` (default) maps `xs:decimal` to `z.number()` (float64) — exact only to ~16 significant digits; `string` keeps the exact canonical decimal lexical (leading/trailing zeros normalized, never rounded), so arbitrary-precision financial amounts round-trip losslessly. Facets (`totalDigits`, `fractionDigits`, order bounds, enums) are checked against the exact lexical in both modes |
-| `--ergonomic` | Preview the 1.0 output shape: collapse lone-attribute value wrappers (`{ "@value": T }`) to scalars, emit attribute keys without the `@` prefix (`"@id"` → `"id"`; a colliding attribute keeps `@`), and emit repeated `xs:choice` as one array of tagged items (`_choice: ({ a: A } \| { b: B })[]`). Temporary scaffolding flag — not final public API |
 | `--standalone` | Emit a self-contained module that imports only `zod`: no `xmlRegistry` metadata and no `xsd-to-zod` import, with helper checks inlined and `xs:choice` enforced by generated refinements. `parseXml`/`serializeXml` are unavailable for these schemas; value-space facets that need the original XML lexical (e.g. `xs:decimal` order/digit facets) are not enforced |
 | `--fetch` | Resolve remote imports/includes from local schema inputs. Remote entry URLs always fetch; local inputs never use the network without this flag |
 | `--no-fetch` | Fetch only a remote entry schema and skip its remote imports/includes |

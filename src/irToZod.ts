@@ -693,17 +693,17 @@ type FieldKeyFallback = {
   kept: string;
 };
 
-// 1.0 naming (previewed behind --ergonomic): attribute keys lose the
-// structural "@" prefix. An attribute whose bare key would shadow a sibling
-// field keeps its prefixed key — the element wins the bare name — and the
-// fallback is reported as a warning plus a comment at the emitted artifact.
+// Attribute keys lose the structural "@" prefix. An attribute whose bare key
+// would shadow a sibling field keeps its prefixed key — the element wins the
+// bare name — and the fallback is reported as a warning plus a comment at the
+// emitted artifact.
 const ergonomicAttributeKeys = (ir: XsdIr): { ir: XsdIr; fallbacks: FieldKeyFallback[] } => {
   const fallbacks: FieldKeyFallback[] = [];
   let changed = false;
   const complexTypes: Record<string, ComplexTypeDef> = {};
   for (const [name, type] of Object.entries(ir.complexTypes)) {
     // Keys an attribute's stripped name must not shadow. The synthetic
-    // ergonomic choice key is allocated later and avoids these too; xsiType is
+    // synthetic choice key is allocated later and avoids these too; xsiType is
     // the runtime's polymorphic discriminant, spread onto variant schemas.
     const reserved = new Set<string>(["xsiType", "__proto__"]);
     for (const field of type.fields) {
@@ -740,7 +740,7 @@ const withDescription = (expr: string, description: string | undefined): string 
   description === undefined ? expr : `${expr}.describe(${JSON.stringify(description)})`;
 
 // ---------------------------------------------------------------------------
-// Ergonomic output (opt-in, temporary scaffolding flag)
+// Collapsed output shape (1.0 default)
 // ---------------------------------------------------------------------------
 
 const ANY_TYPE_QNAME: QName = `{${XSD_NS}}anyType`;
@@ -758,10 +758,7 @@ const hasDerivedTypes = (typeName: QName, ir: XsdIr): boolean =>
  * be required, occurrence-free, and simple-typed — anything else keeps the
  * object shape.
  */
-const wrapperFieldOf = (typeName: QName, ir: XsdIr, ergonomic: boolean): IrField | undefined => {
-  if (!ergonomic) {
-    return undefined;
-  }
+const wrapperFieldOf = (typeName: QName, ir: XsdIr): IrField | undefined => {
   const type = ir.complexTypes[typeName];
   if (type === undefined) {
     return undefined;
@@ -813,7 +810,7 @@ const wrapperFieldOf = (typeName: QName, ir: XsdIr, ergonomic: boolean): IrField
 };
 
 /** The wrapper a field's *slot* collapses to, if the slot's own constraints allow it. */
-const wrapperTargetFor = (field: IrField, ir: XsdIr, ergonomic: boolean): IrField | undefined => {
+const wrapperTargetFor = (field: IrField, ir: XsdIr): IrField | undefined => {
   if (field.kind !== "element" || field.nillable === true) {
     return undefined;
   }
@@ -823,7 +820,7 @@ const wrapperTargetFor = (field: IrField, ir: XsdIr, ergonomic: boolean): IrFiel
   if ((field.identityConstraints?.length ?? 0) > 0) {
     return undefined;
   }
-  return wrapperFieldOf(field.typeName, ir, ergonomic);
+  return wrapperFieldOf(field.typeName, ir);
 };
 
 type ChoiceArrayGroup = { group: string; branches: { tag: string; field: IrField }[] };
@@ -833,14 +830,7 @@ type ChoiceArrayGroup = { group: string; branches: { tag: string; field: IrField
  * per branch), occurrence-free branches, no wildcards, no nested choices, and
  * no qname collisions. Everything else keeps the parallel optional arrays.
  */
-const ergonomicChoiceGroups = (
-  type: ComplexTypeDef,
-  ir: XsdIr,
-  ergonomic: boolean,
-): ChoiceArrayGroup[] => {
-  if (!ergonomic) {
-    return [];
-  }
+const ergonomicChoiceGroups = (type: ComplexTypeDef, ir: XsdIr): ChoiceArrayGroup[] => {
   const guards = type.choiceGroupGuards ?? {};
   const nestedGroups = new Set<string>([
     ...Object.keys(guards),
@@ -910,7 +900,7 @@ const ergonomicChoiceGroups = (
         field.typeName === ANY_SIMPLE_TYPE_QNAME ||
         hasDerivedTypes(field.typeName, ir) ||
         substitutionHeads.has(field.qname) ||
-        wrapperTargetFor(field, ir, ergonomic) !== undefined
+        wrapperTargetFor(field, ir) !== undefined
       ) {
         eligible = false;
         break;
@@ -2245,7 +2235,6 @@ const fieldsMetaFor = (
   type: ComplexTypeDef,
   fields: IrField[],
   ir: XsdIr,
-  ergonomic: boolean,
   structured: boolean,
   integers: IntegersMode,
   decimal: DecimalMode,
@@ -2280,7 +2269,7 @@ const fieldsMetaFor = (
       parts.push(`occurrenceCapacity: ${JSON.stringify(field.occurrenceCapacity)}`);
     }
     if (field.kind === "element") {
-      const wrapped = wrapperTargetFor(field, ir, ergonomic);
+      const wrapped = wrapperTargetFor(field, ir);
       if (wrapped !== undefined && (membersByHead.get(field.qname)?.length ?? 0) === 0) {
         const wrappedParts = [
           `kind: ${JSON.stringify(wrapped.kind)}`,
@@ -2892,7 +2881,6 @@ const tsFieldLine = (
   integers: IntegersMode,
   decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
-  ergonomic: boolean,
   polymorphicSlotType?: (field: IrField) => string | undefined,
 ): string => {
   let type: string;
@@ -2926,7 +2914,7 @@ const tsFieldLine = (
     field.fixedValue === undefined &&
     polymorphicType === undefined &&
     (membersByHead.get(field.qname)?.length ?? 0) === 0
-      ? wrapperTargetFor(field, ir, ergonomic)
+      ? wrapperTargetFor(field, ir)
       : undefined;
   if (wrapped !== undefined) {
     type = tsTypeOfTypeName(wrapped.typeName, ir, ifaceName, new Set(), dt, integers, decimal);
@@ -3138,10 +3126,6 @@ export type IrToZodOptions = {
   // Where xs:decimal lands: "number" (default) is float64, lossy beyond ~16
   // significant digits; "string" keeps the exact canonical decimal lexical.
   decimal?: "number" | "string";
-  // Temporary scaffolding for the 1.0 output shape: collapse lone-attribute
-  // value wrappers to scalars and emit repeated choices as one tagged array.
-  // Deliberately not part of the documented public API; removed at the flip.
-  ergonomic?: boolean;
   // Emit a self-contained module that imports only zod: registry metadata and
   // the XML runtime are gone, helper checks are inlined, and xs:choice is
   // enforced by generated refinements instead of parseXml.
@@ -3152,8 +3136,8 @@ export const irToZod = (
   irInput: XsdIr,
   opts?: IrToZodOptions,
 ): { schemas: string; warnings: string[] } => {
-  const fieldKeyNaming = opts?.ergonomic === true ? ergonomicAttributeKeys(irInput) : undefined;
-  const ir = fieldKeyNaming?.ir ?? irInput;
+  const fieldKeyNaming = ergonomicAttributeKeys(irInput);
+  const ir = fieldKeyNaming.ir;
   const structured = opts?.datatypes === "structured";
   const integers: IntegersMode = opts?.integers ?? "number";
   const decimal: DecimalMode = opts?.decimal ?? "number";
@@ -3193,11 +3177,9 @@ export const irToZod = (
   const standaloneIdentityWarning =
     "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
 
-  // Ergonomic output. The identity pass understands collapsed wrapper slots
-  // and synthetic choice arrays, so the shape does not depend on whether the
-  // module declares an identity constraint.
-  const ergonomic = opts?.ergonomic === true;
-
+  // The identity pass understands collapsed wrapper slots and synthetic choice
+  // arrays, so the shape does not depend on whether the module declares an
+  // identity constraint.
   // Emitted fields per complex type: eligible repeated choices collapse their
   // branch fields into one synthetic "choice" field, placed where the first
   // branch sat so hand-built data serializes in content-model order.
@@ -3210,7 +3192,7 @@ export const irToZod = (
       return cached;
     }
     const base = dedupeEmissionFields(type);
-    const groups = ergonomicChoiceGroups(type, ir, ergonomic);
+    const groups = ergonomicChoiceGroups(type, ir);
     let built: { choices: ChoiceArrayField[]; fields: IrField[] };
     if (groups.length === 0) {
       built = { choices: [], fields: base };
@@ -3245,11 +3227,12 @@ export const irToZod = (
         }
         placed.add(choice.key);
         const card = type.choiceGroups?.[choice.group];
+        const required = choiceFlags(type, choice.group).required;
         fields.push({
           kind: "choice",
           qname: "{}" as QName,
           typeName: ANY_TYPE_QNAME,
-          minOccurs: card?.minOccurs ?? 0,
+          minOccurs: required ? (card?.minOccurs ?? 1) : 0,
           maxOccurs: card?.maxOccurs ?? "unbounded",
           fieldKey: choice.key,
           choiceArray: choice,
@@ -3257,7 +3240,7 @@ export const irToZod = (
       }
       built = { choices, fields };
       if (fields.length === 0) {
-        throw new Error(`Ergonomic choice emission lost every field of ${type.name}`);
+        throw new Error(`Repeated-choice emission lost every field of ${type.name}`);
       }
     }
     choiceArrayEmission.set(type.name, built);
@@ -3501,7 +3484,6 @@ export const irToZod = (
         t,
         emissionFields(t),
         ir,
-        ergonomic,
         structured,
         integers,
         decimal,
@@ -3830,9 +3812,7 @@ export const irToZod = (
         : `z.lazy((): z.ZodType<${tsVariantUnionType(field.typeName)}> => ${union})`;
     }
     const wrapped =
-      (membersByHead.get(field.qname)?.length ?? 0) === 0
-        ? wrapperTargetFor(field, ir, ergonomic)
-        : undefined;
+      (membersByHead.get(field.qname)?.length ?? 0) === 0 ? wrapperTargetFor(field, ir) : undefined;
     if (wrapped !== undefined) {
       return primitiveToZod(wrapped.typeName, primitiveCtx);
     }
@@ -4092,7 +4072,6 @@ export const irToZod = (
           integers,
           decimal,
           membersByHead,
-          ergonomic,
           (f) =>
             polymorphicVariants(f) === undefined ? undefined : tsVariantUnionType(f.typeName),
         ),
