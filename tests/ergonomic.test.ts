@@ -93,6 +93,39 @@ describe("default output shape", () => {
     expect(serializeXml(schema, parsed as never)).toBe(xml);
   });
 
+  it("keeps attribute keys stable alongside a choice-named element and synthetic array", async () => {
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:sequence>
+      <xs:element name="choice" type="xs:string"/>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string"/>
+      </xs:choice>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:string" use="required"/>
+  </xs:complexType>
+  <xs:element name="root" type="T"/>
+</xs:schema>`;
+    let source = "";
+    let mod: Record<string, unknown> = {};
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, xsd);
+      source = irToZod(await parseXsd([file])).schemas;
+      mod = await generateAndImport([file]);
+    });
+    expect(source).toContain(`"choice": string;`);
+    expect(source).toContain(`"choice2": ({ "a": string } | { "b": string })[];`);
+    expect(source).toContain(`"id": string;`);
+    const schema = mod["rootSchema"] as never;
+    const xml = `<root id="r"><choice>x</choice><a>1</a><b>2</b></root>`;
+    const parsed = parseXml(schema, xml) as Record<string, unknown>;
+    expect(parsed).toEqual({ id: "r", choice: "x", choice2: [{ a: "1" }, { b: "2" }] });
+    expect(serializeXml(schema, parsed as never)).toBe(xml);
+  });
+
   it("parses wrappers as scalars and choices as tagged items in document order", async () => {
     const mod = await moduleFor();
     const schema = mod["rootSchema"] as never;
