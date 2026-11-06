@@ -73,7 +73,7 @@ describe("xs:annotation/xs:documentation", () => {
     expect(schemas).toContain("/** An invoice line item */\nexport interface InvoiceType");
     // Property-level JSDoc from field descriptions.
     expect(schemas).toContain('  /** Line total */\n  "amount": number;');
-    expect(schemas).toContain('  /** ISO 4217 currency code */\n  "@currency": string;');
+    expect(schemas).toContain('  /** ISO 4217 currency code */\n  "currency": string;');
     // Exported root const JSDoc from the element description.
     expect(schemas).toContain("/** Root invoice element */\nexport const invoiceSchema");
   });

@@ -37,17 +37,24 @@ const RUNNER = `import { parseXml, safeParseXml } from "xsd-to-zod";
 import { catalogSchema } from "./gen/schema.zod.ts";
 
 const parsed = parseXml(catalogSchema, '<catalog><item id="1"/><item id="2"/></catalog>');
-if (JSON.stringify(parsed) !== '{"item":[{"@id":1},{"@id":2}]}') {
+if (JSON.stringify(parsed) !== '{"item":[1,2]}') {
   throw new Error(\`unexpected parse result: \${JSON.stringify(parsed)}\`);
 }
 
-const invalid = safeParseXml(catalogSchema, "<catalog><item/></catalog>");
+const invalid = safeParseXml(catalogSchema, "<catalog/>");
 if (invalid.success) {
   throw new Error("expected invalid XML to fail validation");
 }
 const issues = (invalid.error as { issues?: unknown }).issues;
 if (!Array.isArray(issues) || issues.length === 0) {
   throw new Error("expected a ZodError with issues");
+}
+
+// The collapsed wrapper slot reads its lone attribute as the element value,
+// so a missing required attribute is a structural error, not a ZodError.
+const missingAttribute = safeParseXml(catalogSchema, "<catalog><item/></catalog>");
+if (missingAttribute.success) {
+  throw new Error("expected a missing required attribute to fail validation");
 }
 
 console.log("pack smoke: generated module parses and rejects as expected");

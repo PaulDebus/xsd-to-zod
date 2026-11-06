@@ -41,7 +41,7 @@ const EXPECTED: Record<string, NegativeExpectation> = {
   "invalid-nil-with-content": { data: null },
   // Unknown elements are ignored.
   "invalid-unexpected-element": {
-    data: { required: "req", repeated: [1, 2], "@must": "abc" },
+    data: { required: "req", repeated: [1, 2], must: "abc" },
   },
   // Order is not enforced: fields are matched by name.
   "invalid-wrong-element-order": {

@@ -103,7 +103,7 @@ describe("hoisted registry metadata", () => {
       name: "n",
       note: "x",
       price: 9.5,
-      "@id": "p1",
+      id: "p1",
       xsiType: "{urn:hoist}ProductType",
     });
     const out = serializeXml(schema, data);

@@ -886,7 +886,7 @@ describe("identity constraints", () => {
   });
 });
 
-describe("identity constraints with the ergonomic output shape", () => {
+describe("identity constraints with the collapsed output shape", () => {
   const WRAPPER_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:complexType name="IdValue">
@@ -922,7 +922,7 @@ describe("identity constraints with the ergonomic output shape", () => {
 </xs:schema>`;
 
   it("navigates a collapsed wrapper slot as its element occurrence", async () => {
-    const schema = await schemaFor(WRAPPER_XSD, undefined, { ergonomic: true });
+    const schema = await schemaFor(WRAPPER_XSD, undefined);
     const parsed = parseXml(schema, `<catalog><item id="1"/><item id="2"/></catalog>`);
     expect(parsed).toEqual({ item: [1, 2] });
     // Value-space comparison still applies across the collapsed scalars.
@@ -932,9 +932,9 @@ describe("identity constraints with the ergonomic output shape", () => {
   });
 
   it("navigates a repeated choice array by branch tag", async () => {
-    const schema = await schemaFor(CHOICE_XSD, undefined, { ergonomic: true });
+    const schema = await schemaFor(CHOICE_XSD, undefined);
     const parsed = parseXml(schema, `<root><a>1</a><b>x</b><a>2</a></root>`);
-    expect(parsed).toEqual({ _choice: [{ a: 1 }, { b: "x" }, { a: 2 }] });
+    expect(parsed).toEqual({ choice: [{ a: 1 }, { b: "x" }, { a: 2 }] });
     expect(expectFailure(safeParseXml(schema, `<root><a>1</a><b>x</b><a>1</a></root>`))).toContain(
       'xs:unique "aUnique"',
     );
@@ -974,7 +974,6 @@ describe("identity constraints with the ergonomic output shape", () => {
   </xs:element>
 </xs:schema>`,
       undefined,
-      { ergonomic: true },
     );
     expect(
       safeParseXml(

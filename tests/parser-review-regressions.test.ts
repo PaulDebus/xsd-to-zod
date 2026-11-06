@@ -17,10 +17,10 @@ describe("schema collection correctness", () => {
         await compileReviewSchema(`<xs:complexType name="Base"><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="a" type="xs:string" use="required"/></xs:extension></xs:simpleContent></xs:complexType>
       <xs:complexType name="Derived"><xs:simpleContent><xs:${kind} base="Base">${own}</xs:${kind}></xs:simpleContent></xs:complexType><xs:element name="root" type="Derived"/>`);
       const value = parseXml(schema, '<root a="yes">text</root>');
-      expect(value).toEqual({ _text: "text", "@a": "yes" });
+      expect(value).toEqual({ _text: "text", a: "yes" });
       expect(safeParseXml(schema, "<root>text</root>").success).toBe(false);
       expect(await validateXml(serializeXml(schema, value), xsd)).toEqual({ valid: true });
-      expect(generated.schemas).not.toContain('"@a": string;\n  "@a"');
+      expect(generated.schemas).not.toContain('"a": string;\n  "a"');
     },
   );
 
@@ -30,7 +30,7 @@ describe("schema collection correctness", () => {
     );
     expect(safeParseXml(schema, "<root/>").success).toBe(false);
     const data = parseXml(schema, '<root a="kept"/>');
-    expect(data).toEqual({ "@a": "kept" });
+    expect(data).toEqual({ a: "kept" });
     expect(safeParseXml(schema, '<root a="kept" b="forbidden"/>').success).toBe(false);
     expect(await validateXml(serializeXml(schema, data), xsd)).toEqual({ valid: true });
   });
@@ -48,7 +48,7 @@ describe("schema collection correctness", () => {
     const { schema } = await compileReviewSchema(
       `<xs:attribute name="a" type="xs:int" fixed="7"/><xs:attribute name="b" type="xs:int" default="9"/><xs:element name="root"><xs:complexType><xs:attribute ref="a"/><xs:attribute ref="b"/></xs:complexType></xs:element>`,
     );
-    expect(parseXml(schema, "<root/>")).toEqual({ "@a": 7, "@b": 9 });
+    expect(parseXml(schema, "<root/>")).toEqual({ a: 7, b: 9 });
     expect(safeParseXml(schema, '<root a="8"/>').success).toBe(false);
   });
 
@@ -63,7 +63,7 @@ describe("schema collection correctness", () => {
     const { schema } = await compileReviewSchema(
       '<xs:complexType name="Parent"><xs:sequence><xs:element name="item"><xs:complexType><xs:attribute name="nested"/></xs:complexType></xs:element></xs:sequence></xs:complexType><xs:complexType name="Parent_item_Type"><xs:attribute name="real" type="xs:int" use="required"/></xs:complexType><xs:element name="root" type="Parent_item_Type"/>',
     );
-    expect(parseXml(schema, '<root real="7"/>')).toEqual({ "@real": 7 });
+    expect(parseXml(schema, '<root real="7"/>')).toEqual({ real: 7 });
   });
 
   it("reserves inline simple-type children and keeps parent namespace context", async () => {
@@ -71,7 +71,7 @@ describe("schema collection correctness", () => {
       '<xs:element name="items"><xs:simpleType><xs:list><xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType></xs:list></xs:simpleType></xs:element><xs:simpleType name="anonymous_items_SimpleType_itemType"><xs:restriction base="xs:int"/></xs:simpleType><xs:attribute name="a" xmlns:toString="http://www.w3.org/2001/XMLSchema"><xs:simpleType><xs:restriction base="toString:int"/></xs:simpleType></xs:attribute><xs:element name="root"><xs:complexType><xs:sequence><xs:element name="v" type="anonymous_items_SimpleType_itemType"/></xs:sequence><xs:attribute ref="a"/></xs:complexType></xs:element>',
     );
     expect(ir.diagnostics).toEqual([]);
-    expect(parseXml(schema, '<root a="8"><v>7</v></root>')).toEqual({ v: 7, "@a": 8 });
+    expect(parseXml(schema, '<root a="8"><v>7</v></root>')).toEqual({ v: 7, a: 8 });
   });
 
   it("ignores empty union member tokens and inherits local namespace contexts", async () => {

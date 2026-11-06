@@ -136,9 +136,9 @@ describe("xs:decimal mapping (opt-in: string)", () => {
       const schema = mod["rootSchema"] as z.ZodType;
       const parsed = parseXml(schema, '<root xmlns="urn:fixed-decimal"><v>1.5</v></root>') as {
         v: string;
-        "@a": string;
+        a: string;
       };
-      expect(parsed).toEqual({ v: "1.5", "@a": "2.5" });
+      expect(parsed).toEqual({ v: "1.5", a: "2.5" });
       expect(serializeXml(schema, parsed)).toContain("<ns0:v>1.50</ns0:v>");
       expect(() => parseXml(schema, '<root xmlns="urn:fixed-decimal"><v>2</v></root>')).toThrow(
         /does not match the fixed value/,

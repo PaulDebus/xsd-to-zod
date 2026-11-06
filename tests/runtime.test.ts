@@ -79,8 +79,8 @@ describe("entities in character data", () => {
         'version="&#49;"',
       ),
     );
-    expect(parsed["version"]).toBeUndefined();
-    expect(parsed["@version"]).toBe(1);
+    expect(parsed["@version"]).toBeUndefined();
+    expect(parsed["version"]).toBe(1);
   });
 
   it("does not double-decode &amp;lt;", async () => {
@@ -110,8 +110,8 @@ describe("entities in character data", () => {
 describe("type coercion", () => {
   it("coerces attribute values through their declared type", async () => {
     const parsed = parseXml(doc("<text>x</text><count>1</count><flag>0</flag>"));
-    expect(parsed["@version"]).toBe(7);
-    expect(parsed["@active"]).toBe(true);
+    expect(parsed["version"]).toBe(7);
+    expect(parsed["active"]).toBe(true);
     expect(parsed["flag"]).toBe(false);
   });
 
@@ -196,7 +196,7 @@ describe("QName-typed values", () => {
       schema,
       '<holder xmlns:a="urn:alpha" att="a:foo"><val>a:bar</val></holder>',
     );
-    expect(parsed).toEqual({ "@att": "a:foo", val: "a:bar" });
+    expect(parsed).toEqual({ att: "a:foo", val: "a:bar" });
     const serialized = serializeXmlRuntime(schema, parsed);
     expect(serialized).toContain('xmlns:a="urn:alpha"');
     expect(serialized).toContain('att="a:foo"');
@@ -247,7 +247,7 @@ describe("QName-typed values", () => {
     expect(serialized).toContain('xmlns:ns0="urn:qn"');
     expect(serialized).toContain('ref="qns0:foo"');
     expect(serialized).toContain('xmlns:qns0="urn:other"');
-    expect(parseXmlRuntime(schema, serialized)).toEqual({ "@ref": "qns0:foo", name: "x" });
+    expect(parseXmlRuntime(schema, serialized)).toEqual({ ref: "qns0:foo", name: "x" });
   });
 
   it("keeps the source prefix when seen before any generated allocation", async () => {
@@ -286,7 +286,7 @@ describe("QName-typed values", () => {
     const mod = await load();
     const schema = mod["holderSchema"] as z.ZodType;
     const parsed = parseXmlRuntime(schema, '<holder att="xml:lang"><val>xml:space</val></holder>');
-    expect(parsed).toEqual({ "@att": "xml:lang", val: "xml:space" });
+    expect(parsed).toEqual({ att: "xml:lang", val: "xml:space" });
     const serialized = serializeXmlRuntime(schema, parsed);
     expect(serialized).toContain('att="xml:lang"');
     expect(serialized).toContain(">xml:space</val>");

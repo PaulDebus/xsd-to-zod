@@ -267,7 +267,6 @@ describe("public API surface", () => {
         { datatypes: "structured" as const },
         { integers: "bigint" as const },
         { decimal: "string" as const },
-        { ergonomic: true },
         { js: true },
       ];
       for (const mode of modes) {

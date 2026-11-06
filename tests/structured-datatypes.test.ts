@@ -291,9 +291,7 @@ describe("datatypes: structured codegen", () => {
       expect(schemas).toContain('"tags"?: XsdDate[] | undefined;');
       // Datatype metadata for the serializer, per field.
       expect(schemas).toContain('"date": { kind: "element", qname: "{}date", datatype: "date" }');
-      expect(schemas).toContain(
-        '"@kind": { kind: "attribute", qname: "{}kind", datatype: "date" }',
-      );
+      expect(schemas).toContain('"kind": { kind: "attribute", qname: "{}kind", datatype: "date" }');
       // Enum values compare in value space, retaining the declaration lexical.
       expect(schemas).toContain('xsdOrderCompare("date", val, allowed) === 0');
     });
@@ -401,7 +399,7 @@ describe("datatypes: structured runtime round-trip", () => {
           { year: 2002, month: 10, day: 10 },
           { year: 2003, month: 11, day: 11, tzOffset: 0 },
         ],
-        "@kind": { year: 2002, month: 10, day: 10 },
+        kind: { year: 2002, month: 10, day: 10 },
       });
 
       const serialized = serializeXml(schema, parsed);
@@ -501,7 +499,7 @@ describe("datatypes: structured runtime round-trip", () => {
         expect(parsed).toEqual({
           start: { year: 2002, month: 10, day: 10 },
           epoch: { year: 2002, month: 10, day: 10, hour: 17, minute: 0, second: 0, tzOffset: 0 },
-          "@tz": { hour: 17, minute: 0, second: 0, tzOffset: 0 },
+          tz: { hour: 17, minute: 0, second: 0, tzOffset: 0 },
         });
         expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
         // A value other than the fixed one is rejected (canonical refine).
@@ -529,7 +527,7 @@ describe("datatypes: structured runtime round-trip", () => {
         const schema = mod["cfgSchema"] as z.ZodType;
         const parsed = parseXml(schema, "<cfg/>");
         expect(parsed).toEqual({
-          "@days": [
+          days: [
             { year: 2002, month: 10, day: 10 },
             { year: 2003, month: 11, day: 11 },
           ],
@@ -559,7 +557,7 @@ describe("datatypes: structured runtime round-trip", () => {
         // Fixed applies on absence too, as structured values.
         const parsed = parseXml(schema, "<cfg/>");
         expect(parsed).toEqual({
-          "@days": [
+          days: [
             { year: 2002, month: 10, day: 10 },
             { year: 2003, month: 11, day: 11 },
           ],
@@ -589,8 +587,8 @@ describe("datatypes: structured runtime round-trip", () => {
         const mod = await importGeneratedSchemas(schemas);
         const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
         const parsed = parseXml(schema, "<cfg/>");
-        expect(parsed).toEqual({ "@dims": [1, 2] });
-        expect(parseXml(schema, '<cfg dims="1 2"/>')).toEqual({ "@dims": [1, 2] });
+        expect(parsed).toEqual({ dims: [1, 2] });
+        expect(parseXml(schema, '<cfg dims="1 2"/>')).toEqual({ dims: [1, 2] });
         expect(() => parseXml(schema, '<cfg dims="3 4"/>')).toThrow();
         expect(parseXml(schema, serializeXml(schema, parsed))).toEqual(parsed);
       },
@@ -614,10 +612,10 @@ describe("datatypes: structured runtime round-trip", () => {
         const { schemas } = irToZod(await parseXsd([file]), { datatypes: "structured" });
         const mod = await importGeneratedSchemas(schemas);
         const schema = (mod as { cfgSchema: z.ZodType }).cfgSchema;
-        expect(parseXml(schema, "<cfg/>")).toEqual({ "@days": [] });
-        expect(parseXml(schema, '<cfg days=""/>')).toEqual({ "@days": [] });
+        expect(parseXml(schema, "<cfg/>")).toEqual({ days: [] });
+        expect(parseXml(schema, '<cfg days=""/>')).toEqual({ days: [] });
         expect(() => parseXml(schema, '<cfg days="2001-01-01"/>')).toThrow();
-        expect(parseXml(schema, serializeXml(schema, { "@days": [] }))).toEqual({ "@days": [] });
+        expect(parseXml(schema, serializeXml(schema, { days: [] }))).toEqual({ days: [] });
       },
     );
   });

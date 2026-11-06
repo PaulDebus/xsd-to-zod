@@ -43,8 +43,8 @@ const person: Person = {
   name: 'Alice',
   scores: [1, 2],
   nickname: null,
-  '@id': 'p1',
-  '@lang': 'en',
+  'id': 'p1',
+  'lang': 'en',
 };
 const sameAsInterface: PersonType = person;
 const backAgain: Person = sameAsInterface;
@@ -55,11 +55,11 @@ const status: 'active' | 'inactive' | undefined = person.status;
 const scores: number[] = person.scores;
 
 // @ts-expect-error — name is a required string, not optional
-const missing: Person = { scores: [], nickname: null, '@id': 'x', '@lang': 'en' };
+const missing: Person = { scores: [], nickname: null, 'id': 'x', 'lang': 'en' };
 // @ts-expect-error — status is an enum, not an arbitrary string
-const badStatus: Person = { name: 'x', status: 'bogus', scores: [], nickname: null, '@id': 'x', '@lang': 'en' };
+const badStatus: Person = { name: 'x', status: 'bogus', scores: [], nickname: null, 'id': 'x', 'lang': 'en' };
 // @ts-expect-error — scores is number[], not string[]
-const badScores: Person = { name: 'x', scores: ['a'], nickname: null, '@id': 'x', '@lang': 'en' };
+const badScores: Person = { name: 'x', scores: ['a'], nickname: null, 'id': 'x', 'lang': 'en' };
 
 export { person, manager, status, scores, missing, badStatus, badScores };
 `;

@@ -142,13 +142,12 @@ describe("runtime value preservation", () => {
     });
   });
 
-  it("retains pattern-constrained lexicals in ergonomic repeated choices", async () => {
+  it("retains pattern-constrained lexicals in collapsed repeated choices", async () => {
     const { schema, xsd } = await compile(
       `<xs:element name="root"><xs:complexType><xs:choice maxOccurs="unbounded">
       <xs:element name="a"><xs:simpleType><xs:restriction base="xs:int"><xs:pattern value="0[0-9]+"/></xs:restriction></xs:simpleType></xs:element>
       <xs:element name="b" type="xs:string"/>
     </xs:choice></xs:complexType></xs:element>`,
-      { ergonomic: true },
     );
     const output = serializeXml(schema, parseXml(schema, "<root><a>01</a><b>x</b></root>"));
     expect(output).toContain("<a>01</a>");

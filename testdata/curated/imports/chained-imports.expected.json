@@ -2,6 +2,6 @@
   "aField": "level a",
   "bField": {
     "_text": "level c value",
-    "@lang": "en"
+    "lang": "en"
   }
 }
