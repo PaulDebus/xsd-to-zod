@@ -58,8 +58,39 @@ describe("default output shape", () => {
 
   it("emits a repeated choice as one tagged array", async () => {
     const source = await generatedFor();
-    expect(source).toContain(`"_choice": ({ "a": number } | { "b": string })[];`);
+    expect(source).toContain(`"choice": ({ "a": number } | { "b": string })[];`);
     expect(source).not.toContain(`"a"?:`);
+  });
+
+  it("falls back to a numeric suffix when a field named choice already exists", async () => {
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:sequence>
+      <xs:element name="choice" type="xs:string"/>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="root" type="T"/>
+</xs:schema>`;
+    let source = "";
+    let mod: Record<string, unknown> = {};
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, xsd);
+      source = irToZod(await parseXsd([file])).schemas;
+      mod = await generateAndImport([file]);
+    });
+    expect(source).toContain(`"choice": string;`);
+    expect(source).toContain(`"choice2": ({ "a": string } | { "b": string })[];`);
+    const schema = mod["rootSchema"] as never;
+    const xml = `<root><choice>x</choice><a>1</a><b>2</b></root>`;
+    const parsed = parseXml(schema, xml) as Record<string, unknown>;
+    expect(parsed).toEqual({ choice: "x", choice2: [{ a: "1" }, { b: "2" }] });
+    expect(serializeXml(schema, parsed as never)).toBe(xml);
   });
 
   it("parses wrappers as scalars and choices as tagged items in document order", async () => {
@@ -71,7 +102,7 @@ describe("default output shape", () => {
     );
     expect(parsed).toEqual({
       count: 7,
-      _choice: [{ a: 1 }, { b: "x" }, { a: 2 }],
+      choice: [{ a: 1 }, { b: "x" }, { a: 2 }],
       tail: "z",
     });
   });
@@ -90,7 +121,7 @@ describe("default output shape", () => {
     expect(
       serializeXml(schema, {
         count: 7,
-        _choice: [{ b: "x" }, { a: 1 }],
+        choice: [{ b: "x" }, { a: 1 }],
         tail: "z",
       } as never),
     ).toBe(`<root><count text="7"/><b>x</b><a>1</a><tail>z</tail></root>`);
@@ -155,10 +186,10 @@ describe("default output shape (optional and object branches)", () => {
     });
     const schema = mod["rootSchema"] as never;
     expect(parseXml(schema, `<root><p><x>1</x></p><q>a</q></root>`)).toEqual({
-      _choice: [{ p: { x: 1 } }, { q: "a" }],
+      choice: [{ p: { x: 1 } }, { q: "a" }],
     });
     expect(parseXml(schema, `<root/>`)).toEqual({});
-    expect(serializeXml(schema, { _choice: [{ p: { x: 1 } }, { q: "a" }] } as never)).toBe(
+    expect(serializeXml(schema, { choice: [{ p: { x: 1 } }, { q: "a" }] } as never)).toBe(
       `<root><p><x>1</x></p><q>a</q></root>`,
     );
     expect(safeParseXml(schema, `<root><p><x>1</x></p><q>a</q><q>b</q></root>`).success).toBe(

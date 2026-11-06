@@ -20,7 +20,7 @@ The 1.0 output shape is now the default and only shape:
   would shadow a sibling element, the element keeps the bare name and the
   attribute keeps `@`; generation warns and comments in the generated file.
 - **Repeated choices are ordered arrays.** An eligible `xs:choice` with
-  `maxOccurs > 1` becomes `_choice: ({ a: A } | { b: B })[]` instead of
+  `maxOccurs > 1` becomes `choice: ({ a: A } | { b: B })[]` instead of
   parallel optional arrays. Document order is part of the data, so edits and
   hand-built values serialize in array order.
 - **Root anonymous type names are friendly.** A top-level element with an

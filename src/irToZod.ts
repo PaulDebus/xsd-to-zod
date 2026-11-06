@@ -3203,10 +3203,10 @@ export const irToZod = (
     } else {
       const usedKeys = new Set(base.map((field) => toFieldKey(field)));
       const choices: ChoiceArrayField[] = groups.map((group) => {
-        let key = "_choice";
+        let key = "choice";
         let suffix = 2;
         while (usedKeys.has(key)) {
-          key = `_choice${suffix}`;
+          key = `choice${suffix}`;
           suffix += 1;
         }
         usedKeys.add(key);

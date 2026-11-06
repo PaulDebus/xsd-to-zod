@@ -107,7 +107,7 @@ instead, and narrow its `unknown` error before reading Zod issues.
 
 ## Features
 
-- **XSD constructs**: `sequence`, `choice` (→ runtime-enforced from registry metadata; a repeated choice becomes one `_choice` array of tagged items), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, substitution groups (a head element's field becomes a union over its member elements), mixed content (`mixed="true"` → optional `_text` field next to the child elements)
+- **XSD constructs**: `sequence`, `choice` (→ runtime-enforced from registry metadata; a repeated choice becomes one `choice` array of tagged items), `all`, `attribute`, `simpleContent`, `complexContent` (extension flattening), `xs:group`, `xs:attributeGroup`, `xs:redefine`, substitution groups (a head element's field becomes a union over its member elements), mixed content (`mixed="true"` → optional `_text` field next to the child elements)
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), on the ordered date/time/duration and string-derived builtins (→ value-space comparison via `xsdOrderCompare`; timezone-less vs timezoned and indeterminate duration pairs reject), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
@@ -132,7 +132,7 @@ The generated shape is fixed at 1.0 — there is no compat or naming mode:
   would shadow a sibling element, the element wins the bare name and the
   attribute keeps its `@` prefix; codegen warns and comments on the fallback.
 - **Repeated choices are ordered arrays.** An eligible `xs:choice` with
-  `maxOccurs > 1` becomes `_choice: ({ a: A } | { b: B })[]`, preserving
+  `maxOccurs > 1` becomes `choice: ({ a: A } | { b: B })[]`, preserving
   document order and static exclusivity.
 - **Root anonymous types use the element's bare name.** `<xs:element name="Library">`
   with an inline type exports `Library`; nested anonymous types keep the

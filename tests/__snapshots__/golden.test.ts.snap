@@ -138,11 +138,11 @@ import { xmlRegistry } from 'xsd-to-zod';
 export const generatedBy = "xsd-to-zod@<version>";
 
 export interface OptionalBag {
-  "_choice"?: ({ "A": string } | { "B": string })[] | undefined;
+  "choice"?: ({ "A": string } | { "B": string })[] | undefined;
 }
 export type OptionalBagIn = z.input<typeof OptionalBagTypeSchema>;
 export interface Bag {
-  "_choice": ({ "A": string } | { "B": string })[];
+  "choice": ({ "A": string } | { "B": string })[];
 }
 export type BagIn = z.input<typeof BagTypeSchema>;
 export interface AllType {
@@ -178,8 +178,8 @@ export interface PersonType {
   "age": number;
 }
 export type PersonTypeIn = z.input<typeof PersonTypeSchema>;
-export const OptionalBagTypeSchema = z.lazy(() => z.object({"_choice": z.array(z.union([z.strictObject({ "A": z.string() }), z.strictObject({ "B": z.string() })])).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_OptionalBag_Type", fields: { "_choice": { kind: "choice", qname: "{urn:curated}A", choice: { branches: [{ tag: "A", qname: "{urn:curated}A" }, { tag: "B", qname: "{urn:curated}B" }], minOccurs: 0, maxOccurs: "unbounded" } } } });
-export const BagTypeSchema = z.lazy(() => z.object({"_choice": z.array(z.union([z.strictObject({ "A": z.string() }), z.strictObject({ "B": z.string() })])).min(1)})).register(xmlRegistry, { qname: "{urn:curated}anonymous_Bag_Type", fields: { "_choice": { kind: "choice", qname: "{urn:curated}A", choice: { branches: [{ tag: "A", qname: "{urn:curated}A" }, { tag: "B", qname: "{urn:curated}B" }], minOccurs: 1, maxOccurs: "unbounded" } } } });
+export const OptionalBagTypeSchema = z.lazy(() => z.object({"choice": z.array(z.union([z.strictObject({ "A": z.string() }), z.strictObject({ "B": z.string() })])).optional()})).register(xmlRegistry, { qname: "{urn:curated}anonymous_OptionalBag_Type", fields: { "choice": { kind: "choice", qname: "{urn:curated}A", choice: { branches: [{ tag: "A", qname: "{urn:curated}A" }, { tag: "B", qname: "{urn:curated}B" }], minOccurs: 0, maxOccurs: "unbounded" } } } });
+export const BagTypeSchema = z.lazy(() => z.object({"choice": z.array(z.union([z.strictObject({ "A": z.string() }), z.strictObject({ "B": z.string() })])).min(1)})).register(xmlRegistry, { qname: "{urn:curated}anonymous_Bag_Type", fields: { "choice": { kind: "choice", qname: "{urn:curated}A", choice: { branches: [{ tag: "A", qname: "{urn:curated}A" }, { tag: "B", qname: "{urn:curated}B" }], minOccurs: 1, maxOccurs: "unbounded" } } } });
 export const AllTypeSchema = z.lazy(() => z.object({"a": z.string(), "b": z.string(), "c": z.string()})).register(xmlRegistry, { qname: "{urn:curated}AllType", fields: { "a": { kind: "element", qname: "{urn:curated}a" }, "b": { kind: "element", qname: "{urn:curated}b" }, "c": { kind: "element", qname: "{urn:curated}c" } } });
 export const ContactTypeSchema = z.lazy(() => z.object({"email": z.string().optional(), "phone": z.string().optional()})).register(xmlRegistry, { qname: "{urn:curated}ContactType", fields: { "email": { kind: "element", qname: "{urn:curated}email" }, "phone": { kind: "element", qname: "{urn:curated}phone" } }, choices: {"0":{"required":true,"repeated":false,"branches":[{"id":"0.0","keys":[{"key":"email","required":true}]},{"id":"0.1","keys":[{"key":"phone","required":true}]}],"message":"choice requires exactly one of: email, phone","enforce":true}} });
 export const ParagraphTypeSchema = z.lazy(() => z.object({"_text": z.string().optional(), "bold": z.array(z.string()).optional(), "italic": z.array(z.string()).optional()})).register(xmlRegistry, { qname: "{urn:curated}ParagraphType", fields: { "_text": { kind: "text", qname: "{urn:curated}_text" }, "bold": { kind: "element", qname: "{urn:curated}bold" }, "italic": { kind: "element", qname: "{urn:curated}italic" } } });

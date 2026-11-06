@@ -43,13 +43,13 @@ describe("emptiable choice groups", () => {
     const schema = await schemaFor(CONCEPT_XSD);
     expect(parseXml(schema, '<Concept id="x"><Name>n</Name></Concept>')).toEqual({
       id: "x",
-      _choice: [{ Name: "n" }],
+      choice: [{ Name: "n" }],
     });
     expect(
       parseXml(schema, '<Concept id="x"><LanguageOfCreator>en</LanguageOfCreator></Concept>'),
     ).toEqual({
       id: "x",
-      _choice: [{ LanguageOfCreator: "en" }],
+      choice: [{ LanguageOfCreator: "en" }],
     });
     expect(
       parseXml(
@@ -58,7 +58,7 @@ describe("emptiable choice groups", () => {
       ),
     ).toEqual({
       id: "x",
-      _choice: [{ Name: "a" }, { Name: "b" }, { Definition: "d" }],
+      choice: [{ Name: "a" }, { Name: "b" }, { Definition: "d" }],
     });
   });
 
@@ -73,7 +73,7 @@ describe("emptiable choice groups", () => {
   </xs:complexType>
   <xs:element name="t" type="T"/>
 </xs:schema>`);
-    expect(parseXml(schema, "<t><B>b</B></t>")).toEqual({ _choice: [{ B: "b" }] });
+    expect(parseXml(schema, "<t><B>b</B></t>")).toEqual({ choice: [{ B: "b" }] });
     expect(() => parseXml(schema, "<t/>")).toThrow(/choice/);
   });
 });

@@ -934,7 +934,7 @@ describe("identity constraints with the collapsed output shape", () => {
   it("navigates a repeated choice array by branch tag", async () => {
     const schema = await schemaFor(CHOICE_XSD, undefined);
     const parsed = parseXml(schema, `<root><a>1</a><b>x</b><a>2</a></root>`);
-    expect(parsed).toEqual({ _choice: [{ a: 1 }, { b: "x" }, { a: 2 }] });
+    expect(parsed).toEqual({ choice: [{ a: 1 }, { b: "x" }, { a: 2 }] });
     expect(expectFailure(safeParseXml(schema, `<root><a>1</a><b>x</b><a>1</a></root>`))).toContain(
       'xs:unique "aUnique"',
     );
