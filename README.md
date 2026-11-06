@@ -351,6 +351,13 @@ if that context is ambiguous or unavailable, supply it explicitly:
 Use the empty key (`""`) for the QName value's default namespace. Ambiguous
 values fail serialization instead of silently using another document's bindings.
 
+Serialization picks generated `ns0`, `ns1`, … prefixes by default. Pass
+`prefixes` to keep a schema's conventional spelling, e.g.
+`serializeXml(schema, value, { prefixes: { "https://standards.iso.org/iso/23387/ed-2/en/": "dt" } })`
+emits `dt:`-prefixed output. Unlisted namespaces keep generated prefixes, and a
+preference that would collide with a reserved or already-bound prefix falls
+back to a generated one. Values round-trip identically either way.
+
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 
 Lexical retention is **opt-in**. By default `serializeXml` derives each lexical from the parsed value in its shortest round-trip form, so `1.0` serializes as `1` and `001` as `1` (and numeric values never use exponent notation, which `xs:decimal` forbids). Fields whose type carries lexical-space facets (`pattern`, `enumeration`, `whiteSpace`, order/fraction digits) keep their parse-time lexical regardless, so serialized output still satisfies the schema. Pass `{ retainLexicals: true }` to `parseXml`/`safeParseXml` to keep scalar lexical spellings for unchanged values. This does not preserve XML bytes, formatting, comments, namespace spelling, CDATA boundaries, or mixed-content interleaving. Retention never changes the parsed data (it only feeds serialization), and QName prefix bindings are tracked independently.

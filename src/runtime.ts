@@ -2908,47 +2908,79 @@ const openWalk = (
 // Writing: data → XML, driven by the schema + registry
 // ---------------------------------------------------------------------------
 
-const choosePrefix = (
-  uri: string,
-  prefixMap: Map<string, string>,
-  reserved?: ReadonlyMap<string, string>,
-): string => {
+type SerializeCtx = {
+  allowDefaultQName?: boolean;
+  prefixMap: Map<string, string>;
+  // Caller-supplied namespace URI → prefix preferences. A preferred prefix is
+  // used unless it is reserved or already bound to another namespace.
+  preferredPrefixes: ReadonlyMap<string, string>;
+  // Explicit prefix→URI declarations for QName/NOTATION value lexicals
+  // (recorded at parse time), emitted at the root alongside prefixMap decls.
+  qnameNs: Map<string, string>;
+};
+
+// Prefixes that cannot be chosen for an arbitrary namespace: xml is bound by
+// definition, xmlns is reserved for declarations, and xsi is emitted as the
+// schema-instance binding when needed.
+const RESERVED_PREFIXES: ReadonlySet<string> = new Set(["xml", "xmlns", "xsi"]);
+
+const choosePrefix = (uri: string, ctx: SerializeCtx): string => {
   // The xml prefix is bound by definition — use it directly, undeclared.
   if (uri === XML_NS) {
     return "xml";
   }
-  const existing = prefixMap.get(uri);
-  if (existing) {
+  const existing = ctx.prefixMap.get(uri);
+  if (existing !== undefined) {
     return existing;
   }
-  const used = new Set(prefixMap.values());
-  let n = prefixMap.size;
+  const used = new Set(ctx.prefixMap.values());
+  const preferred = ctx.preferredPrefixes.get(uri);
+  if (
+    preferred !== undefined &&
+    preferred !== "" &&
+    !RESERVED_PREFIXES.has(preferred) &&
+    !used.has(preferred)
+  ) {
+    const declaredUri = ctx.qnameNs.get(preferred);
+    if (declaredUri === undefined) {
+      ctx.prefixMap.set(uri, preferred);
+      return preferred;
+    }
+    // A QName lexical already needed this prefix for the same namespace: the
+    // root declaration serves both, so adopt it instead of emitting a second.
+    if (declaredUri === uri) {
+      ctx.qnameNs.delete(preferred);
+      ctx.prefixMap.set(uri, preferred);
+      return preferred;
+    }
+  }
+  // Keep preferred and already-declared prefixes free for the namespaces they
+  // belong to, so a generated fallback never shadows a later preference.
+  const blocked = new Set(used);
+  for (const prefix of ctx.preferredPrefixes.values()) {
+    blocked.add(prefix);
+  }
+  for (const prefix of ctx.qnameNs.keys()) {
+    blocked.add(prefix);
+  }
+  for (const prefix of RESERVED_PREFIXES) {
+    blocked.add(prefix);
+  }
+  let n = ctx.prefixMap.size;
   let next = `ns${n}`;
-  while (used.has(next) || reserved?.has(next)) {
+  while (blocked.has(next)) {
     next = `ns${++n}`;
   }
-  prefixMap.set(uri, next);
+  ctx.prefixMap.set(uri, next);
   return next;
 };
 
-const elementName = (
-  qname: string,
-  prefixMap: Map<string, string>,
-  reserved?: ReadonlyMap<string, string>,
-): string => {
+const elementName = (qname: string, ctx: SerializeCtx): string => {
   const { namespace, local } = splitClark(qname);
   if (!namespace) {
     return local;
   }
-  return `${choosePrefix(namespace, prefixMap, reserved)}:${local}`;
-};
-
-type SerializeCtx = {
-  allowDefaultQName?: boolean;
-  prefixMap: Map<string, string>;
-  // Explicit prefix→URI declarations for QName/NOTATION value lexicals
-  // (recorded at parse time), emitted at the root alongside prefixMap decls.
-  qnameNs: Map<string, string>;
+  return `${choosePrefix(namespace, ctx)}:${local}`;
 };
 
 // Re-declare the prefix bindings a QName/NOTATION lexical relies on, returning
@@ -2987,13 +3019,13 @@ const declareQNamePrefixes = (
           ctx.qnameNs.set("", uri);
           return token;
         }
-        return `${choosePrefix(uri, ctx.prefixMap, ctx.qnameNs)}:${local}`;
+        return `${choosePrefix(uri, ctx)}:${local}`;
       }
       // The xml prefix is bound by definition and must not be declared.
       if (prefix === "xml") {
         return token;
       }
-      if (ctx.qnameNs.get(prefix) === uri) {
+      if (ctx.qnameNs.get(prefix) === uri || ctx.prefixMap.get(uri) === prefix) {
         return token;
       }
       if (!prefixTaken(prefix)) {
@@ -3060,11 +3092,11 @@ const openSerialize = (
     }
     if (key.startsWith("@")) {
       attributes.push(
-        `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(entry))}"`,
+        `${elementName(key.slice(1), ctx)}="${escapeXmlAttrChars(serializePrimitive(entry))}"`,
       );
       continue;
     }
-    const tag = elementName(key, ctx.prefixMap, ctx.qnameNs);
+    const tag = elementName(key, ctx);
     const xsiTypes =
       typeof value === "object" && value !== null
         ? openXsiTypeStore.get(value as object)?.get(key)
@@ -3100,7 +3132,7 @@ const pushOpenChildren = (
     if (xsiType !== undefined) {
       // The captured xsi:type (Clark) re-emitted with a fresh prefix.
       usesXsi = true;
-      attrs.push(`xsi:type="${elementName(xsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+      attrs.push(`xsi:type="${elementName(xsiType, ctx)}"`);
     }
     const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
     elements.push(`<${tag}${attrStr}>${inner.body}</${tag}>`);
@@ -3217,7 +3249,7 @@ const xsiTypeVariantFor = (
   const match = options.slice(1).find((option) => xsiTypeOptionQName(option) === xsiType);
   return {
     option: match ?? declared,
-    xsiTypeAttr: `xsi:type="${elementName(xsiType, ctx.prefixMap, ctx.qnameNs)}"`,
+    xsiTypeAttr: `xsi:type="${elementName(xsiType, ctx)}"`,
   };
 };
 
@@ -3228,9 +3260,7 @@ const xsiTypeAttrFor = (
   capture: XsiTypeCapture | undefined,
   ctx: SerializeCtx,
 ): string | undefined =>
-  capture === undefined
-    ? undefined
-    : `xsi:type="${elementName(capture.typeQName, ctx.prefixMap, ctx.qnameNs)}"`;
+  capture === undefined ? undefined : `xsi:type="${elementName(capture.typeQName, ctx)}"`;
 
 // Leaf serialization honoring the field's structured datatype meta; list
 // values canonicalize per item.
@@ -3267,9 +3297,7 @@ const writeObjectFields = (
   const xsiCapture = xsiCaptureStore.get(obj);
   if (xsiCapture !== undefined) {
     for (const [clark, lexical] of xsiCapture.attributes) {
-      attributes.push(
-        `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
-      );
+      attributes.push(`${elementName(clark, ctx)}="${escapeXmlAttrChars(escapeXml(lexical))}"`);
     }
   }
 
@@ -3294,7 +3322,7 @@ const writeObjectFields = (
       if (key.startsWith("@")) {
         if (hasAnyAttribute) {
           attributes.push(
-            `${elementName(key.slice(1), ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(serializePrimitive(value))}"`,
+            `${elementName(key.slice(1), ctx)}="${escapeXmlAttrChars(serializePrimitive(value))}"`,
           );
         }
         continue;
@@ -3335,7 +3363,7 @@ const writeObjectFields = (
       usesXsi =
         pushOpenChildren(
           elements,
-          elementName(key, ctx.prefixMap, ctx.qnameNs),
+          elementName(key, ctx),
           value,
           ctx,
           openXsiTypeStore.get(obj)?.get(key),
@@ -3363,9 +3391,7 @@ const writeObjectFields = (
       typeof qnameNs === "object" && !Array.isArray(qnameNs) ? qnameNs : undefined,
       ctx,
     );
-    attributes.push(
-      `${elementName(fieldMeta.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"`,
-    );
+    attributes.push(`${elementName(fieldMeta.qname, ctx)}="${escapeXmlAttrChars(declared)}"`);
   };
 
   // Build one element-field occurrence (index i into the field's value
@@ -3392,7 +3418,7 @@ const writeObjectFields = (
     const occurrenceQName =
       (Array.isArray(storedQNames) ? storedQNames[i] : storedQNames) ?? fieldMeta.qname;
     const itemSchema = substitutionSchemaFor(occurrenceQName, field.itemSchema);
-    const localName = elementName(occurrenceQName, ctx.prefixMap, ctx.qnameNs);
+    const localName = elementName(occurrenceQName, ctx);
     if (item === null) {
       usesXsi = true;
       // Nil attributes captured at parse time (identity key fields survive
@@ -3400,7 +3426,7 @@ const writeObjectFields = (
       const nilFields = Object.values(findFieldsMeta(itemSchema) ?? {});
       const nilAttrs = (occurrenceAt<NilAttr[]>(nilAttributeStore, obj, key, i) ?? []).map(
         ([clark, lexical, bindings]) =>
-          `${elementName(clark, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declareQNamePrefixes(escapeXml(lexical), nilFields.some((f) => f.kind === "attribute" && f.qname === clark && f.qnameValue) ? bindings : undefined, ctx))}"`,
+          `${elementName(clark, ctx)}="${escapeXmlAttrChars(declareQNamePrefixes(escapeXml(lexical), nilFields.some((f) => f.kind === "attribute" && f.qname === clark && f.qnameValue) ? bindings : undefined, ctx))}"`,
       );
       const attrStr = nilAttrs.length > 0 ? ` ${nilAttrs.join(" ")}` : "";
       return `<${localName}${attrStr} xsi:nil="true"/>`;
@@ -3429,7 +3455,7 @@ const writeObjectFields = (
       if (wrapped.kind === "text") {
         return `<${localName}>${declared}</${localName}>`;
       }
-      return `<${localName} ${elementName(wrapped.qname, ctx.prefixMap, ctx.qnameNs)}="${escapeXmlAttrChars(declared)}"/>`;
+      return `<${localName} ${elementName(wrapped.qname, ctx)}="${escapeXmlAttrChars(declared)}"/>`;
     }
     if (fieldMeta.open) {
       const inner = openSerialize(item, ctx);
@@ -3439,7 +3465,7 @@ const writeObjectFields = (
       const attrs = [...inner.attributes];
       if (openXsiType !== undefined) {
         usesXsi = true;
-        attrs.push(`xsi:type="${elementName(openXsiType, ctx.prefixMap, ctx.qnameNs)}"`);
+        attrs.push(`xsi:type="${elementName(openXsiType, ctx)}"`);
       }
       const attrStr = attrs.length > 0 ? ` ${attrs.join(" ")}` : "";
       return `<${localName}${attrStr}>${inner.body}</${localName}>`;
@@ -3481,9 +3507,7 @@ const writeObjectFields = (
         ? occurrenceAt<string>(openXsiTypeStore, obj, key, i)
         : undefined;
     const typeAttr =
-      simpleXsiType === undefined
-        ? ""
-        : ` xsi:type="${elementName(simpleXsiType, ctx.prefixMap, ctx.qnameNs)}"`;
+      simpleXsiType === undefined ? "" : ` xsi:type="${elementName(simpleXsiType, ctx)}"`;
     if (typeAttr !== "") {
       usesXsi = true;
     }
@@ -3526,7 +3550,7 @@ const writeObjectFields = (
       throw new Error(`choice field "${key}" has no schema for branch "${tag}"`);
     }
     const leafValue = record[tag];
-    const localName = elementName(branch.qname, ctx.prefixMap, ctx.qnameNs);
+    const localName = elementName(branch.qname, ctx);
     if (leafValue === null) {
       usesXsi = true;
       return `<${localName} xsi:nil="true"/>`;
@@ -3626,7 +3650,7 @@ const writeObjectFields = (
       (xml) => elements.push(xml),
       (key, item, index) => {
         usesXsi =
-          pushOpenChildren(elements, elementName(key, ctx.prefixMap, ctx.qnameNs), item, ctx, [
+          pushOpenChildren(elements, elementName(key, ctx), item, ctx, [
             openXsiTypeStore.get(obj)?.get(key)?.[index],
           ]) || usesXsi;
       },
@@ -3715,7 +3739,7 @@ const writeObjectFields = (
     for (const [clark, values] of Object.entries(xsiCapture.extras)) {
       for (const [index, extra] of values.entries()) {
         usesXsi =
-          pushOpenChildren(elements, elementName(clark, ctx.prefixMap, ctx.qnameNs), extra, ctx, [
+          pushOpenChildren(elements, elementName(clark, ctx), extra, ctx, [
             openXsiTypeStore.get(obj)?.get(clark)?.[index],
           ]) || usesXsi;
       }
@@ -4109,6 +4133,12 @@ export const parseXml = <S extends z.ZodType>(
 export type SerializeXmlOptions = {
   /** Namespace context for a primitive QName root, including "" for its default namespace. */
   rootNamespaces?: Record<string, string>;
+  /**
+   * Preferred namespace prefixes, keyed by namespace URI. Namespaces without a
+   * preference (and preferences that collide with a reserved or already-used
+   * prefix) fall back to generated `nsN` prefixes. Prefixes must be non-empty.
+   */
+  prefixes?: Record<string, string>;
 };
 
 export const serializeXml = <S extends z.ZodType>(
@@ -4139,6 +4169,7 @@ export const serializeXml = <S extends z.ZodType>(
   const rootInfo = splitClark(meta.root);
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
+    preferredPrefixes: new Map(Object.entries(opts?.prefixes ?? {})),
     qnameNs: new Map<string, string>(),
   };
 
@@ -4231,7 +4262,7 @@ export const serializeXml = <S extends z.ZodType>(
   const nsDecls: string[] = [];
   let rootTag = rootInfo.local;
   if (rootInfo.namespace) {
-    const rootPrefix = choosePrefix(rootInfo.namespace, ctx.prefixMap, ctx.qnameNs);
+    const rootPrefix = choosePrefix(rootInfo.namespace, ctx);
     rootTag = `${rootPrefix}:${rootInfo.local}`;
     nsDecls.push(`xmlns:${rootPrefix}="${escapeXmlAttrChars(escapeXml(rootInfo.namespace))}"`);
   }
