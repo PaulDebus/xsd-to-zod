@@ -256,9 +256,9 @@ describe("xsi:type polymorphism — serialize", () => {
     const petSchema = mod["petSchema"] as z.ZodType;
     const parsed = parseXml(petSchema, DOG_XML);
     const serialized = serializeXml(petSchema, parsed);
-    expect(serialized).toContain('xsi:type="ns0:Dog"');
+    expect(serialized).toContain('xsi:type="tns:Dog"');
     expect(serialized).toContain('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"');
-    expect(serialized).toContain("<ns0:breed>Collie</ns0:breed>");
+    expect(serialized).toContain("<tns:breed>Collie</tns:breed>");
     // The synthetic discriminant never leaks as element or attribute content.
     expect(serialized).not.toContain("xsiType");
     expect(parseXml(petSchema, serialized)).toEqual(parsed);
@@ -282,7 +282,7 @@ describe("xsi:type polymorphism — serialize", () => {
       xsiType: "{http://example.com/zoo}Dog",
     };
     const serialized = serializeXml(petSchema, value);
-    expect(serialized).toContain('xsi:type="ns0:Dog"');
+    expect(serialized).toContain('xsi:type="tns:Dog"');
     expect(parseXml(petSchema, serialized)).toEqual(value);
   });
 
@@ -332,7 +332,7 @@ describe("xsi:type polymorphism — unknown xsi:type capture (open world)", () =
     const mod = await moduleFor(ZOO_XSD);
     const petSchema = mod["petSchema"] as z.ZodType;
     const serialized = serializeXml(petSchema, parseXml(petSchema, CAT_XML));
-    expect(serialized).toContain('xsi:type="ns0:Cat"');
+    expect(serialized).toContain('xsi:type="tns:Cat"');
     expect(serialized).toContain('lives="9"');
     // Extras keep their positions relative to the declared content: <color>
     // before <name>, <toy> after — and the extra's own attribute survives.
@@ -359,8 +359,8 @@ describe("xsi:type polymorphism — unknown xsi:type capture (open world)", () =
       ],
     });
     const serialized = serializeXml(kennelSchema, parsed);
-    expect(serialized).toContain('xsi:type="ns0:Cat"');
-    expect(serialized).toContain("<ns0:lives>9</ns0:lives>");
+    expect(serialized).toContain('xsi:type="tns:Cat"');
+    expect(serialized).toContain("<tns:lives>9</tns:lives>");
     expect(serializeXml(kennelSchema, parseXml(kennelSchema, serialized))).toBe(serialized);
   });
 
@@ -371,7 +371,7 @@ describe("xsi:type polymorphism — unknown xsi:type capture (open world)", () =
     // A value-level mutation keeps the data valid: the capture re-attaches.
     parsed["name"] = "Changed";
     const serialized = serializeXml(petSchema, parsed);
-    expect(serialized).toContain('xsi:type="ns0:Cat"');
+    expect(serialized).toContain('xsi:type="tns:Cat"');
     expect(serialized).toContain(">tabby<");
     expect(serialized).toContain('kind="ball"');
     // serializeXml validates first — dropping a required element fails early.
@@ -404,8 +404,8 @@ describe("xsi:type polymorphism — unknown xsi:type capture (open world)", () =
     // The wildcard sweep captured the extra element into the typed open shape.
     expect(parsed).toEqual({ label: "L", "{urn:w}weight": "3" });
     const serialized = serializeXml(boxSchema, parsed);
-    expect(serialized).toContain('xsi:type="ns0:Chest"');
-    expect(serialized).toContain("<ns0:weight>3</ns0:weight>");
+    expect(serialized).toContain('xsi:type="t:Chest"');
+    expect(serialized).toContain("<t:weight>3</t:weight>");
     expect(serializeXml(boxSchema, parseXml(boxSchema, serialized))).toBe(serialized);
   });
 });
@@ -445,7 +445,7 @@ describe("substitution groups × xsi:type", () => {
     const parsed = parseXml(librarySchema, xml);
     expect(parsed).toEqual({ Publication: [{ Title: "T", Author: "A" }, { Title: "P" }] });
     const serialized = serializeXml(librarySchema, parsed);
-    expect(serialized).toContain("<ns0:Book>");
+    expect(serialized).toContain("<t:Book>");
     expect(parseXml(librarySchema, serialized)).toEqual(parsed);
   });
 
@@ -456,7 +456,7 @@ describe("substitution groups × xsi:type", () => {
     const parsed = parseXml(publicationSchema, xml);
     expect(parsed).toEqual({ Title: "T", Author: "A", xsiType: "{urn:sgx}BookType" });
     const serialized = serializeXml(publicationSchema, parsed);
-    expect(serialized).toContain('xsi:type="ns0:BookType"');
+    expect(serialized).toContain('xsi:type="t:BookType"');
     expect(parseXml(publicationSchema, serialized)).toEqual(parsed);
   });
 
@@ -472,7 +472,7 @@ describe("substitution groups × xsi:type", () => {
     expect(parsed).toEqual({ Publication: [{ Title: "T" }] });
     const serialized = serializeXml(librarySchema, parsed);
     expect(serialized).not.toContain("xsi:type");
-    expect(serialized).toContain("<ns0:Publication>");
+    expect(serialized).toContain("<t:Publication>");
   });
 
   it("a member element carrying xsi:type dispatches on the member and parses per the member's type", async () => {
@@ -485,7 +485,7 @@ describe("substitution groups × xsi:type", () => {
     const parsed = parseXml(librarySchema, xml);
     expect(parsed).toEqual({ Publication: [{ Title: "T", Author: "A" }] });
     const serialized = serializeXml(librarySchema, parsed);
-    expect(serialized).toContain("<ns0:Book>");
+    expect(serialized).toContain("<t:Book>");
     expect(serialized).not.toContain("xsi:type");
     expect(parseXml(librarySchema, serialized)).toEqual(parsed);
   });

@@ -105,9 +105,9 @@ describe("xs:decimal mapping (opt-in: string)", () => {
       // Facet-bearing fields re-emit their original lexical; plain fields use
       // the canonical exact form. Neither ever rounds.
       const serialized = serializeXml(schema, parsed);
-      expect(serialized).toContain("<ns0:amount>123456789012345678.90</ns0:amount>");
-      expect(serialized).toContain("<ns0:plain>1.23</ns0:plain>");
-      expect(serialized).toContain("<ns0:enum>1.50</ns0:enum>");
+      expect(serialized).toContain("<d:amount>123456789012345678.90</d:amount>");
+      expect(serialized).toContain("<d:plain>1.23</d:plain>");
+      expect(serialized).toContain("<d:enum>1.50</d:enum>");
     });
   });
 
@@ -139,7 +139,7 @@ describe("xs:decimal mapping (opt-in: string)", () => {
         a: string;
       };
       expect(parsed).toEqual({ v: "1.5", a: "2.5" });
-      expect(serializeXml(schema, parsed)).toContain("<ns0:v>1.50</ns0:v>");
+      expect(serializeXml(schema, parsed)).toContain("<d:v>1.50</d:v>");
       expect(() => parseXml(schema, '<root xmlns="urn:fixed-decimal"><v>2</v></root>')).toThrow(
         /does not match the fixed value/,
       );
