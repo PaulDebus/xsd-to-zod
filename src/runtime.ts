@@ -2994,8 +2994,8 @@ const declareQNamePrefixes = (
   if (bindings === undefined) {
     return lexical;
   }
-  // choosePrefix reserves these prefixes (see the reserved argument), so only
-  // prefixes already allocated — before the binding was seen — collide.
+  // A prefix already allocated before the binding was seen collides, as does
+  // the reserved xsi binding (see choosePrefix's blocked set).
   const prefixTaken = (prefix: string): boolean =>
     prefix === "xsi" || ctx.qnameNs.has(prefix) || [...ctx.prefixMap.values()].includes(prefix);
   const selectedTokens = qnameTokenIndexes.get(bindings);
