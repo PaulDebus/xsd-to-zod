@@ -145,10 +145,10 @@ describe("type coercion", () => {
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-INF</measure>"),
     );
     expect(negInf["measure"]).toBe(-Infinity);
-    expect(serializeXml(negInf)).toContain(">-INF</ns0:measure>");
+    expect(serializeXml(negInf)).toContain(">-INF</t:measure>");
     const nan = parseXml(doc("<text>x</text><count>1</count><flag>1</flag><measure>NaN</measure>"));
     expect(nan["measure"]).toBeNaN();
-    expect(serializeXml(nan)).toContain(">NaN</ns0:measure>");
+    expect(serializeXml(nan)).toContain(">NaN</t:measure>");
   });
 
   it("preserves the sign of -0 through the round-trip", async () => {
@@ -156,7 +156,7 @@ describe("type coercion", () => {
       doc("<text>x</text><count>1</count><flag>1</flag><measure>-0</measure>"),
     );
     expect(Object.is(parsed["measure"], -0)).toBe(true);
-    expect(serializeXml(parsed)).toContain(">-0</ns0:measure>");
+    expect(serializeXml(parsed)).toContain(">-0</t:measure>");
   });
 
   it("returns null for an xsi:nil root", async () => {
@@ -220,14 +220,14 @@ describe("QName-typed values", () => {
     // whose source prefix is also "ns0" (bound to another URI) must be
     // rewritten to a fresh prefix bound to its own URI.
     const NS_XSD = `<?xml version="1.0"?>
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:qn" xmlns:t="urn:qn" elementFormDefault="qualified">
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:qn" elementFormDefault="qualified">
   <xs:complexType name="HolderType">
     <xs:sequence>
       <xs:element name="name" type="xs:string"/>
     </xs:sequence>
     <xs:attribute name="ref" type="xs:QName"/>
   </xs:complexType>
-  <xs:element name="holder" type="t:HolderType"/>
+  <xs:element name="holder" type="HolderType"/>
 </xs:schema>`;
     let schemasCode = "";
     await withTempDirAsync(async (dir) => {

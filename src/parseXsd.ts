@@ -25,6 +25,7 @@ import type {
 } from "./types.js";
 
 const XSD_NS = "http://www.w3.org/2001/XMLSchema";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
 // Append a diagnostic, deduped by kind+message (the message already embeds
 // the ref) so a repeated hit of the same problem reports once.
@@ -521,7 +522,7 @@ const collectNamespaceMap = (schemaNode: AnyNode): Record<string, string> => {
   }
   // The xml prefix is implicitly bound and need not be declared (XML Namespaces spec).
   if (!nsMap["xml"]) {
-    nsMap["xml"] = "http://www.w3.org/XML/1998/namespace";
+    nsMap["xml"] = XML_NS;
   }
   return nsMap;
 };
@@ -3167,6 +3168,42 @@ const resolveIdentityRefs = (
   }
 };
 
+// Conventional namespace prefixes for serialization. A schema that owns a
+// target namespace (its targetNamespace matches the binding) is authoritative;
+// prefixes declared only by importers fill in namespaces no scanned schema
+// owns. The default namespace, the reserved prefixes, and the built-in XSD/XML
+// bindings are not instance-document conventions.
+const UNUSABLE_NAMESPACE_PREFIXES: ReadonlySet<string> = new Set(["", "xml", "xmlns", "xsi"]);
+
+const collectNamespacePrefixes = (files: ScannedFile[]): Record<string, string> => {
+  const prefixes = Object.create(null) as Record<string, string>;
+  const add = (uri: string, prefix: string): void => {
+    if (uri === "" || UNUSABLE_NAMESPACE_PREFIXES.has(prefix) || uri in prefixes) {
+      return;
+    }
+    prefixes[uri] = prefix;
+  };
+  for (const { nsMap, targetNs } of files) {
+    if (targetNs === "") {
+      continue;
+    }
+    for (const [prefix, uri] of Object.entries(nsMap)) {
+      if (uri === targetNs) {
+        add(uri, prefix);
+      }
+    }
+  }
+  for (const { nsMap } of files) {
+    for (const [prefix, uri] of Object.entries(nsMap)) {
+      if (uri === XSD_NS || uri === XML_NS) {
+        continue;
+      }
+      add(uri, prefix);
+    }
+  }
+  return prefixes;
+};
+
 export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise<XsdIr> => {
   const state: ParseState = {
     reserved: new Set(),
@@ -3212,6 +3249,7 @@ export const parseXsd = async (files: string[], opts?: ParseXsdOptions): Promise
 
   return {
     targetNamespaces: [...state.targetNamespaces],
+    namespacePrefixes: collectNamespacePrefixes(scannedFiles),
     diagnostics: state.diagnostics,
     unenforcedConstructs: state.unenforcedConstructs,
     simpleTypes: state.simpleTypes,

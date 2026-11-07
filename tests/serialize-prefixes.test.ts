@@ -34,19 +34,22 @@ const schemaFor = async (): Promise<z.ZodType> => {
 
 const XML = `<dt:Thing xmlns:dt="${NS}" kind="dt:Wall"><dt:name>Wall</dt:name><dt:identifier>a</dt:identifier><dt:identifier>b</dt:identifier></dt:Thing>`;
 
-describe("serializeXml preferred namespace prefixes", () => {
-  it("emits a caller-supplied prefix for the target namespace", async () => {
+describe("serializeXml namespace prefixes", () => {
+  it("uses the prefix declared by the source schema without an option", async () => {
     const schema = await schemaFor();
     const parsed = parseXml(schema, XML);
-    const serialized = serializeXml(schema, parsed, { prefixes: { [NS]: "dt" } });
+    const serialized = serializeXml(schema, parsed);
     expect(serialized).toBe(XML);
     expect(parseXml(schema, serialized)).toEqual(parsed);
   });
 
-  it("falls back to generated prefixes when none are supplied", async () => {
+  it("lets an explicit option override the schema prefix", async () => {
     const schema = await schemaFor();
     const parsed = parseXml(schema, XML);
-    expect(serializeXml(schema, parsed)).toContain("<ns0:Thing");
+    const serialized = serializeXml(schema, parsed, { prefixes: { [NS]: "i23387" } });
+    expect(serialized).toContain(`<i23387:Thing xmlns:i23387="${NS}"`);
+    expect(serialized).toContain("<i23387:name>Wall</i23387:name>");
+    expect(parseXml(schema, serialized)).toEqual(parsed);
   });
 
   it("does not use a reserved prefix", async () => {

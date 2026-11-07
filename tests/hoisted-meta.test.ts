@@ -107,7 +107,7 @@ describe("hoisted registry metadata", () => {
       xsiType: "{urn:hoist}ProductType",
     });
     const out = serializeXml(schema, data);
-    expect(out).toContain('xsi:type="ns0:ProductType"');
+    expect(out).toContain('xsi:type="t:ProductType"');
     expect(parseXml(schema, out)).toEqual(data);
   });
 });

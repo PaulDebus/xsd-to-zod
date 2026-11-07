@@ -4388,6 +4388,9 @@ export const irToZod = (
     const base = `z.lazy(() => ${rootTypeExpr})`;
     const expr = rootDef.nillable ? `${base}.nullable()` : base;
     const rootMeta = [`root: ${JSON.stringify(root)}`, "generatedBy"];
+    if (Object.keys(ir.namespacePrefixes ?? {}).length > 0) {
+      rootMeta.push(`namespacePrefixes: ${JSON.stringify(ir.namespacePrefixes)}`);
+    }
     if (rootDef.typeName === "{http://www.w3.org/2001/XMLSchema}anyType") {
       rootMeta.push("open: true");
     }

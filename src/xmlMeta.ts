@@ -137,6 +137,8 @@ export type XmlMeta = {
   simpleType?: XmlSimpleTypeMeta;
   qname?: QName;
   root?: QName;
+  /** Conventional namespace prefixes from the source schema set (URI → prefix). */
+  namespacePrefixes?: Record<string, string>;
   /** Generator version stamp ("xsd-to-zod@<version>") on generated root schemas. */
   generatedBy?: string;
   defaultValue?: unknown;

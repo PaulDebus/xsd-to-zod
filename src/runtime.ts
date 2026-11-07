@@ -4134,9 +4134,11 @@ export type SerializeXmlOptions = {
   /** Namespace context for a primitive QName root, including "" for its default namespace. */
   rootNamespaces?: Record<string, string>;
   /**
-   * Preferred namespace prefixes, keyed by namespace URI. Namespaces without a
-   * preference (and preferences that collide with a reserved or already-used
-   * prefix) fall back to generated `nsN` prefixes. Prefixes must be non-empty.
+   * Preferred namespace prefixes, keyed by namespace URI. Entries override the
+   * source schema's conventional prefixes (carried in registry metadata);
+   * namespaces without either fall back to generated `nsN` prefixes. A
+   * preference that collides with a reserved or already-used prefix is
+   * ignored. Prefixes must be non-empty.
    */
   prefixes?: Record<string, string>;
 };
@@ -4167,9 +4169,13 @@ export const serializeXml = <S extends z.ZodType>(
   const value: z.output<S> = result.data;
   const rootEntry = rootLexicalFor(schema, data, opts?.rootNamespaces);
   const rootInfo = splitClark(meta.root);
+  const preferredPrefixes = new Map<string, string>(Object.entries(meta.namespacePrefixes ?? {}));
+  for (const [uri, prefix] of Object.entries(opts?.prefixes ?? {})) {
+    preferredPrefixes.set(uri, prefix);
+  }
   const ctx: SerializeCtx = {
     prefixMap: new Map<string, string>(),
-    preferredPrefixes: new Map(Object.entries(opts?.prefixes ?? {})),
+    preferredPrefixes,
     qnameNs: new Map<string, string>(),
   };
 

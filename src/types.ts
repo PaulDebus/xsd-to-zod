@@ -244,6 +244,13 @@ export type Diagnostic = {
 
 export type XsdIr = {
   targetNamespaces: string[];
+  /**
+   * Conventional namespace prefixes declared by the schema set, keyed by
+   * namespace URI. The schema owning a target namespace wins over prefixes
+   * declared incidentally by importers; reserved prefixes are omitted.
+   * Generated roots carry this so serializeXml can prefer it over nsN.
+   */
+  namespacePrefixes: Record<string, string>;
   /** References and locations that could not be resolved (fields are kept or skipped as before; this list makes the omissions visible). */
   diagnostics: Diagnostic[];
   /**

@@ -351,12 +351,14 @@ if that context is ambiguous or unavailable, supply it explicitly:
 Use the empty key (`""`) for the QName value's default namespace. Ambiguous
 values fail serialization instead of silently using another document's bindings.
 
-Serialization picks generated `ns0`, `ns1`, … prefixes by default. Pass
-`prefixes` to keep a schema's conventional spelling, e.g.
-`serializeXml(schema, value, { prefixes: { "https://standards.iso.org/iso/23387/ed-2/en/": "dt" } })`
-emits `dt:`-prefixed output. Unlisted namespaces keep generated prefixes, and a
-preference that would collide with a reserved or already-bound prefix falls
-back to a generated one. Values round-trip identically either way.
+Serialization uses the conventional prefixes declared by the source schemas —
+a schema that declares `xmlns:dt="https://standards.iso.org/iso/23387/ed-2/en/"`
+generates modules that emit `dt:` for that namespace. Namespaces with no
+declared prefix use generated `ns0`, `ns1`, … prefixes. Override or fill in a
+preference with `prefixes`:
+`serializeXml(schema, value, { prefixes: { "urn:example": "ex" } })`. An entry
+that would collide with a reserved or already-bound prefix falls back to a
+generated one. Values round-trip identically either way.
 
 `safeParseXml(schema, xml, { validate: false })` skips the final schema validation — a fast path for input already checked by the conformance tier.
 

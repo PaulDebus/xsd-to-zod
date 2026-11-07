@@ -114,7 +114,7 @@ describe("xsd-to-zod v1 pipeline", () => {
 
       const serialized = serializeXml(orderSchema, parsed);
       expect(serialized).toContain('xsi:nil="true"');
-      expect(serialized).toContain("<ns0:sku>A1</ns0:sku>");
+      expect(serialized).toContain("<t:sku>A1</t:sku>");
 
       // Both choice branches present: the refine rejects with a ZodError.
       expect(() =>
@@ -775,8 +775,8 @@ describe("xsd-to-zod v1 pipeline", () => {
 
     const serialized = serializeXml(orderSchema, parsed);
     expect(serialized).not.toContain("[object Object]");
-    expect(serialized).toContain("<ns0:productId>P-100</ns0:productId>");
-    expect(serialized).toContain("<ns0:quantity>5</ns0:quantity>");
+    expect(serialized).toContain("<t:productId>P-100</t:productId>");
+    expect(serialized).toContain("<t:quantity>5</t:quantity>");
 
     const reparsed = parseXml(orderSchema, serialized);
     expect(reparsed).toEqual(parsed);
@@ -1086,8 +1086,8 @@ describe("xsd-to-zod v1 pipeline", () => {
         // Lexical retention is opt-in, so substituted defaults serialize
         // canonically ("1.50" → 1.5).
         const serialized = serializeXml(cfgSchema, parsed);
-        expect(serialized).toContain("<ns0:ratio>1.5</ns0:ratio>");
-        expect(serialized).toContain("<ns0:level>3</ns0:level>");
+        expect(serialized).toContain("<t:ratio>1.5</t:ratio>");
+        expect(serialized).toContain("<t:level>3</t:level>");
       });
     });
 
@@ -1263,10 +1263,10 @@ describe("xsd-to-zod v1 pipeline", () => {
       );
       expect(schemas).toContain("export type TeamTypeIn = z.input<typeof TeamTypeSchema>;");
       expect(schemas).toContain(
-        'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person", generatedBy });',
+        'export const personSchema = z.lazy(() => PersonTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}person", generatedBy, namespacePrefixes: {"urn:cyclic":"t"} });',
       );
       expect(schemas).toContain(
-        'export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}team", generatedBy });',
+        'export const teamSchema = z.lazy(() => TeamTypeSchema).register(xmlRegistry, { root: "{urn:cyclic}team", generatedBy, namespacePrefixes: {"urn:cyclic":"t"} });',
       );
 
       const mod = (await importGeneratedSchemas(schemas)) as {

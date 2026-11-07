@@ -49,8 +49,8 @@ describe("serializeXml validates its input", () => {
     // The defaulted @currency and the fixed @version are omitted by the
     // caller; validation fills them.
     const serialized = serializeXml(orderSchema, { item: "x", quantity: 1 });
-    expect(serialized).toContain("<ns0:item>x</ns0:item>");
-    expect(serialized).toContain("<ns0:quantity>1</ns0:quantity>");
+    expect(serialized).toContain("<t:item>x</t:item>");
+    expect(serialized).toContain("<t:quantity>1</t:quantity>");
     // Round-trip restores the full value.
     expect(parseXml(orderSchema, serialized)).toEqual({
       item: "x",
@@ -91,7 +91,7 @@ describe("serializeXml validates its input", () => {
       '<ns0:order xmlns:ns0="urn:defaults" currency="CHF"><ns0:item>x</ns0:item><ns0:quantity>03</ns0:quantity></ns0:order>',
     );
     // Retention is opt-in: serialize derives the lexical from the value.
-    expect(serializeXml(orderSchema, parsed)).toContain(">3</ns0:quantity>");
+    expect(serializeXml(orderSchema, parsed)).toContain(">3</t:quantity>");
   });
 
   it("does not consume the caller's parse-time recordings", async () => {
@@ -104,8 +104,8 @@ describe("serializeXml validates its input", () => {
     );
     // The retained lexical "03" is re-emitted on every serialize of the same
     // tree, not just the first.
-    expect(serializeXml(orderSchema, parsed)).toContain(">03</ns0:quantity>");
-    expect(serializeXml(orderSchema, parsed)).toContain(">03</ns0:quantity>");
+    expect(serializeXml(orderSchema, parsed)).toContain(">03</t:quantity>");
+    expect(serializeXml(orderSchema, parsed)).toContain(">03</t:quantity>");
   });
 
   it("keeps per-tree fidelity when two parsed trees share one schema", async () => {
@@ -124,10 +124,10 @@ describe("serializeXml validates its input", () => {
       '<ns0:order xmlns:ns0="urn:defaults"><ns0:item>y</ns0:item><ns0:quantity>7</ns0:quantity></ns0:order>',
       { retainLexicals: true },
     );
-    expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
-    expect(serializeXml(orderSchema, second)).toContain(">7</ns0:quantity>");
-    expect(serializeXml(orderSchema, second)).not.toContain(">03</ns0:quantity>");
-    expect(serializeXml(orderSchema, first)).toContain(">03</ns0:quantity>");
+    expect(serializeXml(orderSchema, first)).toContain(">03</t:quantity>");
+    expect(serializeXml(orderSchema, second)).toContain(">7</t:quantity>");
+    expect(serializeXml(orderSchema, second)).not.toContain(">03</t:quantity>");
+    expect(serializeXml(orderSchema, first)).toContain(">03</t:quantity>");
   });
 
   it("leaves string content that looks like exponent notation verbatim", async () => {

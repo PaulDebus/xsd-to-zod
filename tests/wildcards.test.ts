@@ -39,7 +39,7 @@ describe("xs:any / xs:anyAttribute wildcards", () => {
       "{urn:t}plain": "w",
     });
     const serialized = serializeXml(schema, parsed);
-    expect(serialized).toContain(">k</ns0:known>");
+    expect(serialized).toContain(">k</t:known>");
     const reparsed = parseXml(schema, serialized);
     expect(reparsed).toEqual(parsed);
   });
