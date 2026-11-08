@@ -50,28 +50,45 @@ npx xsd-to-zod order.xsd -o src/generated --format
 The generated `order.zod.ts` looks like:
 
 ```ts
-import { z } from 'zod';
-import { xmlRegistry } from 'xsd-to-zod';
+// AUTO-GENERATED — DO NOT EDIT
+import { z } from "zod";
+import { xmlRegistry } from "xsd-to-zod";
+// Generator version stamp — the runtime warns when its major version differs.
+export const generatedBy = "xsd-to-zod@1.0.0";
 
 export interface OrderType {
   item: string[];
   sku: string;
   id: number;
 }
-export const OrderTypeSchema: z.ZodType<OrderType> = z.lazy(() => z.object({
-  "item": z.array(z.string()),
-  "sku": z.string(),
-  "id": z.number().int(),
-})).register(xmlRegistry, {
-  qname: "{urn:example}OrderType",
-  fields: {
-    item: { kind: "element", qname: "{urn:example}item" },
-    sku:  { kind: "element", qname: "{urn:example}sku" },
-    id:   { kind: "attribute", qname: "id" },
-  },
-});
-export const orderSchema = z.lazy(() => OrderTypeSchema)
-  .register(xmlRegistry, { root: "{urn:example}order" });
+export type OrderTypeIn = z.input<typeof OrderTypeSchema>;
+export const OrderTypeSchema = z
+  .lazy(() =>
+    z.object({
+      item: z.array(z.string()).min(1),
+      sku: z.string(),
+      id: z
+        .number()
+        .int()
+        .min(-2147483648)
+        .max(2147483647)
+        .register(xmlRegistry, {
+          simpleType: { primitive: "decimal", lexical: "integer" },
+          lexicalType: "integer",
+        }),
+    }),
+  )
+  .register(xmlRegistry, {
+    qname: "{urn:example}OrderType",
+    fields: {
+      item: { kind: "element", qname: "{urn:example}item" },
+      sku: { kind: "element", qname: "{urn:example}sku" },
+      id: { kind: "attribute", qname: "{}id" },
+    },
+  });
+export const orderSchema = z
+  .lazy(() => OrderTypeSchema)
+  .register(xmlRegistry, { root: "{urn:example}order", generatedBy });
 ```
 
 Every complex type becomes an exported interface plus an exported schema.
@@ -111,7 +128,7 @@ instead, and narrow its `unknown` error before reading Zod issues.
 - **Simple type restrictions**: facets become Zod checks where Zod can express them — `enumeration` (→ `z.enum` / literal unions), `pattern` (→ `.regex`), length/min/max (→ `.length`/`.min`/`.max`), order facets on `xs:decimal` (→ exact lexical comparison via `xsdDecimalCompare` — boundary digits beyond double precision are not rounded), on the ordered date/time/duration and string-derived builtins (→ value-space comparison via `xsdOrderCompare`; timezone-less vs timezoned and indeterminate duration pairs reject), `totalDigits`/`fractionDigits` (→ digit-count refinements), `whiteSpace` collapse/replace (→ preprocess transform). `xs:list` (→ whitespace-splitting `z.preprocess` + `z.array`) and `xs:union` (→ `z.union`) are supported
 - **Namespaces**: Clark notation `{ns}local` throughout, qualified/unqualified form defaults, `xs:include`/`xs:import` across files
 - **Chameleon includes**: inherited target namespace for includee schemas without a `targetNamespace`
-- **CLI**: directory input (recursive `.xsd` discovery), `--include-libraries` (auto-skip type-definition-only schemas), `--allow-missing-imports` (suppress unresolved ref warnings), `--silent`, and `bundle` subcommand for merging imports into one self-contained XSD
+- **CLI**: directory input (recursive `.xsd` discovery), `--include-libraries` (auto-skip type-definition-only schemas), `--allow-missing-imports` (suppress unresolved ref warnings), `--silent`, and `generate`, `bundle`, `download`, and `validate` subcommands
 - **Remote schemas**: http(s) URLs accepted directly as CLI input (host allowlists, https-only by default, resource caps, proxy support), `xsd-to-zod.lock.json` integrity pinning with a content cache (`--frozen`, `--offline`), and a `download` subcommand that vendors a remote schema closure to self-contained local files
 - **Encoding detection**: BOM and declaration sniffing (UTF-16LE/BE, CP1252, UTF-8) via `iconv-lite`
 - **Cardinality**: `minOccurs`/`maxOccurs` → `.optional()` / `z.array()` with `.min()`/`.max()` bounds; defaults/fixed with XSD-correct semantics (attribute defaults on absence, element defaults on present-but-empty)
@@ -137,6 +154,10 @@ The generated shape is fixed at 1.0 — there is no compat or naming mode:
 - **Root anonymous types use the element's bare name.** `<xs:element name="Library">`
   with an inline type exports `Library`; nested anonymous types keep the
   `Parent_Child_Type` scheme.
+
+The full decision record, including the naming-collision policy and the shapes
+excluded from these rules, is in
+[docs/1.0-output-defaults.md](docs/1.0-output-defaults.md).
 
 ## Install
 
@@ -172,6 +193,14 @@ npx xsd-to-zod types.xsd elements.xsd -o src/generated -n my-api
 
 npx xsd-to-zod https://example.com/schema.xsd -o src/generated
 # → fetches the schema and its remote imports, then writes schema.zod.ts
+```
+
+The same flags work through an explicit `generate` subcommand, which is
+equivalent to the default command:
+
+```sh
+npx xsd-to-zod generate schema.xsd -o src/generated --format
+# → src/generated/schema.zod.ts
 ```
 
 | Flag | Description |
