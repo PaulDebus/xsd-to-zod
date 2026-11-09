@@ -17,9 +17,9 @@ Read the [migration guide](docs/MIGRATION.md) for the full upgrade path from
 
 - **Ergonomic output is the default and only shape.** Element types with no
   element content and a single simple attribute collapse to scalar fields;
-  attribute keys lose their `@` prefix (a colliding attribute keeps it, with a warning
-  and a generated comment); an eligible repeated `xs:choice` becomes one
-  ordered array of tagged items; root anonymous types take the bare element
+  attribute keys lose their `@` prefix (a colliding attribute keeps it, with a
+  warning and a generated comment); an eligible repeated `xs:choice` becomes
+  one ordered array of tagged items; root anonymous types take the bare element
   name (`anonymous_Library_Type` → `Library`), while nested anonymous types
   keep `Parent_Child_Type`. The `--ergonomic` flag and
   `{ ergonomic: true }` option are removed.
@@ -48,20 +48,17 @@ Read the [migration guide](docs/MIGRATION.md) for the full upgrade path from
 
 ### Coming from 0.3.1
 
-The 0.4 line also requires regeneration and review. In summary (the migration
-guide has the details):
+Upgrading from 0.3.1 crosses two breaking releases, so the 0.4.0 changes apply
+too. The [migration guide](docs/MIGRATION.md) walks the full path; in brief:
 
-- Programmatic compilation is asynchronous: `await parseXsd(...)`.
-- `zod@^4.4.3` is a required peer dependency; `libxml2-wasm` stays optional.
-- Integers default to `number`; use `--integers bigint` for exact large values.
-- Decimals default to float64 `number`; use `--decimal string` for exact
-  canonical lexicals.
-- Identity constraints are enforced by default (opt out with
-  `{ identityConstraints: false }`).
-- Lexical retention is opt-in via `{ retainLexicals: true }`.
-- Absent optional repeated elements are omitted instead of becoming `[]`.
-- `serializeXml` validates input and applies defaults.
-- Structured partial dates preserve their timezone offset.
+- 0.4.0 introduced asynchronous compilation, a required `zod@^4.4.3` peer, the
+  `number` integer default (`--integers bigint` for exact values), default-on
+  identity constraints, opt-in lexical retention, omission of empty repeated
+  elements, and a validating `serializeXml`. Its migration list below has the
+  details.
+- 1.0.0 makes ergonomic output the only shape and splits the package into
+  runtime and compiler entry points, as described under
+  [Breaking changes](#breaking-changes).
 
 ### Testing
 
@@ -185,5 +182,6 @@ See the [migration preview](docs/MIGRATION.md) for details. In summary:
 - `serializeXml` validates input and applies defaults.
 - Structured partial dates preserve their timezone offset.
 
-`--ergonomic` and `--decimal string` were opt-in in 0.4. 1.0.0 made ergonomic
-output the default and removed the flag; `--decimal string` stays opt-in.
+`--ergonomic` and `--decimal string` were opt-in in 0.4; see the 1.0.0 entry
+above for the output-shape change that removed the flag. `--decimal string`
+stays opt-in.
