@@ -1,8 +1,69 @@
 # Changelog
 
 All notable changes to `xsd-to-zod` are documented here. This project follows
-[Semantic Versioning](https://semver.org/); the 0.x line makes no API-stability
+[Semantic Versioning](https://semver.org/); the 0.x line made no API-stability
 promise, and generated files must be regenerated with the version you run.
+
+## 1.0.0 — 2026-11-07
+
+1.0 is a deliberate clean break. The 0.4 `--ergonomic` preview is now the only
+output shape, generated identifiers follow the new naming defaults, and the
+package is split into a runtime entry and a build-time compiler entry. There is
+no `--compat` mode: regenerate artifacts with the version you run at runtime.
+Read the [migration guide](docs/MIGRATION.md) for the full upgrade path from
+0.3.1 and 0.4.
+
+### Breaking changes
+
+- **Ergonomic output is the default and only shape.** Element types with no
+  element content and a single simple attribute collapse to scalar fields;
+  attribute keys lose their `@` prefix (a colliding attribute keeps it, with a
+  warning and a generated comment); an eligible repeated `xs:choice` becomes
+  one ordered array of tagged items; root anonymous types take the bare element
+  name (`anonymous_Library_Type` → `Library`), while nested anonymous types
+  keep `Parent_Child_Type`. The `--ergonomic` flag and
+  `{ ergonomic: true }` option are removed.
+- **Runtime and build-time APIs are separate entry points.** `xsd-to-zod`
+  exports the runtime (`parseXml`, `safeParseXml`, `serializeXml`,
+  `xmlRegistry`, and the helpers generated modules import) plus the optional
+  `xsd-to-zod/validate` tier. `parseXsd`, `irToZod`, `IrToZodOptions`,
+  `ParseXsdOptions`, the IR types, `runPostGenerationFormatting`,
+  `readXmlFile`, `Xsd2ZodError`, and the remote fetch/download helpers moved
+  to `xsd-to-zod/compiler`; internal helpers are no longer exported from the
+  package root.
+- **CLI.** A real `generate` subcommand now exists alongside the default
+  positional form. `--ergonomic` is removed.
+
+### Features
+
+- **Standalone output.** `--standalone` / `{ standalone: true }` emits a module
+  that imports only `zod`: no `xmlRegistry` and no `xsd-to-zod` import, with
+  helper checks inlined and `xs:choice` enforced by generated refinements.
+  `parseXml`/`serializeXml` do not apply to these schemas.
+- **Compiler entry point.** `xsd-to-zod/compiler` exposes the build-time API
+  for programmatic generation in the CLI and in consumer build scripts.
+- **`serializeXml` prefix preferences.** Prefixes declared by the source
+  schemas are inferred and reused, and explicit prefix preferences can
+  override them.
+
+### Coming from 0.3.1
+
+Upgrading from 0.3.1 crosses two breaking releases, so the 0.4.0 changes apply
+too. The [migration guide](docs/MIGRATION.md) walks the full path; in brief:
+
+- 0.4.0 introduced asynchronous compilation, a required `zod@^4.4.3` peer, the
+  `number` integer default (`--integers bigint` for exact values), default-on
+  identity constraints, opt-in lexical retention, omission of empty repeated
+  elements, and a validating `serializeXml`. Its migration list below has the
+  details.
+- 1.0.0 makes ergonomic output the only shape and splits the package into
+  runtime and compiler entry points, as described under
+  [Breaking changes](#breaking-changes).
+
+### Testing
+
+- A new API-surface test pins the runtime/compiler export split, and the
+  packed-consumer smoke test and golden fixtures cover the 1.0 output shape.
 
 ## 0.4.0 — 2026-10-27
 
@@ -121,5 +182,6 @@ See the [migration preview](docs/MIGRATION.md) for details. In summary:
 - `serializeXml` validates input and applies defaults.
 - Structured partial dates preserve their timezone offset.
 
-`--ergonomic` and `--decimal string` remain opt-in. The 1.0 release will make
-ergonomic output the default and remove the temporary flag.
+`--ergonomic` and `--decimal string` were opt-in in 0.4; see the 1.0.0 entry
+above for the output-shape change that removed the flag. `--decimal string`
+stays opt-in.
