@@ -4,7 +4,7 @@ All notable changes to `xsd-to-zod` are documented here. This project follows
 [Semantic Versioning](https://semver.org/); the 0.x line made no API-stability
 promise, and generated files must be regenerated with the version you run.
 
-## 1.0.0 — 2026-11-07
+## 1.0.0 — 2026-11-10
 
 1.0 is a deliberate clean break. The 0.4 `--ergonomic` preview is now the only
 output shape, generated identifiers follow the new naming defaults, and the
