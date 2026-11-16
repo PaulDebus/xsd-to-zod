@@ -168,7 +168,7 @@ describe("shared generated shapes", () => {
     expect(schemas).toContain("const ProductTypeObjectSchema = ConceptTypeObjectSchema.extend(");
     expect(schemas).toContain("export interface ProductType extends ConceptType {");
     expect(schemas).toContain("const AliasTypeObjectSchema = ConceptTypeObjectSchema;");
-    expect(schemas).toContain("export interface AliasType extends ConceptType {}");
+    expect(schemas).toContain("export type AliasType = ConceptType;");
   });
 
   it("hoists a repeated choice group and spreads the inherited choices map", async () => {
@@ -179,5 +179,51 @@ describe("shared generated shapes", () => {
     );
     expect(occurrences(schemas, "choices: ConceptTypeChoices")).toBeGreaterThanOrEqual(2);
     expect(schemas).toContain("choices: { ...ConceptTypeChoices,");
+  });
+});
+
+const generateXsd = async (xsd: string): Promise<string> => {
+  let schemas = "";
+  await withTempDirAsync(async (dir) => {
+    const file = path.join(dir, "schema.xsd");
+    fs.writeFileSync(file, xsd);
+    schemas = irToZod(await parseXsd([file])).schemas;
+  });
+  return schemas;
+};
+
+describe("lint-clean generated declarations", () => {
+  it("omits xsiType unions and variant consts that no slot references", async () => {
+    const schemas = await generateXsd(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:unused" xmlns:t="urn:unused" elementFormDefault="qualified">
+  <xs:complexType name="ConceptType" abstract="true">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ProductType">
+    <xs:complexContent>
+      <xs:extension base="t:ConceptType">
+        <xs:sequence>
+          <xs:element name="price" type="xs:decimal"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:element name="product" type="t:ProductType"/>
+</xs:schema>`);
+    expect(schemas).toContain("export const ProductTypeSchema");
+    expect(schemas).not.toContain("VariantsSchema");
+    expect(schemas).not.toContain("DeclaredVariantSchema");
+  });
+
+  it("emits a memberless complex type as a type alias", async () => {
+    const schemas = await generateXsd(`<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:empty" xmlns:t="urn:empty" elementFormDefault="qualified">
+  <xs:complexType name="Empty"/>
+  <xs:element name="empty" type="t:Empty"/>
+</xs:schema>`);
+    expect(schemas).toContain("export type Empty = Record<string, never>;");
+    expect(schemas).not.toContain("export interface Empty");
   });
 });

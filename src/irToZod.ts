@@ -3393,6 +3393,10 @@ export const irToZod = (
   const variantConstName = new Map<QName, string>();
   const declaredVariantConstName = new Map<QName, string>();
   const unionConstName = new Map<QName, string>();
+  // Unions referenced by a polymorphic slot or root. A declared type that is
+  // only a family head in the derivation graph (never used polymorphically)
+  // would otherwise emit an unused union const.
+  const usedVariantUnions = new Set<QName>();
   const allocFamilyAux = (name: QName): void => {
     const local = effectiveBaseLocal(name);
     objectConstName.set(name, alloc(`${local}ObjectSchema`));
@@ -3805,6 +3809,7 @@ export const irToZod = (
     }
     const variants = polymorphicVariants(field);
     if (variants !== undefined) {
+      usedVariantUnions.add(field.typeName);
       const union = unionConstName.get(field.typeName) ?? "z.unknown()";
       if (!eager) {
         return union;
@@ -4140,9 +4145,14 @@ export const irToZod = (
       const inputAlias = recursiveTypes.has(complexType.name)
         ? `// No ${iface}In alias: ${iface}Schema keeps an explicit z.ZodType annotation to break circular inference, so z.input would degrade to unknown.`
         : `export type ${alloc(`${iface}In`)} = z.input<typeof ${constName.get(complexType.name)}>;`;
+      // Memberless declarations become aliases: an empty `interface` is
+      // equivalent to its supertype (or an empty object), and linters reject
+      // both forms in generated output.
       const declaration =
-        inheritance !== "" && props.length === 0 && indexSignature.length === 0
-          ? `${jsDoc}export interface ${iface}${inheritance} {}`
+        props.length === 0 && indexSignature.length === 0
+          ? inheritance !== "" && baseName !== undefined
+            ? `${jsDoc}export type ${iface} = ${ifaceName.get(baseName)};`
+            : `${jsDoc}export type ${iface} = Record<string, never>;`
           : `${jsDoc}export interface ${iface}${inheritance} {\n${props}${indexSignature}\n}`;
       schemaLines.push(withNamingComment(complexType.name, declaration), inputAlias);
     }
@@ -4298,6 +4308,22 @@ export const irToZod = (
     );
   }
 
+  // Roots reference a polymorphic type's union directly, alongside fields.
+  for (const root of ir.rootElements) {
+    const rootDef = ir.elements[root];
+    if (rootDef !== undefined && variantSets.has(rootDef.typeName)) {
+      usedVariantUnions.add(rootDef.typeName);
+    }
+  }
+  // A derived-position variant const is used only by the unions that include
+  // it; skip the consts of families no slot references.
+  const usedVariantConsts = new Set<QName>();
+  for (const typeName of usedVariantUnions) {
+    for (const variant of (variantSets.get(typeName) ?? []).slice(1)) {
+      usedVariantConsts.add(variant);
+    }
+  }
+
   // xsiType variant schemas (object shape + discriminant property, registered
   // with the type meta so the runtime can read occurrences through them) and
   // the discriminated union per polymorphic declared type. Within one union,
@@ -4312,7 +4338,7 @@ export const irToZod = (
   // xsiType their TS type requires; unionFallback covers hand-built data
   // whose discriminant names no variant.
   for (const complexType of Object.values(ir.complexTypes)) {
-    if (!derivedTypeNames.has(complexType.name)) {
+    if (!derivedTypeNames.has(complexType.name) || !usedVariantConsts.has(complexType.name)) {
       continue;
     }
     const discriminant = JSON.stringify(complexType.name);
@@ -4322,7 +4348,7 @@ export const irToZod = (
   }
   for (const complexType of Object.values(ir.complexTypes)) {
     const variants = variantSets.get(complexType.name);
-    if (variants === undefined) {
+    if (variants === undefined || !usedVariantUnions.has(complexType.name)) {
       continue;
     }
     const typeName = complexType.name;
