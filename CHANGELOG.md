@@ -4,7 +4,17 @@ All notable changes to `xsd-to-zod` are documented here. This project follows
 [Semantic Versioning](https://semver.org/); the 0.x line made no API-stability
 promise, and generated files must be regenerated with the version you run.
 
-## 1.0.0 — 2026-11-10
+## 1.0.1 - 2026-11-16
+
+### Fixed
+
+- Generated modules now pass strict lint rules: memberless complex types emit
+  type aliases instead of empty interfaces, and xsiType variant unions and their
+  variant consts are only emitted when a polymorphic field or root references
+  them. This removes `no-empty-object-type` / `no-unused-vars` failures from
+  `--format`.
+
+## 1.0.0 - 2026-11-10
 
 1.0 is a deliberate clean break. The 0.4 `--ergonomic` preview is now the only
 output shape, generated identifiers follow the new naming defaults, and the
