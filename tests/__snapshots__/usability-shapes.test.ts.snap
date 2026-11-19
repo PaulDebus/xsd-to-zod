@@ -1,51 +1,50 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`usability fixture shapes > keeps the generated shape for iso-shaped.xsd 1`] = `
-"export interface Library {
-  "choice": ({ "Name": Text } | { "DataTemplate": DataTemplate } | { "Property": Property })[];
-  "GUID": string;
+exports[`usability fixture shapes > keeps the generated shape for inherited-choices.xsd 1`] = `
+"export interface Collection {
+  "choice": ({ "Label": Label } | { "Group": Group } | { "Item": Item })[];
+  "id": string;
 }
 
-export interface Text {
+export interface Label {
   "_text": string;
-  "language": string;
+  "lang": string;
 }
 
-export interface Ref {
-  "guid"?: string | undefined;
-  "uri"?: string | undefined;
+export interface Link {
+  "target"?: string | undefined;
+  "href"?: string | undefined;
 }
 
-export interface Value {
+export interface Limit {
   "value"?: string | undefined;
 }
 
-export interface DataType {
-  "choice"?: ({ "MinInclusive": Value } | { "MinExclusive": Value } | { "MaxInclusive": Value } | { "MaxExclusive": Value } | { "DataFormat": Value })[] | undefined;
-  "name"?: "BOOLEAN" | "INTEGER" | "REAL" | "STRING" | "DATETIME" | undefined;
+export interface Setting {
+  "choice"?: ({ "Min": Limit } | { "Max": Limit } | { "Pattern": Limit })[] | undefined;
+  "kind"?: "ALPHA" | "NUMERIC" | "TEMPORAL" | undefined;
 }
 
-export interface Concept {
-  "Name"?: Text[] | undefined;
-  "Definition"?: Text[] | undefined;
-  "Status"?: string[] | undefined;
-  "MajorVersion"?: number[] | undefined;
-  "MinorVersion"?: number[] | undefined;
+export interface Base {
+  "Label"?: Label[] | undefined;
+  "Title"?: Label[] | undefined;
+  "Note"?: string[] | undefined;
+  "Version"?: number[] | undefined;
   "about"?: string | undefined;
-  "GUID": string;
-  "dateOfCreation": string;
+  "id": string;
+  "createdAt": string;
 }
 
-export interface Subject extends Concept {
-  "choice"?: ({ "HasPartRef": Ref } | { "IsSubtypeOfRef": Ref })[] | undefined;
+export interface Node extends Base {
+  "choice"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
 }
 
-export interface DataTemplate extends Subject {
-  "choice2"?: ({ "HasObjectTypeRef": Ref } | { "HasPropertyRef": Ref } | { "HasGroupOfPropertiesRef": Ref })[] | undefined;
+export interface Group extends Node {
+  "choice2"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
 }
 
-export interface Property extends Concept {
-  "DataType": DataType;
+export interface Item extends Base {
+  "Setting": Setting;
 }"
 `;
 

@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:usability:inherited-choices"
+           targetNamespace="urn:usability:inherited-choices"
+           elementFormDefault="qualified">
+
+  <xs:simpleType name="Identifier">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Za-z][A-Za-z0-9-]{0,31}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:attribute name="id" type="t:Identifier"/>
+
+  <xs:complexType name="Label">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="lang" type="xs:language" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <xs:complexType name="Link">
+    <xs:attribute name="target" type="t:Identifier" use="optional"/>
+    <xs:attribute name="href" type="xs:anyURI" use="optional"/>
+  </xs:complexType>
+
+  <xs:complexType name="Limit">
+    <xs:attribute name="value" type="xs:anySimpleType" use="optional"/>
+  </xs:complexType>
+
+  <xs:complexType name="Setting">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Min" type="t:Limit" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Max" type="t:Limit" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Pattern" type="t:Limit" minOccurs="0" maxOccurs="1"/>
+    </xs:choice>
+    <xs:attribute name="kind" use="optional">
+      <xs:simpleType>
+        <xs:restriction base="xs:string">
+          <xs:enumeration value="ALPHA"/>
+          <xs:enumeration value="NUMERIC"/>
+          <xs:enumeration value="TEMPORAL"/>
+        </xs:restriction>
+      </xs:simpleType>
+    </xs:attribute>
+  </xs:complexType>
+
+  <xs:complexType name="Base" abstract="true">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Label" type="t:Label" minOccurs="1" maxOccurs="unbounded"/>
+      <xs:element name="Title" type="t:Label" minOccurs="1" maxOccurs="1"/>
+      <xs:element name="Note" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="Version" type="xs:nonNegativeInteger" minOccurs="0" maxOccurs="1"/>
+    </xs:choice>
+    <xs:attribute name="about" type="xs:anyURI" use="optional"/>
+    <xs:attribute ref="t:id" use="required"/>
+    <xs:attribute name="createdAt" type="xs:dateTime" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Node" abstract="true">
+    <xs:complexContent>
+      <xs:extension base="t:Base">
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="ChildRef" type="t:Link" minOccurs="0" maxOccurs="unbounded"/>
+          <xs:element name="ParentRef" type="t:Link" minOccurs="0" maxOccurs="1"/>
+        </xs:choice>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="Group">
+    <xs:complexContent>
+      <xs:extension base="t:Node">
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="ItemRef" type="t:Link" minOccurs="0" maxOccurs="unbounded"/>
+          <xs:element name="GroupRef" type="t:Link" minOccurs="0" maxOccurs="1"/>
+        </xs:choice>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="Item">
+    <xs:complexContent>
+      <xs:extension base="t:Base">
+        <xs:sequence>
+          <xs:element name="Setting" type="t:Setting" minOccurs="1" maxOccurs="1"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:element name="Collection">
+    <xs:complexType>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="Label" type="t:Label" maxOccurs="unbounded"/>
+        <xs:element name="Group" type="t:Group" maxOccurs="unbounded"/>
+        <xs:element name="Item" type="t:Item" maxOccurs="unbounded"/>
+      </xs:choice>
+      <xs:attribute ref="t:id" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

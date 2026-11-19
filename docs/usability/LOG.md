@@ -15,7 +15,7 @@ judgement part is the review itself.
 
 - Generator: xsd-to-zod@<version>
 - Commit: <sha>
-- Fixtures: simple, iso-shaped
+- Fixtures: simple, inherited-choices
 - Findings:
   - ...
 - Issues: <full URLs>
@@ -26,10 +26,11 @@ judgement part is the review itself.
 
 - Generator: xsd-to-zod@1.0.1
 - Commit: initial usability-review scaffold
-- Fixtures: simple, iso-shaped
+- Fixtures: simple, inherited-choices
 - Findings:
-  - The ISO-shaped fixture reproduces the hybrid repeated-choice shape: base
-    choices stay flat while extension choices become `choice` / `choice2`.
+  - The inherited-choice fixture reproduces the hybrid repeated-choice shape
+    observed in the ISO 23387 probe: base choices stay flat while extension
+    choices become `choice` / `choice2`.
   - Synthetic choice field names carry no branch information.
   - Structured dates add authoring friction; string mode is simpler for an
     editor.

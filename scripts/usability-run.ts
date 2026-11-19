@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { buildContact, roundTrip as roundTripContact } from "../testdata/usability/consumers/simple.js";
-import { library, roundTrip as roundTripLibrary } from "../testdata/usability/consumers/iso-shaped.js";
+import {
+  collection,
+  roundTrip as roundTripCollection,
+} from "../testdata/usability/consumers/inherited-choices.js";
 
 const contactXml = roundTripContact(buildContact());
 assert.match(contactXml, /Ada/);
 
-assert.equal(roundTripLibrary(library), library.GUID);
+assert.equal(roundTripCollection(collection), collection.id);
 
 console.log("Usability consumers round-tripped.");
