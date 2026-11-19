@@ -31,7 +31,22 @@ git grep -n -E '<previous-version>|next release' -- README.md CHANGELOG.md docs 
 git grep -n -E 'PACKAGE_VERSION|"version"' -- package.json package-lock.json src/version.ts
 ```
 
-## 2. Run the release gate
+## 2. Run the usability review
+
+Run the fixture generator and consumer typecheck:
+
+```sh
+npm run usability
+```
+
+Then load `.agents/skills/usability-review/SKILL.md` and review the generated
+shape, the consumer snippets, and the snapshot diff. Update
+`docs/usability/LOG.md` and file issues for new friction. The command only
+regenerates fixtures and typechecks consumers; the judgement review is the
+step that matters. This step is deliberately outside `test:release`; chaining
+it there would repeat the build after the corpus run.
+
+## 3. Run the release gate
 
 ```sh
 npm run test:release
@@ -45,7 +60,7 @@ Inspect the pack output: it should contain `dist`, `README.md`, `CHANGELOG.md`,
 `LICENSE`, and only the docs listed in `package.json` `files`. It must not
 contain `coverage/`, `testdata/`, `tests/`, or this checklist.
 
-## 3. Merge the release PR
+## 4. Merge the release PR
 
 Commit, push, and open a PR from the release branch. Merge only after CI is
 green, then update local `main`:
@@ -56,7 +71,7 @@ git switch main
 git pull --ff-only
 ```
 
-## 4. Tag and publish
+## 5. Tag and publish
 
 Tag the merged `main` commit, not the release branch:
 
@@ -76,7 +91,7 @@ npm view xsd-to-zod@<version> version
 second gate; do not use `npm publish --dry-run` as a packaging check because it
 runs the same gate. Use `npm pack --dry-run --json` for the fast check.
 
-## 5. Close out on GitHub
+## 6. Close out on GitHub
 
 ```sh
 gh release create v<version> --title "v<version>" --generate-notes

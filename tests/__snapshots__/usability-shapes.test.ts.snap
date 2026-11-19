@@ -1,0 +1,59 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`usability fixture shapes > keeps the generated shape for inherited-choices.xsd 1`] = `
+"export interface Collection {
+  "choice": ({ "Label": Label } | { "Group": Group } | { "Item": Item })[];
+  "id": string;
+}
+
+export interface Label {
+  "_text": string;
+  "lang": string;
+}
+
+export interface Link {
+  "target"?: string | undefined;
+  "href"?: string | undefined;
+}
+
+export interface Limit {
+  "value"?: string | undefined;
+}
+
+export interface Setting {
+  "choice"?: ({ "Min": Limit } | { "Max": Limit } | { "Pattern": Limit })[] | undefined;
+  "kind"?: "ALPHA" | "NUMERIC" | "TEMPORAL" | undefined;
+}
+
+export interface Base {
+  "Label"?: Label[] | undefined;
+  "Title"?: Label[] | undefined;
+  "Note"?: string[] | undefined;
+  "Version"?: number[] | undefined;
+  "about"?: string | undefined;
+  "id": string;
+  "createdAt": string;
+}
+
+export interface Node extends Base {
+  "choice"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
+}
+
+export interface Group extends Node {
+  "choice2"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
+}
+
+export interface Item extends Base {
+  "Setting": Setting;
+}"
+`;
+
+exports[`usability fixture shapes > keeps the generated shape for simple.xsd 1`] = `
+"export interface Contact {
+  "name": string;
+  "email"?: string | undefined;
+  "tag"?: string[] | undefined;
+  "id": number;
+  "active"?: boolean | undefined;
+}"
+`;

@@ -20,6 +20,7 @@ Published on npm as `xsd-to-zod`.
 - 1.0 output decisions: `docs/1.0-output-defaults.md`
 - Upgrade path: `docs/MIGRATION.md`
 - Conformance status: `docs/TEST_STATUS.md`
+- Usability review: `.agents/skills/usability-review/SKILL.md` and `docs/usability/LOG.md`
 
 ## Coding standards
 - **Strict TypeScript**: `strict: true` in tsconfig. No `any`, no `// @ts-{ignore,expect-error}` — fix the types properly.

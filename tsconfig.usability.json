@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "scripts/usability-run.ts",
+    "testdata/usability/consumers/**/*.ts",
+    "testdata/usability/generated/**/*.ts"
+  ]
+}

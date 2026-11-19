@@ -35,6 +35,7 @@
     "pretest:corpus": "node scripts/require-w3c-corpus.mjs && node scripts/clean-corpus-reports.mjs && npm run build",
     "test:corpus": "vitest run --config vitest.corpus.config.ts && node scripts/merge-negative-reports.mjs",
     "test:release": "npm run lint && npm run test:coverage && npm run test:corpus",
+    "usability": "npm run build && node scripts/usability.mjs && tsc -p tsconfig.usability.json --noEmit && tsx scripts/usability-run.ts",
     "gen:standalone": "node scripts/embed-standalone-helpers.mjs"
   },
   "repository": {
