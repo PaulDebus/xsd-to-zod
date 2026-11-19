@@ -1,0 +1,60 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`usability fixture shapes > keeps the generated shape for iso-shaped.xsd 1`] = `
+"export interface Library {
+  "choice": ({ "Name": Text } | { "DataTemplate": DataTemplate } | { "Property": Property })[];
+  "GUID": string;
+}
+
+export interface Text {
+  "_text": string;
+  "language": string;
+}
+
+export interface Ref {
+  "guid"?: string | undefined;
+  "uri"?: string | undefined;
+}
+
+export interface Value {
+  "value"?: string | undefined;
+}
+
+export interface DataType {
+  "choice"?: ({ "MinInclusive": Value } | { "MinExclusive": Value } | { "MaxInclusive": Value } | { "MaxExclusive": Value } | { "DataFormat": Value })[] | undefined;
+  "name"?: "BOOLEAN" | "INTEGER" | "REAL" | "STRING" | "DATETIME" | undefined;
+}
+
+export interface Concept {
+  "Name"?: Text[] | undefined;
+  "Definition"?: Text[] | undefined;
+  "Status"?: string[] | undefined;
+  "MajorVersion"?: number[] | undefined;
+  "MinorVersion"?: number[] | undefined;
+  "about"?: string | undefined;
+  "GUID": string;
+  "dateOfCreation": string;
+}
+
+export interface Subject extends Concept {
+  "choice"?: ({ "HasPartRef": Ref } | { "IsSubtypeOfRef": Ref })[] | undefined;
+}
+
+export interface DataTemplate extends Subject {
+  "choice2"?: ({ "HasObjectTypeRef": Ref } | { "HasPropertyRef": Ref } | { "HasGroupOfPropertiesRef": Ref })[] | undefined;
+}
+
+export interface Property extends Concept {
+  "DataType": DataType;
+}"
+`;
+
+exports[`usability fixture shapes > keeps the generated shape for simple.xsd 1`] = `
+"export interface Contact {
+  "name": string;
+  "email"?: string | undefined;
+  "tag"?: string[] | undefined;
+  "id": number;
+  "active"?: boolean | undefined;
+}"
+`;

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:usability:simple"
+           targetNamespace="urn:usability:simple"
+           elementFormDefault="qualified">
+
+  <xs:complexType name="Contact">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="email" type="xs:string" minOccurs="0"/>
+      <xs:element name="tag" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:int" use="required"/>
+    <xs:attribute name="active" type="xs:boolean" use="optional"/>
+  </xs:complexType>
+
+  <xs:element name="contact" type="t:Contact"/>
+</xs:schema>
