@@ -2208,26 +2208,40 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
 const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, T> | object =>
   value === undefined ? {} : { [key]: value };
 
-// Meta parts for the runtime's xsi:type validity check (cvc-elt) on element
-// declarations whose block covers extension/restriction: the declared type,
-// its derived types with derivation methods, its ancestors, and the module's
-// known types. Complex-typed slots already enforce block through the variant
-// union meta; these entries only fire on the simple-typed read paths.
-const xsiBlockMetaParts = (typeName: QName, blockTokens: string[], ir: XsdIr): string[] => {
-  if (!blockTokens.includes("extension") && !blockTokens.includes("restriction")) {
-    return [];
+// Meta parts for the runtime's xsi:type handling on simple-typed slots: the
+// block inputs for the cvc-elt validity check (declared type, derived types
+// with derivation methods, ancestors, known types) when the declaration's
+// block covers extension/restriction, and the complex simpleContent types
+// derived from the declared type so the runtime can capture their attributes.
+// Complex-typed slots already enforce block through the variant union meta;
+// these entries only fire on the simple-typed read paths.
+const xsiMetaParts = (
+  typeName: QName,
+  blockTokens: string[],
+  ir: XsdIr,
+  includeComplexXsiTypes: boolean,
+): string[] => {
+  const parts: string[] = [];
+  if (blockTokens.includes("extension") || blockTokens.includes("restriction")) {
+    const knownTypes = [
+      ...XSD_BUILTIN_QNAMES,
+      ...Object.keys(ir.simpleTypes),
+      ...Object.keys(ir.complexTypes),
+    ];
+    parts.push(
+      `declaredType: ${JSON.stringify(typeName)}`,
+      `derivations: ${JSON.stringify(derivedSimpleAndComplex(typeName, ir))}`,
+      `ancestors: ${JSON.stringify(derivationAncestors(typeName, ir))}`,
+      `knownTypes: ${JSON.stringify(knownTypes)}`,
+    );
   }
-  const knownTypes = [
-    ...XSD_BUILTIN_QNAMES,
-    ...Object.keys(ir.simpleTypes),
-    ...Object.keys(ir.complexTypes),
-  ];
-  return [
-    `declaredType: ${JSON.stringify(typeName)}`,
-    `derivations: ${JSON.stringify(derivedSimpleAndComplex(typeName, ir))}`,
-    `ancestors: ${JSON.stringify(derivationAncestors(typeName, ir))}`,
-    `knownTypes: ${JSON.stringify(knownTypes)}`,
-  ];
+  if (includeComplexXsiTypes) {
+    const complexTypes = derivedComplexTypes(typeName, ir);
+    if (complexTypes.length > 0) {
+      parts.push(`complexXsiTypes: ${JSON.stringify(complexTypes)}`);
+    }
+  }
+  return parts;
 };
 
 // Per-field XML knowledge lives on the containing object schema: a named type
@@ -2296,8 +2310,8 @@ const fieldsMetaFor = (
     const blockTokens = parseBlockTokens(field.block);
     if (blockTokens.length > 0) {
       parts.push(`block: ${JSON.stringify(blockTokens)}`);
-      parts.push(...xsiBlockMetaParts(field.typeName, blockTokens, ir));
     }
+    parts.push(...xsiMetaParts(field.typeName, blockTokens, ir, field.kind === "element"));
     // Substitution blocking: the head element's block ("substitution" rejects
     // members outright) plus the union of the head element's and head type's
     // extension/restriction blocks (a member whose type derives by a blocked
@@ -2740,6 +2754,17 @@ const derivedClosure = (base: QName, index: ReadonlyMap<QName, QName[]>): QName[
   }
   return result;
 };
+
+// Complex types (simpleContent derivations included) that validly derive from
+// a simple-typed slot's declared type. A slot instantiated with one of these
+// carries attributes the scalar output cannot hold, so the runtime captures
+// them for lossless re-serialization.
+const derivedComplexTypes = (typeName: QName, ir: XsdIr): QName[] =>
+  typeName !== ANY_TYPE_QNAME && ir.complexTypes[typeName] === undefined
+    ? (Object.keys(ir.complexTypes) as QName[]).filter(
+        (name) => derivationMethods(name, typeName, ir) !== undefined,
+      )
+    : [];
 
 // ---------------------------------------------------------------------------
 // Small emitter layer — systematic codegen helpers instead of raw string
@@ -4430,8 +4455,15 @@ export const irToZod = (
     const rootBlock = parseBlockTokens(rootDef.block);
     if (rootBlock.length > 0) {
       rootMeta.push(`block: ${JSON.stringify(rootBlock)}`);
-      rootMeta.push(...xsiBlockMetaParts(rootDef.typeName, rootBlock, ir));
     }
+    rootMeta.push(
+      ...xsiMetaParts(
+        rootDef.typeName,
+        rootBlock,
+        ir,
+        ir.complexTypes[rootDef.typeName] === undefined,
+      ),
+    );
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
     if (rootSt) {
       rootMeta.push(`datatype: ${JSON.stringify(rootSt.name)}`);

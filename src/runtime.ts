@@ -949,6 +949,20 @@ const xsiCaptureStore = new WeakMap<object, XsiTypeCapture>();
 // pass reads it so cross-datatype values never compare equal.
 const openXsiTypeStore = new WeakMap<object, Map<string, (string | undefined)[]>>();
 
+// A simple-typed slot instantiated with a complex simpleContent type: the
+// scalar output cannot hold the derived attributes, so they ride an opaque
+// side channel — container object → field key → per-occurrence capture. The
+// serializer re-emits the original xsi:type and attributes.
+type SimpleContentXsiCapture = {
+  typeQName: QName;
+  /** Undeclared attributes of the occurrence: [Clark qname, lexical]. */
+  attributes: [string, string][];
+};
+const simpleContentXsiStore = new WeakMap<
+  object,
+  Map<string, (SimpleContentXsiCapture | undefined)[]>
+>();
+
 // Attributes of xsi:nil occurrences: the nil collapse to null drops them, but
 // XSD still evaluates attribute key fields on nil elements — container object
 // → field key → per-occurrence [Clark qname, lexical, QName bindings] tuples.
@@ -1044,6 +1058,8 @@ type RootLexicalEntry = {
   data: unknown;
   lexical?: string;
   qnameNs?: Record<string, string> | undefined;
+  /** Simple-typed root instantiated with a complex simpleContent type. */
+  simpleContentXsi?: SimpleContentXsiCapture;
 };
 const rootLexicals = new WeakMap<AnySchema, RootLexicalEntry>();
 const primitiveRootLexicals = new WeakMap<AnySchema, Map<unknown, RootLexicalEntry | null>>();
@@ -1180,6 +1196,7 @@ const transferLexicals = (walked: unknown, parsed: unknown, mode: TransferMode =
   transferRecord(lexicalStore, walked, parsed, mode);
   transferRecord(substQNameStore, walked, parsed, mode);
   transferRecord(openXsiTypeStore, walked, parsed, mode);
+  transferRecord(simpleContentXsiStore, walked, parsed, mode);
   transferRecord(nilAttributeStore, walked, parsed, mode);
   transferRecord(qnameNsStore, walked, parsed, mode);
   documentOrderTracker.transfer(walked, parsed, mode);
@@ -1469,6 +1486,51 @@ const checkXsiTypeValidity = (
       `xsi:type "${xsiType}" is not derived from the declared type "${meta.declaredType}"`,
     );
   }
+};
+
+// Undeclared attributes of an element occurrence, in document order. xsi:*
+// attributes are processor directives and xmlns declarations are rebuilt by
+// the serializer.
+const undeclaredAttributesOf = (
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+): [string, string][] => {
+  const context = withNamespaceContext(namespaceContext, node);
+  const attributes: [string, string][] = [];
+  for (const [key, raw] of Object.entries(node)) {
+    if (!key.startsWith("@_") || key === "@_xmlns" || key.startsWith("@_xmlns:")) {
+      continue;
+    }
+    const { prefix, local } = splitQName(key.slice(2));
+    const namespace = prefix ? (context[prefix] ?? "") : "";
+    if (namespace === XSI_NS) {
+      continue;
+    }
+    attributes.push([`{${namespace}}${local}`, String(raw)]);
+  }
+  return attributes;
+};
+
+// A simple-typed slot/root instantiated with a complex simpleContent type:
+// capture the derived attributes and the xsi:type QName so serialization can
+// re-emit them. The declared simple type has no attributes of its own, so
+// every non-xsi attribute belongs to the derived type.
+const simpleContentXsiCaptureOf = (
+  node: Record<string, unknown>,
+  namespaceContext: Record<string, string>,
+  meta: { complexXsiTypes?: QName[] },
+): SimpleContentXsiCapture | undefined => {
+  if (meta.complexXsiTypes === undefined) {
+    return undefined;
+  }
+  const xsiType = readXsiTypeAttr(node, namespaceContext);
+  if (xsiType === undefined || !meta.complexXsiTypes.includes(xsiType)) {
+    return undefined;
+  }
+  return {
+    typeQName: xsiType,
+    attributes: undeclaredAttributesOf(node, namespaceContext),
+  };
 };
 
 // Read one occurrence of a polymorphic slot: dispatch on xsi:type to the
@@ -1840,7 +1902,17 @@ const readObject = (
         scalarFromEnd.add(q);
       }
     }
-    const { present, value, lexical, substQNames, qnameNs, claimed, openXsiTypes, nilAttributes } =
+    const {
+      present,
+      value,
+      lexical,
+      substQNames,
+      qnameNs,
+      claimed,
+      openXsiTypes,
+      simpleContentXsi,
+      nilAttributes,
+    } =
       fieldMeta.kind === "choice"
         ? readChoiceField(
             fieldMeta,
@@ -1886,6 +1958,9 @@ const readObject = (
       }
       if (openXsiTypes !== undefined) {
         recordInto(openXsiTypeStore, result, key, openXsiTypes);
+      }
+      if (simpleContentXsi !== undefined) {
+        recordInto(simpleContentXsiStore, result, key, simpleContentXsi);
       }
       if (nilAttributes !== undefined) {
         recordInto(nilAttributeStore, result, key, nilAttributes);
@@ -2244,6 +2319,8 @@ const readOccurrence = (
   openXsiType?: string | undefined;
   /** Attributes of a nil occurrence (see nilAttributesOf). */
   nilAttributes?: NilAttr[] | undefined;
+  /** Complex simpleContent xsi:type capture of the occurrence. */
+  simpleContentXsi?: SimpleContentXsiCapture | undefined;
 } => {
   if (entry !== null && typeof entry === "object") {
     const childNode = entry as Record<string, unknown>;
@@ -2337,6 +2414,7 @@ const readOccurrence = (
       // identity comparison needs it (the zod tier keeps the raw lexical).
       openXsiType:
         fieldMeta.anySimpleType === true ? readXsiTypeAttr(childNode, childContext) : undefined,
+      simpleContentXsi: simpleContentXsiCaptureOf(childNode, childContext, fieldMeta),
     };
   }
 
@@ -2397,6 +2475,8 @@ type FieldRead = {
   openXsiTypes?: (string | undefined)[];
   /** Per-occurrence attributes of nil elements, index-aligned. */
   nilAttributes?: (NilAttr[] | undefined)[];
+  /** Per-occurrence complex simpleContent xsi:type captures, index-aligned. */
+  simpleContentXsi?: (SimpleContentXsiCapture | undefined)[];
   /**
    * Raw parser-node occurrences the field claimed, index-aligned with the
    * produced value(s) — readObject maps them onto document-order positions.
@@ -2697,6 +2777,10 @@ const readField = (
   }));
   const openXsiTypes = occurrences.map((o) => o.openXsiType);
   const anyOpenXsiType = openXsiTypes.some((t) => t !== undefined) ? openXsiTypes : undefined;
+  const simpleContentXsi = occurrences.map((o) => o.simpleContentXsi);
+  const anySimpleContentXsi = simpleContentXsi.some((c) => c !== undefined)
+    ? simpleContentXsi
+    : undefined;
   const nilAttributes = occurrences.map((o) => o.nilAttributes);
   const anyNilAttributes = nilAttributes.some((a) => a !== undefined) ? nilAttributes : undefined;
   if (field.isArray) {
@@ -2715,6 +2799,7 @@ const readField = (
       substQNames: substituted ? qnames : undefined,
       qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
       ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: anyOpenXsiType }),
+      ...(anySimpleContentXsi === undefined ? {} : { simpleContentXsi: anySimpleContentXsi }),
       ...(anyNilAttributes === undefined ? {} : { nilAttributes: anyNilAttributes }),
       claimed,
     };
@@ -2730,6 +2815,7 @@ const readField = (
       substQNames: qnames[0],
       qnameNs: occurrences[0]?.qnameNs,
       ...(anyOpenXsiType === undefined ? {} : { openXsiTypes: [anyOpenXsiType[0]] }),
+      ...(anySimpleContentXsi === undefined ? {} : { simpleContentXsi: [anySimpleContentXsi[0]] }),
       ...(anyNilAttributes === undefined ? {} : { nilAttributes: [anyNilAttributes[0]] }),
       claimed,
     };
@@ -2869,15 +2955,17 @@ const walkRoot = (
       `Invalid lexical ${JSON.stringify(text)}: value does not match the fixed value ${JSON.stringify(meta.fixedLexical ?? meta.fixedValue)}`,
     );
   }
-  if (text !== undefined) {
+  const simpleContentXsi = simpleContentXsiCaptureOf(rootNode, namespaceContext, meta);
+  if (text !== undefined || simpleContentXsi !== undefined) {
     rootLexicals.set(schema, {
       data: value,
-      ...(read.retainLexicals || findFacetsMeta(typeSchema) !== undefined
+      ...(text !== undefined && (read.retainLexicals || findFacetsMeta(typeSchema) !== undefined)
         ? { lexical: String(text) }
         : {}),
-      ...(meta.qnameValue
+      ...(meta.qnameValue && text !== undefined
         ? { qnameNs: qnameBindingsOf(String(text), namespaceContext, typeSchema) }
         : {}),
+      ...(simpleContentXsi === undefined ? {} : { simpleContentXsi }),
     });
   }
   return value;
@@ -3499,6 +3587,25 @@ const writeObjectFields = (
     const leaf = serializeStoredLeaf(leafMeta, itemSchema, item, storedItem);
     const qnameNs = fieldMeta.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
     const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+    // A complex simpleContent xsi:type on a simple-typed slot: re-emit the
+    // original QName and the derived attributes the scalar output dropped.
+    const simpleContentXsi = occurrenceAt<SimpleContentXsiCapture>(
+      simpleContentXsiStore,
+      obj,
+      key,
+      i,
+    );
+    if (simpleContentXsi !== undefined) {
+      usesXsi = true;
+      const attrs = [
+        `xsi:type="${elementName(simpleContentXsi.typeQName, ctx)}"`,
+        ...simpleContentXsi.attributes.map(
+          ([clark, lexical]) =>
+            `${elementName(clark, ctx)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
+        ),
+      ];
+      return `<${localName} ${attrs.join(" ")}>${declareQNamePrefixes(leaf, bindings, ctx)}</${localName}>`;
+    }
     // xs:anySimpleType: re-emit the captured xsi:type — it is the value's
     // datatype, and dropping it would change identity-constraint semantics
     // on re-parse.
@@ -4251,6 +4358,18 @@ export const serializeXml = <S extends z.ZodType>(
           ? value.map((item) => serializeDatatypeValue(rootDatatype, item)).join(" ")
           : serializeDatatypeValue(rootDatatype, value)
         : escapeXml(stored);
+  }
+
+  const rootSimpleContentXsi =
+    meta.open || hasObjectShape(typeSchema) || xsiUnion !== undefined || value === null
+      ? undefined
+      : rootEntry?.simpleContentXsi;
+  if (rootSimpleContentXsi !== undefined && value !== undefined) {
+    usesXsi = true;
+    attributes.push(`xsi:type="${elementName(rootSimpleContentXsi.typeQName, ctx)}"`);
+    for (const [clark, lexical] of rootSimpleContentXsi.attributes) {
+      attributes.push(`${elementName(clark, ctx)}="${escapeXmlAttrChars(escapeXml(lexical))}"`);
+    }
   }
 
   if (
