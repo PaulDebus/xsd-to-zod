@@ -43,7 +43,8 @@ Then load `.agents/skills/usability-review/SKILL.md` and review the generated
 shape, the consumer snippets, and the snapshot diff. Update
 `docs/usability/LOG.md` and file issues for new friction. The command only
 regenerates fixtures and typechecks consumers; the judgement review is the
-step that matters.
+step that matters. This step is deliberately outside `test:release`; chaining
+it there would repeat the build after the corpus run.
 
 ## 3. Run the release gate
 

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+// Generate from the built compiler so this script exercises the artifact
+// consumers receive. The snapshot test uses src/compiler.js instead.
 import { irToZod, parseXsd } from "../dist/compiler.js";
 
 const fixturesDir = path.resolve("testdata/usability");
