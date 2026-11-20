@@ -98,6 +98,42 @@ describe("--standalone output", () => {
     });
   });
 
+  it("warns when a simple-typed slot has complex simpleContent derivations", async () => {
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Text">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="language" type="xs:language"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="Concept">
+    <xs:sequence><xs:element name="Country" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:element name="root" type="t:Concept"/>
+</xs:schema>`;
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, xsd);
+      const result = irToZod(await parseXsd([file]), { standalone: true });
+      expect(result.warnings.join("\n")).toContain("xsi:type on simple-typed slots");
+      expect(result.schemas).toContain("// [standalone] xsi:type on simple-typed slots");
+      expect(result.schemas).not.toContain("complexXsiTypes");
+    });
+  });
+
+  it("does not warn about simpleContent xsi:type without such derivations", async () => {
+    let warnings: string[] = [];
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, XSD);
+      warnings = irToZod(await parseXsd([file]), { standalone: true }).warnings;
+    });
+    expect(warnings.join("\n")).not.toContain("xsi:type on simple-typed slots");
+  });
+
   it("keeps the registry-backed output unchanged when the flag is off", async () => {
     const source = await generatedFor(XSD);
     expect(source).toContain("from 'xsd-to-zod'");

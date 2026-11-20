@@ -2772,6 +2772,29 @@ const derivedComplexTypes = (typeName: QName, ir: XsdIr): QName[] =>
       )
     : [];
 
+// Standalone output carries no XML metadata, so the runtime-side capture of a
+// complex simpleContent xsi:type cannot apply. Warn when the schema has a
+// simple-typed slot that could need it.
+const standaloneSimpleContentXsiWarning = (ir: XsdIr): string | undefined => {
+  const slotTypes = new Set<QName>();
+  for (const element of Object.values(ir.elements)) {
+    slotTypes.add(element.typeName);
+  }
+  for (const type of Object.values(ir.complexTypes)) {
+    for (const field of type.fields) {
+      if (field.kind === "element") {
+        slotTypes.add(field.typeName);
+      }
+    }
+  }
+  for (const typeName of slotTypes) {
+    if (derivedComplexTypes(typeName, ir).length > 0) {
+      return "xsi:type on simple-typed slots (complex simpleContent types) is not preserved: standalone output carries no XML metadata; use the default runtime-backed output when these instances matter";
+    }
+  }
+  return undefined;
+};
+
 // ---------------------------------------------------------------------------
 // Small emitter layer — systematic codegen helpers instead of raw string
 // concatenation.  Centralises schema-reference formatting, .register() calls,
@@ -3211,6 +3234,9 @@ export const irToZod = (
     );
   const standaloneIdentityWarning =
     "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
+  const standaloneSimpleContentXsiWarningMessage = standalone
+    ? standaloneSimpleContentXsiWarning(ir)
+    : undefined;
 
   // The identity pass understands collapsed wrapper slots and synthetic choice
   // arrays, so the shape does not depend on whether the module declares an
@@ -3775,6 +3801,9 @@ export const irToZod = (
   schemaLines.push(...unenforcedConstructsMessages(ir).header);
   if (standalone && moduleHasIdentity) {
     schemaLines.push(`// [standalone] ${standaloneIdentityWarning}`);
+  }
+  if (standalone && standaloneSimpleContentXsiWarningMessage !== undefined) {
+    schemaLines.push(`// [standalone] ${standaloneSimpleContentXsiWarningMessage}`);
   }
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
@@ -4572,6 +4601,9 @@ export const irToZod = (
 
   const warnings = [
     ...(standalone && moduleHasIdentity ? [`[standalone] ${standaloneIdentityWarning}`] : []),
+    ...(standalone && standaloneSimpleContentXsiWarningMessage !== undefined
+      ? [`[standalone] ${standaloneSimpleContentXsiWarningMessage}`]
+      : []),
     ...(standalone && lexicalFacetsByType.size > 0
       ? [
           "[standalone] schemas carry no runtime metadata, so value-space facets that need the original lexical (xs:decimal order/digit facets, enumerations on structured/union types) are not enforced; regenerate with the default runtime-backed mode when those matter",
