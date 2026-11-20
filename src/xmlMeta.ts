@@ -106,6 +106,9 @@ export type XmlFieldMeta = {
   derivations?: Record<QName, string[]>;
   ancestors?: QName[];
   knownTypes?: QName[];
+  /** Complex simpleContent types derived from a simple-typed slot's declared
+      type: the runtime captures their attributes and re-emits xsi:type. */
+  complexXsiTypes?: QName[];
 };
 
 /** One branch of an xs:choice: the result keys its fields occupy. */
@@ -175,6 +178,9 @@ export type XmlMeta = {
   declaredType?: QName;
   ancestors?: QName[];
   knownTypes?: QName[];
+  /** Complex simpleContent types derived from a simple-typed root's declared
+      type: the runtime captures their attributes and re-emits xsi:type. */
+  complexXsiTypes?: QName[];
 };
 
 /** Typed registry — globalThis singleton so generated modules and runtime share the instance. */

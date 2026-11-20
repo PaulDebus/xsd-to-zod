@@ -490,3 +490,88 @@ describe("substitution groups × xsi:type", () => {
     expect(parseXml(librarySchema, serialized)).toEqual(parsed);
   });
 });
+
+describe("xsi:type on simple-typed slots — complex simpleContent", () => {
+  // A slot declared with a simple type but instantiated with xsi:type naming
+  // a complex simpleContent type keeps its scalar output shape; the derived
+  // attributes and the xsi:type QName ride an opaque side channel so the
+  // round-trip stays lossless.
+  const SIMPLE_CONTENT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Text">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="language" type="xs:language"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="Concept">
+    <xs:sequence>
+      <xs:element name="Country" type="xs:string"/>
+      <xs:element name="Alias" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="root" type="t:Concept"/>
+</xs:schema>`;
+
+  const SIMPLE_ROOT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t">
+  <xs:complexType name="Text">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="language" type="xs:language"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:element name="root" type="xs:string"/>
+</xs:schema>`;
+
+  it("round-trips a simple slot instantiated with a complex simpleContent type", async () => {
+    const mod = await moduleFor(SIMPLE_CONTENT_XSD);
+    const rootSchema = mod["rootSchema"] as z.ZodType;
+    const xml = `<root xmlns="urn:t" xmlns:t="urn:t" ${XSI}><Country xsi:type="t:Text" language="en">DE</Country></root>`;
+    const parsed = parseXml(rootSchema, xml);
+    expect(parsed).toEqual({ Country: "DE" });
+    const serialized = serializeXml(rootSchema, parsed);
+    expect(serialized).toContain('xsi:type="t:Text"');
+    expect(serialized).toContain('language="en"');
+    expect(serialized).toContain(">DE<");
+    expect(parseXml(rootSchema, serialized)).toEqual(parsed);
+  });
+
+  it("captures per occurrence in a repeated simple slot", async () => {
+    const mod = await moduleFor(SIMPLE_CONTENT_XSD);
+    const rootSchema = mod["rootSchema"] as z.ZodType;
+    const xml = `<root xmlns="urn:t" xmlns:t="urn:t" ${XSI}><Country>DE</Country><Alias xsi:type="t:Text" language="fr">FR</Alias><Alias>FR</Alias></root>`;
+    const parsed = parseXml(rootSchema, xml);
+    expect(parsed).toEqual({ Country: "DE", Alias: ["FR", "FR"] });
+    const serialized = serializeXml(rootSchema, parsed);
+    expect(serialized).toContain('xsi:type="t:Text"');
+    expect(serialized).toContain('language="fr"');
+    expect(parseXml(rootSchema, serialized)).toEqual(parsed);
+  });
+
+  it("round-trips a simple-typed root element with a complex simpleContent xsi:type", async () => {
+    const mod = await moduleFor(SIMPLE_ROOT_XSD);
+    const rootSchema = mod["rootSchema"] as z.ZodType;
+    const xml = `<root xmlns="urn:t" xmlns:t="urn:t" ${XSI} xsi:type="t:Text" language="en">hello</root>`;
+    const parsed = parseXml(rootSchema, xml);
+    expect(parsed).toBe("hello");
+    const serialized = serializeXml(rootSchema, parsed);
+    expect(serialized).toContain('xsi:type="t:Text"');
+    expect(serialized).toContain('language="en"');
+    expect(parseXml(rootSchema, serialized)).toBe("hello");
+  });
+
+  it("leaves a plain simple instance unchanged", async () => {
+    const mod = await moduleFor(SIMPLE_CONTENT_XSD);
+    const rootSchema = mod["rootSchema"] as z.ZodType;
+    const parsed = parseXml(rootSchema, `<root xmlns="urn:t"><Country>DE</Country></root>`);
+    const serialized = serializeXml(rootSchema, parsed);
+    expect(serialized).not.toContain("xsi:type");
+    expect(serialized).not.toContain("language");
+    expect(parseXml(rootSchema, serialized)).toEqual(parsed);
+  });
+});

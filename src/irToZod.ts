@@ -2208,26 +2208,38 @@ const dedupeEmissionFields = (type: ComplexTypeDef): IrField[] => {
 const optPropU = <K extends string, T>(key: K, value: T | undefined): Record<K, T> | object =>
   value === undefined ? {} : { [key]: value };
 
-// Meta parts for the runtime's xsi:type validity check (cvc-elt) on element
-// declarations whose block covers extension/restriction: the declared type,
-// its derived types with derivation methods, its ancestors, and the module's
-// known types. Complex-typed slots already enforce block through the variant
-// union meta; these entries only fire on the simple-typed read paths.
-const xsiBlockMetaParts = (typeName: QName, blockTokens: string[], ir: XsdIr): string[] => {
-  if (!blockTokens.includes("extension") && !blockTokens.includes("restriction")) {
-    return [];
+// Meta parts for the runtime's xsi:type handling on simple-typed slots: the
+// block inputs for the cvc-elt validity check (declared type, derived types
+// with derivation methods, ancestors, known types) when the declaration's
+// block covers extension/restriction, and the complex simpleContent types
+// derived from the declared type so the runtime can capture their attributes.
+// Complex-typed slots already enforce block through the variant union meta;
+// these entries only fire on the simple-typed read paths.
+const xsiMetaParts = (
+  typeName: QName,
+  blockTokens: string[],
+  ir: XsdIr,
+  complexXsiExprFor?: (typeName: QName) => string | undefined,
+): string[] => {
+  const parts: string[] = [];
+  if (blockTokens.includes("extension") || blockTokens.includes("restriction")) {
+    const knownTypes = [
+      ...XSD_BUILTIN_QNAMES,
+      ...Object.keys(ir.simpleTypes),
+      ...Object.keys(ir.complexTypes),
+    ];
+    parts.push(
+      `declaredType: ${JSON.stringify(typeName)}`,
+      `derivations: ${JSON.stringify(derivedSimpleAndComplex(typeName, ir))}`,
+      `ancestors: ${JSON.stringify(derivationAncestors(typeName, ir))}`,
+      `knownTypes: ${JSON.stringify(knownTypes)}`,
+    );
   }
-  const knownTypes = [
-    ...XSD_BUILTIN_QNAMES,
-    ...Object.keys(ir.simpleTypes),
-    ...Object.keys(ir.complexTypes),
-  ];
-  return [
-    `declaredType: ${JSON.stringify(typeName)}`,
-    `derivations: ${JSON.stringify(derivedSimpleAndComplex(typeName, ir))}`,
-    `ancestors: ${JSON.stringify(derivationAncestors(typeName, ir))}`,
-    `knownTypes: ${JSON.stringify(knownTypes)}`,
-  ];
+  const complexXsiExpr = complexXsiExprFor?.(typeName);
+  if (complexXsiExpr !== undefined) {
+    parts.push(`complexXsiTypes: ${complexXsiExpr}`);
+  }
+  return parts;
 };
 
 // Per-field XML knowledge lives on the containing object schema: a named type
@@ -2244,6 +2256,7 @@ const fieldsMetaFor = (
   decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
   skipChoiceGroups: ReadonlySet<string>,
+  complexXsiExprFor?: (typeName: QName) => string | undefined,
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = fields.map((field) => {
     if (field.kind === "choice") {
@@ -2296,8 +2309,15 @@ const fieldsMetaFor = (
     const blockTokens = parseBlockTokens(field.block);
     if (blockTokens.length > 0) {
       parts.push(`block: ${JSON.stringify(blockTokens)}`);
-      parts.push(...xsiBlockMetaParts(field.typeName, blockTokens, ir));
     }
+    parts.push(
+      ...xsiMetaParts(
+        field.typeName,
+        blockTokens,
+        ir,
+        field.kind === "element" ? complexXsiExprFor : undefined,
+      ),
+    );
     // Substitution blocking: the head element's block ("substitution" rejects
     // members outright) plus the union of the head element's and head type's
     // extension/restriction blocks (a member whose type derives by a blocked
@@ -2741,6 +2761,40 @@ const derivedClosure = (base: QName, index: ReadonlyMap<QName, QName[]>): QName[
   return result;
 };
 
+// Complex types (simpleContent derivations included) that validly derive from
+// a simple-typed slot's declared type. A slot instantiated with one of these
+// carries attributes the scalar output cannot hold, so the runtime captures
+// them for lossless re-serialization.
+const derivedComplexTypes = (typeName: QName, ir: XsdIr): QName[] =>
+  typeName !== ANY_TYPE_QNAME && ir.complexTypes[typeName] === undefined
+    ? (Object.keys(ir.complexTypes) as QName[]).filter(
+        (name) => derivationMethods(name, typeName, ir) !== undefined,
+      )
+    : [];
+
+// Standalone output carries no XML metadata, so the runtime-side capture of a
+// complex simpleContent xsi:type cannot apply. Warn when the schema has a
+// simple-typed slot that could need it.
+const standaloneSimpleContentXsiWarning = (ir: XsdIr): string | undefined => {
+  const slotTypes = new Set<QName>();
+  for (const element of Object.values(ir.elements)) {
+    slotTypes.add(element.typeName);
+  }
+  for (const type of Object.values(ir.complexTypes)) {
+    for (const field of type.fields) {
+      if (field.kind === "element") {
+        slotTypes.add(field.typeName);
+      }
+    }
+  }
+  for (const typeName of slotTypes) {
+    if (derivedComplexTypes(typeName, ir).length > 0) {
+      return "xsi:type on simple-typed slots (complex simpleContent types) is not preserved: standalone output carries no XML metadata; use the default runtime-backed output when these instances matter";
+    }
+  }
+  return undefined;
+};
+
 // ---------------------------------------------------------------------------
 // Small emitter layer — systematic codegen helpers instead of raw string
 // concatenation.  Centralises schema-reference formatting, .register() calls,
@@ -3180,6 +3234,9 @@ export const irToZod = (
     );
   const standaloneIdentityWarning =
     "identity constraints (xs:key, xs:unique, xs:keyref) are not enforced without the XML runtime; use the default runtime-backed output when they matter";
+  const standaloneSimpleContentXsiWarningMessage = standalone
+    ? standaloneSimpleContentXsiWarning(ir)
+    : undefined;
 
   // The identity pass understands collapsed wrapper slots and synthetic choice
   // arrays, so the shape does not depend on whether the module declares an
@@ -3442,6 +3499,34 @@ export const irToZod = (
   const hoistedMetaLines = new Map<QName, string[]>();
   const metaBodyByType = new Map<QName, string>();
   const metaConstByType = new Map<QName, string>();
+  // Complex simpleContent derivations are a property of the declared type, not
+  // the field. Hoist one array per declared type and reference it from every
+  // simple slot instead of repeating the list in each field's meta.
+  const complexXsiExprByType = new Map<QName, string | null>();
+  const complexXsiLines: string[] = [];
+  const complexXsiExprFor = (typeName: QName): string | undefined => {
+    if (standalone) {
+      return undefined;
+    }
+    const cached = complexXsiExprByType.get(typeName);
+    if (cached !== undefined) {
+      return cached === null ? undefined : cached;
+    }
+    const complexTypes = derivedComplexTypes(typeName, ir);
+    if (complexTypes.length === 0) {
+      complexXsiExprByType.set(typeName, null);
+      return undefined;
+    }
+    const name = alloc(`${effectiveBaseLocal(typeName)}ComplexXsiTypes`);
+    complexXsiExprByType.set(typeName, name);
+    let annotation = "";
+    if (opts?.js !== true) {
+      usedTypes.add("QName");
+      annotation = ": QName[]";
+    }
+    complexXsiLines.push(`const ${name}${annotation} = ${JSON.stringify(complexTypes)};`);
+    return name;
+  };
   // Hoisted consts are annotated in TS mode: a standalone object literal
   // widens (kind: string) without the contextual type .register() provides.
   const metaConstAnnotation = (typeName: "XmlMeta" | "XmlFieldMeta" | "XmlChoiceMeta"): string => {
@@ -3497,6 +3582,7 @@ export const irToZod = (
         decimal,
         membersByHead,
         new Set(choiceArrays.map((choice) => choice.group)),
+        complexXsiExprFor,
       );
       fieldsEntriesByType.set(t.name, fieldsEntries);
       if (choicesBody !== undefined) {
@@ -3715,6 +3801,9 @@ export const irToZod = (
   schemaLines.push(...unenforcedConstructsMessages(ir).header);
   if (standalone && moduleHasIdentity) {
     schemaLines.push(`// [standalone] ${standaloneIdentityWarning}`);
+  }
+  if (standalone && standaloneSimpleContentXsiWarningMessage !== undefined) {
+    schemaLines.push(`// [standalone] ${standaloneSimpleContentXsiWarningMessage}`);
   }
   const importLineIndex = schemaLines.length;
   schemaLines.push(""); // import line, filled in at the end once facet usage is known
@@ -4430,8 +4519,15 @@ export const irToZod = (
     const rootBlock = parseBlockTokens(rootDef.block);
     if (rootBlock.length > 0) {
       rootMeta.push(`block: ${JSON.stringify(rootBlock)}`);
-      rootMeta.push(...xsiBlockMetaParts(rootDef.typeName, rootBlock, ir));
     }
+    rootMeta.push(
+      ...xsiMetaParts(
+        rootDef.typeName,
+        rootBlock,
+        ir,
+        ir.complexTypes[rootDef.typeName] === undefined ? complexXsiExprFor : undefined,
+      ),
+    );
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
     if (rootSt) {
       rootMeta.push(`datatype: ${JSON.stringify(rootSt.name)}`);
@@ -4499,8 +4595,15 @@ export const irToZod = (
       `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
   }
 
+  if (complexXsiLines.length > 0) {
+    schemaLines.splice(importLineIndex + 1, 0, "", ...complexXsiLines, "");
+  }
+
   const warnings = [
     ...(standalone && moduleHasIdentity ? [`[standalone] ${standaloneIdentityWarning}`] : []),
+    ...(standalone && standaloneSimpleContentXsiWarningMessage !== undefined
+      ? [`[standalone] ${standaloneSimpleContentXsiWarningMessage}`]
+      : []),
     ...(standalone && lexicalFacetsByType.size > 0
       ? [
           "[standalone] schemas carry no runtime metadata, so value-space facets that need the original lexical (xs:decimal order/digit facets, enumerations on structured/union types) are not enforced; regenerate with the default runtime-backed mode when those matter",
