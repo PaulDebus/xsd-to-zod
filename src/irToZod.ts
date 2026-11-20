@@ -2219,7 +2219,7 @@ const xsiMetaParts = (
   typeName: QName,
   blockTokens: string[],
   ir: XsdIr,
-  includeComplexXsiTypes: boolean,
+  complexXsiExprFor?: (typeName: QName) => string | undefined,
 ): string[] => {
   const parts: string[] = [];
   if (blockTokens.includes("extension") || blockTokens.includes("restriction")) {
@@ -2235,11 +2235,9 @@ const xsiMetaParts = (
       `knownTypes: ${JSON.stringify(knownTypes)}`,
     );
   }
-  if (includeComplexXsiTypes) {
-    const complexTypes = derivedComplexTypes(typeName, ir);
-    if (complexTypes.length > 0) {
-      parts.push(`complexXsiTypes: ${JSON.stringify(complexTypes)}`);
-    }
+  const complexXsiExpr = complexXsiExprFor?.(typeName);
+  if (complexXsiExpr !== undefined) {
+    parts.push(`complexXsiTypes: ${complexXsiExpr}`);
   }
   return parts;
 };
@@ -2258,6 +2256,7 @@ const fieldsMetaFor = (
   decimal: DecimalMode,
   membersByHead: ReadonlyMap<QName, ElementDef[]>,
   skipChoiceGroups: ReadonlySet<string>,
+  complexXsiExprFor?: (typeName: QName) => string | undefined,
 ): { fieldsEntries: string[]; choicesBody: string | undefined } => {
   const entries = fields.map((field) => {
     if (field.kind === "choice") {
@@ -2311,7 +2310,14 @@ const fieldsMetaFor = (
     if (blockTokens.length > 0) {
       parts.push(`block: ${JSON.stringify(blockTokens)}`);
     }
-    parts.push(...xsiMetaParts(field.typeName, blockTokens, ir, field.kind === "element"));
+    parts.push(
+      ...xsiMetaParts(
+        field.typeName,
+        blockTokens,
+        ir,
+        field.kind === "element" ? complexXsiExprFor : undefined,
+      ),
+    );
     // Substitution blocking: the head element's block ("substitution" rejects
     // members outright) plus the union of the head element's and head type's
     // extension/restriction blocks (a member whose type derives by a blocked
@@ -3467,6 +3473,34 @@ export const irToZod = (
   const hoistedMetaLines = new Map<QName, string[]>();
   const metaBodyByType = new Map<QName, string>();
   const metaConstByType = new Map<QName, string>();
+  // Complex simpleContent derivations are a property of the declared type, not
+  // the field. Hoist one array per declared type and reference it from every
+  // simple slot instead of repeating the list in each field's meta.
+  const complexXsiExprByType = new Map<QName, string | null>();
+  const complexXsiLines: string[] = [];
+  const complexXsiExprFor = (typeName: QName): string | undefined => {
+    if (standalone) {
+      return undefined;
+    }
+    const cached = complexXsiExprByType.get(typeName);
+    if (cached !== undefined) {
+      return cached === null ? undefined : cached;
+    }
+    const complexTypes = derivedComplexTypes(typeName, ir);
+    if (complexTypes.length === 0) {
+      complexXsiExprByType.set(typeName, null);
+      return undefined;
+    }
+    const name = alloc(`${effectiveBaseLocal(typeName)}ComplexXsiTypes`);
+    complexXsiExprByType.set(typeName, name);
+    let annotation = "";
+    if (opts?.js !== true) {
+      usedTypes.add("QName");
+      annotation = ": QName[]";
+    }
+    complexXsiLines.push(`const ${name}${annotation} = ${JSON.stringify(complexTypes)};`);
+    return name;
+  };
   // Hoisted consts are annotated in TS mode: a standalone object literal
   // widens (kind: string) without the contextual type .register() provides.
   const metaConstAnnotation = (typeName: "XmlMeta" | "XmlFieldMeta" | "XmlChoiceMeta"): string => {
@@ -3522,6 +3556,7 @@ export const irToZod = (
         decimal,
         membersByHead,
         new Set(choiceArrays.map((choice) => choice.group)),
+        complexXsiExprFor,
       );
       fieldsEntriesByType.set(t.name, fieldsEntries);
       if (choicesBody !== undefined) {
@@ -4461,7 +4496,7 @@ export const irToZod = (
         rootDef.typeName,
         rootBlock,
         ir,
-        ir.complexTypes[rootDef.typeName] === undefined,
+        ir.complexTypes[rootDef.typeName] === undefined ? complexXsiExprFor : undefined,
       ),
     );
     const rootSt = structured ? structuredTypeOfTypeName(rootDef.typeName, ir) : undefined;
@@ -4529,6 +4564,10 @@ export const irToZod = (
     schemaLines[importLineIndex] =
       `import { z } from 'zod';\n` +
       `import { xmlRegistry${xsdImports.length > 0 ? `, ${xsdImports.join(", ")}` : ""} } from 'xsd-to-zod';${typeImport}`;
+  }
+
+  if (complexXsiLines.length > 0) {
+    schemaLines.splice(importLineIndex + 1, 0, "", ...complexXsiLines, "");
   }
 
   const warnings = [
