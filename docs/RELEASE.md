@@ -41,10 +41,15 @@ npm run usability
 
 Then load `.agents/skills/usability-review/SKILL.md` and review the generated
 shape, the consumer snippets, and the snapshot diff. Update
-`docs/usability/LOG.md` and file issues for new friction. The command only
-regenerates fixtures and typechecks consumers; the judgement review is the
-step that matters. This step is deliberately outside `test:release`; chaining
-it there would repeat the build after the corpus run.
+`docs/usability/LOG.md` and file issues for new friction.
+
+The mechanical contract already runs in `test:release`: the consumer contract
+test fails when the committed fixtures drift, the consumer snippets stop
+typechecking, the domain-model round-trip breaks, or an unrelated schema type
+reshapes an existing interface. Regenerate fixtures with `npm run usability`
+and commit them with any intentional shape change. Only the judgement review
+stays manual, because it produces findings and issues rather than a pass/fail
+bit.
 
 ## 3. Run the release gate
 
