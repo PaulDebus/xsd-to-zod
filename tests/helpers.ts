@@ -53,6 +53,39 @@ export function discoverCuratedCases(): TestCase[] {
 
 export { readXmlFile };
 
+// Exported interface declarations keyed by name, in source order. The
+// usability checks judge the TypeScript shape an application author sees, not
+// the registry metadata, which changes for correctness reasons.
+export const extractInterfaceBlocks = (code: string): Map<string, string> => {
+  const blocks = new Map<string, string>();
+  const lines = code.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const name = line?.match(/^export interface (\w+)/)?.[1];
+    if (line === undefined || name === undefined) {
+      continue;
+    }
+    let depth = 0;
+    const block: string[] = [];
+    while (index < lines.length) {
+      const current = lines[index];
+      if (current === undefined) {
+        break;
+      }
+      block.push(current);
+      depth += (current.match(/{/g) ?? []).length;
+      depth -= (current.match(/}/g) ?? []).length;
+      index++;
+      if (depth === 0) {
+        break;
+      }
+    }
+    blocks.set(name, block.join("\n"));
+    index--;
+  }
+  return blocks;
+};
+
 export const withTempDir = (fn: (dir: string) => void): void => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xsd-to-zod-"));
   try {
