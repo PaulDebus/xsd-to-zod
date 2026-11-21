@@ -176,6 +176,134 @@ describe("default output shape", () => {
   });
 });
 
+const CONCEPT_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Concept">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Name" type="xs:string"/>
+      <xs:element name="Status" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="root" type="t:Concept"/>
+</xs:schema>`;
+
+// An unrelated complex type deriving from xs:string. It used to veto the
+// Concept choice collapse through hasDerivedTypes, changing the emitted shape.
+const CONCEPT_WITH_TEXT_XSD = CONCEPT_XSD.replace(
+  "</xs:schema>",
+  `  <xs:complexType name="Text">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="language" type="xs:language"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`,
+);
+
+const generatedSource = async (xsd: string): Promise<string> => {
+  let source = "";
+  await withTempDirAsync(async (dir) => {
+    const file = path.join(dir, "schema.xsd");
+    fs.writeFileSync(file, xsd);
+    source = irToZod(await parseXsd([file])).schemas;
+  });
+  return source;
+};
+
+describe("repeated-choice collapse locality", () => {
+  it("emits the same collapsed shape with and without an unrelated string-derived type", async () => {
+    for (const xsd of [CONCEPT_XSD, CONCEPT_WITH_TEXT_XSD]) {
+      const source = await generatedSource(xsd);
+      expect(source).toContain(`"choice": ({ "Name": string } | { "Status": string })[];`);
+      expect(source).not.toContain(`"Name"?:`);
+      expect(source).not.toContain(`"Status"?:`);
+    }
+  });
+
+  it("still preserves a complex simpleContent xsi:type on a collapsed branch", async () => {
+    let mod: Record<string, unknown> = {};
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "schema.xsd");
+      fs.writeFileSync(file, CONCEPT_WITH_TEXT_XSD);
+      mod = await generateAndImport([file]);
+    });
+    const schema = mod["rootSchema"] as never;
+    const xml = `<root xmlns="urn:t" xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Name xsi:type="t:Text" language="en">DE</Name><Status>active</Status></root>`;
+    const parsed = parseXml(schema, xml) as Record<string, unknown>;
+    expect(parsed).toEqual({ choice: [{ Name: "DE" }, { Status: "active" }] });
+    const serialized = serializeXml(schema, parsed as never);
+    expect(serialized).toContain('xsi:type="t:Text"');
+    expect(serialized).toContain('language="en"');
+    expect(parseXml(schema, serialized)).toEqual(parsed);
+  });
+});
+
+describe("repeated-choice collapse through extension", () => {
+  const ISO_SHAPED_XSD = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Base" abstract="true">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="HasPartRef" type="xs:string"/>
+      <xs:element name="IsSubtypeOfRef" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:complexType name="Mid">
+    <xs:complexContent>
+      <xs:extension base="t:Base">
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="HasObjectTypeRef" type="xs:string"/>
+          <xs:element name="HasPropertyRef" type="xs:string"/>
+        </xs:choice>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="Leaf">
+    <xs:complexContent>
+      <xs:extension base="t:Mid">
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="HasGroupOfPropertiesRef" type="xs:string"/>
+          <xs:element name="HasUnitRef" type="xs:string"/>
+        </xs:choice>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+  <xs:complexType name="ConceptType">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Name" type="xs:string"/>
+      <xs:element name="Status" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:complexType name="PropertyType">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Label" type="xs:string"/>
+      <xs:element name="Value" type="xs:string"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:complexType name="Library">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="Concept" type="t:ConceptType"/>
+      <xs:element name="Property" type="t:PropertyType"/>
+    </xs:choice>
+  </xs:complexType>
+  <xs:element name="library" type="t:Library"/>
+</xs:schema>`;
+
+  it("collapses every inherited repeated-choice group consistently", async () => {
+    const source = await generatedSource(ISO_SHAPED_XSD);
+    expect(source).toContain(
+      `"choice": ({ "HasPartRef": string } | { "IsSubtypeOfRef": string })[];`,
+    );
+    expect(source).toContain(`"choice2": ({ "HasObjectTypeRef": string }`);
+    expect(source).toContain(`"choice3": ({ "HasGroupOfPropertiesRef": string }`);
+    expect(source).toContain(`"choice": ({ "Concept": ConceptType } | { "Property":`);
+    expect(source).not.toContain(`"HasPartRef"?:`);
+    expect(source).not.toContain(`"HasObjectTypeRef"?:`);
+  });
+});
+
 const OPTIONAL_XSD = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:complexType name="Root">

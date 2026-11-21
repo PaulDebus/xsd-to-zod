@@ -898,7 +898,11 @@ const ergonomicChoiceGroups = (type: ComplexTypeDef, ir: XsdIr): ChoiceArrayGrou
       if (
         field.typeName === ANY_TYPE_QNAME ||
         field.typeName === ANY_SIMPLE_TYPE_QNAME ||
-        hasDerivedTypes(field.typeName, ir) ||
+        // Only a complex declared type can gain derived variants worth
+        // vetoing. A simple branch stays local even when some unrelated
+        // complex type derives from its builtin type (simpleContent xsi:type
+        // is preserved by the runtime regardless of the collapsed shape).
+        (ir.complexTypes[field.typeName] !== undefined && hasDerivedTypes(field.typeName, ir)) ||
         substitutionHeads.has(field.qname) ||
         wrapperTargetFor(field, ir) !== undefined
       ) {
@@ -2275,6 +2279,10 @@ const fieldsMetaFor = (
         }
         if (isQNameTyped(branch.field.typeName, ir)) {
           branchParts.push("qnameValue: true");
+        }
+        const complexXsiExpr = complexXsiExprFor?.(branch.field.typeName);
+        if (complexXsiExpr !== undefined) {
+          branchParts.push(`complexXsiTypes: ${complexXsiExpr}`);
         }
         return `{ ${branchParts.join(", ")} }`;
       });
