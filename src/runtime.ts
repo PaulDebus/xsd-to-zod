@@ -2550,6 +2550,7 @@ const readChoiceField = (
     value: unknown;
     lexical?: string | undefined;
     qnameNs?: Record<string, string> | undefined;
+    simpleContentXsi?: SimpleContentXsiCapture | undefined;
     claimed: ClaimedOccurrence;
   }[] = [];
   for (const [rawKey, rawValue] of orderedNodeEntries(node)) {
@@ -2577,6 +2578,9 @@ const readChoiceField = (
       qname: match.branch.qname,
       ...(match.branch.datatype === undefined ? {} : { datatype: match.branch.datatype }),
       ...(match.branch.qnameValue === true ? { qnameValue: true } : {}),
+      ...(match.branch.complexXsiTypes === undefined
+        ? {}
+        : { complexXsiTypes: match.branch.complexXsiTypes }),
     };
     const occurrence = readOccurrence(
       analyzeField(branchSchema),
@@ -2593,6 +2597,7 @@ const readChoiceField = (
       value: item,
       lexical: occurrence.lexical,
       qnameNs: occurrence.qnameNs,
+      simpleContentXsi: occurrence.simpleContentXsi,
       claimed: { rawKey, rawValue, index: occurrences.length },
     });
   }
@@ -2601,11 +2606,16 @@ const readChoiceField = (
   }
   const lexicals = occurrences.map((o) => o.lexical);
   const qnameNs = occurrences.map((o) => o.qnameNs);
+  const simpleContentXsi = occurrences.map((o) => o.simpleContentXsi);
+  const anySimpleContentXsi = simpleContentXsi.some((c) => c !== undefined)
+    ? simpleContentXsi
+    : undefined;
   return {
     present: true,
     value: occurrences.map((o) => o.value),
     lexical: lexicals.some((l) => l !== undefined) ? lexicals : undefined,
     qnameNs: qnameNs.some((n) => n !== undefined) ? qnameNs : undefined,
+    ...(anySimpleContentXsi === undefined ? {} : { simpleContentXsi: anySimpleContentXsi }),
     claimed: occurrences.map((o) => o.claimed),
   };
 };
@@ -3679,6 +3689,29 @@ const writeObjectFields = (
     const leaf = serializeStoredLeaf(branchMeta, branchSchema, leafValue, storedItem);
     const qnameNs = branch.qnameValue ? qnameNsStore.get(obj)?.get(key) : undefined;
     const bindings = Array.isArray(qnameNs) ? qnameNs[i] : qnameNs;
+    // A complex simpleContent xsi:type on a simple-typed branch: re-emit the
+    // original QName and the derived attributes the scalar value dropped.
+    const simpleContentXsi = occurrenceAt<SimpleContentXsiCapture>(
+      simpleContentXsiStore,
+      obj,
+      key,
+      i,
+    );
+    if (simpleContentXsi !== undefined) {
+      usesXsi = true;
+      const attrs = [
+        `xsi:type="${elementName(simpleContentXsi.typeQName, ctx)}"`,
+        ...simpleContentXsi.attributes.map(
+          ([clark, lexical]) =>
+            `${elementName(clark, ctx)}="${escapeXmlAttrChars(escapeXml(lexical))}"`,
+        ),
+      ];
+      return `<${localName} ${attrs.join(" ")}>${declareQNamePrefixes(
+        leaf,
+        typeof bindings === "object" ? bindings : undefined,
+        ctx,
+      )}</${localName}>`;
+    }
     return `<${localName}>${declareQNamePrefixes(
       leaf,
       typeof bindings === "object" ? bindings : undefined,

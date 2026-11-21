@@ -26,21 +26,18 @@ export interface Setting {
 }
 
 export interface Base {
-  "Label"?: Label[] | undefined;
-  "Title"?: Label[] | undefined;
-  "Note"?: string[] | undefined;
-  "Version"?: number[] | undefined;
+  "choice"?: ({ "Label": Label } | { "Title": Label } | { "Note": string } | { "Version": number })[] | undefined;
   "about"?: string | undefined;
   "id": string;
   "createdAt": string;
 }
 
 export interface Node extends Base {
-  "choice"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
+  "choice2"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
 }
 
 export interface Group extends Node {
-  "choice2"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
+  "choice3"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
 }
 
 export interface Item extends Base {

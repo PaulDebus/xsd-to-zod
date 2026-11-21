@@ -49,6 +49,10 @@ export type XmlChoiceFieldMeta = {
   qname: QName;
   datatype?: XsdDatatypeName;
   qnameValue?: boolean;
+  /** Complex simpleContent types derived from this simple-typed branch's
+      declared type: the runtime captures their attributes and re-emits
+      xsi:type, matching the flat element-slot behavior. */
+  complexXsiTypes?: QName[];
 };
 
 /** Ergonomic repeated xs:choice: one array of tagged branch values. */
