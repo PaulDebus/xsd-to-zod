@@ -40,25 +40,17 @@ describe("consumer contract", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
   }, 60_000);
 
-  it("round-trips a document through the consumer domain model", async () => {
-    const consumer = await import("../testdata/usability/consumers/inherited-choices.js");
-
-    const model = consumer.toCollectionModel(consumer.buildCollection());
-    const edited = consumer.addItemRef(
-      consumer.renameGroup(model, 0, "renamed group"),
-      0,
-      "item-2",
-    );
-
-    const xml = consumer.serializeModel(edited);
-    const reparsed = consumer.parseModel(xml);
-
-    expect(reparsed).toEqual(edited);
-    expect(consumer.serializeModel(reparsed)).toBe(xml);
-    expect(reparsed.groups[0]?.labels[0]?.text).toBe("renamed group");
-    expect(reparsed.groups[0]?.itemRefs).toEqual(["item-1", "item-2"]);
-    expect(reparsed.items[0]?.limits).toEqual({ min: "0", max: "10" });
-  });
+  it("round-trips a document through the consumer domain model", () => {
+    // Run the consumer snippets in a subprocess so the main TypeScript program
+    // never reaches them: they import the published `xsd-to-zod` entry, which
+    // only resolves against the built `dist/`, not a fresh checkout. The
+    // snippets are typechecked on their own by tsconfig.usability.json above.
+    const result = spawnSync(path.resolve("node_modules/.bin/tsx"), ["scripts/usability-run.ts"], {
+      encoding: "utf8",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  }, 60_000);
 
   it("keeps existing interfaces stable when an unrelated type is added", async () => {
     const fixture = path.join(usabilityDir, "inherited-choices.xsd");
