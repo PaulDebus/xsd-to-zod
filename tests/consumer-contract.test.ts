@@ -85,6 +85,12 @@ describe("consumer contract", () => {
     });
 
     expect(baseline.size).toBeGreaterThan(0);
+    // The added type must show up in the extended output, otherwise the
+    // comparison below has no chance to differ and guards nothing.
+    expect(
+      withExtra.has("UnrelatedText"),
+      "the added type should appear in the extended output",
+    ).toBe(true);
     for (const [name, block] of baseline) {
       expect(withExtra.get(name), `${name} changed when an unrelated type was added`).toBe(block);
     }
