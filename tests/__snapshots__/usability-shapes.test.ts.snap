@@ -2,6 +2,7 @@
 
 exports[`usability fixture shapes > keeps the generated shape for inherited-choices.xsd 1`] = `
 "export interface Collection {
+  /** One of: Label, Group, Item */
   "choice": ({ "Label": Label } | { "Group": Group } | { "Item": Item })[];
   "id": string;
 }
@@ -21,11 +22,13 @@ export interface Limit {
 }
 
 export interface Setting {
+  /** One of: Min, Max, Pattern */
   "choice"?: ({ "Min": Limit } | { "Max": Limit } | { "Pattern": Limit })[] | undefined;
   "kind"?: "ALPHA" | "NUMERIC" | "TEMPORAL" | undefined;
 }
 
 export interface Base {
+  /** One of: Label, Title, Note, Version */
   "choice"?: ({ "Label": Label } | { "Title": Label } | { "Note": string } | { "Version": number })[] | undefined;
   "about"?: string | undefined;
   "id": string;
@@ -33,10 +36,12 @@ export interface Base {
 }
 
 export interface Node extends Base {
+  /** One of: ChildRef, ParentRef */
   "choice2"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
 }
 
 export interface Group extends Node {
+  /** One of: ItemRef, GroupRef */
   "choice3"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
 }
 

@@ -62,6 +62,32 @@ describe("default output shape", () => {
     expect(source).not.toContain(`"a"?:`);
   });
 
+  it("names the branch tags in a comment above each synthetic choice field", async () => {
+    const xsd = `<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:complexType name="T">
+    <xs:sequence>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string"/>
+      </xs:choice>
+      <xs:choice maxOccurs="unbounded">
+        <xs:element name="c" type="xs:int"/>
+        <xs:element name="d" type="xs:int"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="root" type="T"/>
+</xs:schema>`;
+    const source = await generatedSource(xsd);
+    expect(source).toContain(
+      `  /** One of: a, b */\n  "choice": ({ "a": string } | { "b": string })[];`,
+    );
+    expect(source).toContain(
+      `  /** One of: c, d */\n  "choice2": ({ "c": number } | { "d": number })[];`,
+    );
+  });
+
   it("falls back to a numeric suffix when a field named choice already exists", async () => {
     const xsd = `<?xml version="1.0"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
