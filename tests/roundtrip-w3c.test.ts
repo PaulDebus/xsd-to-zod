@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/compiler.js";
-import { runRoundTrip } from "./helpers.js";
+import { hasW3cCorpus, runRoundTrip, W3C_CORPUS_DIR, W3C_SUBMODULE_SKIP } from "./helpers.js";
 import { discoverValidCases } from "./w3cDriver.js";
-
-const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
 // Cases exercising XSD features xsd-to-zod does not support yet, with the
 // reason. Keyed by `<testGroup>/<instanceTest>` name.
@@ -14,13 +12,13 @@ const KNOWN_FAILURES = new Map<string, string>([]);
 // Test groups are discovered from the .testSet metadata, not hardcoded
 // directories. Test names carry the group's XSD spec anchors.
 describe("W3C smoke round-trip", () => {
-  if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
-    it("skip — W3C submodule not checked out", async () => {});
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
     return;
   }
 
   const boeingCases = discoverValidCases([
-    path.join(W3C_DIR, "boeingMeta/BoeingXSDTestSet.testSet"),
+    path.join(W3C_CORPUS_DIR, "boeingMeta/BoeingXSDTestSet.testSet"),
   ]);
 
   // Every KNOWN_FAILURES key must match a discovered case — a stale key means

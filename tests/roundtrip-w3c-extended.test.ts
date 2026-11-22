@@ -2,11 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { IrToZodOptions } from "../src/irToZod.js";
-import { runRoundTrip } from "./helpers.js";
+import { hasW3cCorpus, runRoundTrip, W3C_CORPUS_DIR, W3C_SUBMODULE_SKIP } from "./helpers.js";
 import { discoverValidCases, parseTestSet, type W3cTestSetRef } from "./w3cDriver.js";
 import { W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 
-const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 const NIST_TEST_SET = "nistMeta/NISTXMLSchemaDatatypes.testSet";
 
 // Targeted selection of sun/ms test sets exercising supported features
@@ -49,16 +48,16 @@ const TEST_SETS: W3cTestSetRef[] = [
 ];
 
 describe("W3C extended round-trip (sun/ms selection)", () => {
-  if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
-    it("skip — W3C submodule not checked out", () => {});
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
     return;
   }
 
   const cases = discoverValidCases(
     TEST_SETS.map((ref) =>
       typeof ref === "string"
-        ? path.join(W3C_DIR, ref)
-        : { ...ref, file: path.join(W3C_DIR, ref.file) },
+        ? path.join(W3C_CORPUS_DIR, ref)
+        : { ...ref, file: path.join(W3C_CORPUS_DIR, ref.file) },
     ),
   );
   const keyOf = (testSet: string, name: string): string =>
@@ -113,7 +112,7 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
   // The NIST slice is group-filtered to the datatype families; a new family
   // outside the filter would be skipped silently.
   it("NIST groups all match the datatype family filter", () => {
-    const unmatched = parseTestSet(path.join(W3C_DIR, NIST_TEST_SET))
+    const unmatched = parseTestSet(path.join(W3C_CORPUS_DIR, NIST_TEST_SET))
       .map((group) => group.name)
       .filter((name) => !/^(?:atomic|list|union)-/.test(name));
     expect(unmatched).toEqual([]);
@@ -125,7 +124,7 @@ describe("W3C extended round-trip (sun/ms selection)", () => {
     const title = `round-trips W3C ${key}${anchors}`;
     const reason = W3C_KNOWN_FAILURES.get(key);
     const opts: IrToZodOptions | undefined =
-      c.testSet === path.join(W3C_DIR, NIST_TEST_SET) ? { integers: "bigint" } : undefined;
+      c.testSet === path.join(W3C_CORPUS_DIR, NIST_TEST_SET) ? { integers: "bigint" } : undefined;
     if (reason) {
       // Known failures run as it.fails: a fix that makes one pass turns the
       // suite red ("expected test to fail"), forcing the entry's removal in

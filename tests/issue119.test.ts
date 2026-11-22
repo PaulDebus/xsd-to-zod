@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/compiler.js";
-import { withTempDirAsync } from "./helpers.js";
+import { hasW3cCorpus, W3C_SUBMODULE_SKIP, withTempDirAsync } from "./helpers.js";
 
 // Regression tests for redefine self-references: a group/attributeGroup/
 // simpleType redefined in terms of itself must resolve the self-reference
@@ -95,6 +95,11 @@ describe("xs:redefine self-references", () => {
 const ATTGC010 = path.resolve("testdata/upstream/w3c-xsdtests/msData/attributeGroup/attgC010.xsd");
 
 describe("circular attributeGroup self-reference (XSD 1.1)", () => {
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
+    return;
+  }
+
   it("does not overflow the stack on a direct attributeGroup self-ref and emits a diagnostic", async () => {
     const ir = await parseXsd([ATTGC010]);
     expect(ir.diagnostics).toEqual([
