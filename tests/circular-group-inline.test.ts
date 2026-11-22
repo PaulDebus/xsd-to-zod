@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseXsd } from "../src/compiler.js";
-import { generateAndImport } from "./helpers.js";
+import { generateAndImport, hasW3cCorpus, W3C_SUBMODULE_SKIP } from "./helpers.js";
 
 // Regression: circular group refs whose cycle passes through an element's
 // inline complexType (particlesZ010) or through an xs:extension inside one
@@ -17,6 +17,11 @@ const PARTICLES_Z010 = path.resolve(
 const ADD_B077 = path.resolve("testdata/upstream/w3c-xsdtests/msData/additional/addB077.xsd");
 
 describe("circular group ref through an inline type", () => {
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
+    return;
+  }
+
   it("group ref inside the inline type of its own element (particlesZ010)", async () => {
     const ir = await parseXsd([PARTICLES_Z010]);
     expect(ir.diagnostics).toEqual([]);

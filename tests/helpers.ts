@@ -11,6 +11,17 @@ import type { IrToZodOptions } from "../src/irToZod.js";
 import { decodeTagNameCharRefs } from "../src/runtime.js";
 import type { SimpleTypeDef } from "../src/types.js";
 
+export const W3C_CORPUS_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
+
+// Fixture-dependent unit tests skip instead of failing on a clone where the
+// W3C test-suite submodule is not initialized. The corpus config keeps a hard
+// globalSetup guard; these files run in the default and quick suites.
+export const hasW3cCorpus = (): boolean =>
+  fs.existsSync(W3C_CORPUS_DIR) && fs.readdirSync(W3C_CORPUS_DIR).length > 0;
+
+export const W3C_SUBMODULE_SKIP =
+  "skip — W3C submodule not checked out (run git submodule update --init --recursive)";
+
 // Narrow a SimpleTypeDef to its restriction variant in tests.
 export const asRestriction = (
   type: SimpleTypeDef,
