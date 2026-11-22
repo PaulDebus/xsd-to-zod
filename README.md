@@ -457,16 +457,20 @@ Keep your own domain model and convert at the boundary:
   `serializeXml(LibrarySchema, dto)`. Preserve branches the user did not edit
   instead of regenerating the whole document, so untouched content round-trips
   unchanged.
-- **Author.** Build the schema's input type (`LibraryIn`, i.e. `z.input`) rather
-  than the output interface, and let `parse`/`serializeXml` fill in defaults.
-  The default `--datatypes string` mode keeps date/time values as validated
-  strings and is the simpler choice for authoring; opt into `structured` only
-  when you need the parsed date parts.
+- **Author.** When the schema has defaults, build the input type (`LibraryIn`,
+  i.e. `z.input`) rather than the output interface: defaulted fields are
+  optional there and `parse`/`serializeXml` fill them in (see
+  [Parse and serialize XML](#parse-and-serialize-xml)). The default
+  `--datatypes string` mode keeps date/time values as validated strings and is
+  the simpler choice for authoring; opt into `structured` only when you need
+  the parsed date parts.
 
 A worked adapter over an inheritance-plus-repeated-choice schema is in
-[testdata/usability/consumers/inherited-choices.ts](testdata/usability/consumers/inherited-choices.ts);
-[tests/consumer-contract.test.ts](tests/consumer-contract.test.ts) round-trips
-it through the domain model as part of the release gate.
+[testdata/usability/consumers/inherited-choices.ts](testdata/usability/consumers/inherited-choices.ts).
+It uses `Collection`/`Group`/`Item` rather than `Library`, and its fixture has
+no defaults, so it converts output-typed DTOs with hand-written `from*Model`
+helpers; [tests/consumer-contract.test.ts](tests/consumer-contract.test.ts)
+round-trips it through the domain model as part of the release gate.
 
 ## Why trust this?
 
