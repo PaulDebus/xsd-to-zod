@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { hasW3cCorpus, W3C_CORPUS_DIR, W3C_SUBMODULE_SKIP } from "./helpers.js";
 import { discoverInvalidCases, type W3cTestSetRef } from "./w3cDriver.js";
 import { evaluateNegativeCase, type NegativeOutcome, tallyNegative } from "./w3cNegative.js";
-
-const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
 // Same selection as the positive extended suite: for instances
 // the suite marks INVALID, assert the generated Zod schema rejects them. Where
@@ -99,16 +98,16 @@ afterAll(() => {
 });
 
 describe("W3C negative tests (invalid instances)", () => {
-  if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
-    it("skip — W3C submodule not checked out", () => {});
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
     return;
   }
 
   const cases = discoverInvalidCases(
     TEST_SETS.map((ref) =>
       typeof ref === "string"
-        ? path.join(W3C_DIR, ref)
-        : { ...ref, file: path.join(W3C_DIR, ref.file) },
+        ? path.join(W3C_CORPUS_DIR, ref)
+        : { ...ref, file: path.join(W3C_CORPUS_DIR, ref.file) },
     ),
   );
   const keyOf = (testSet: string, name: string): string =>

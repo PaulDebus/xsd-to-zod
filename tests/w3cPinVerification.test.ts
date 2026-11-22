@@ -5,7 +5,14 @@ import { describe, expect, it } from "vitest";
 import { readXmlFile } from "../src/compiler.js";
 import { splitQName } from "../src/qname.js";
 import { createOutputBuilder } from "../src/runtime.js";
-import { extractRootInfo, runRoundTrip, validateXmlAgainstSchemas } from "./helpers.js";
+import {
+  extractRootInfo,
+  hasW3cCorpus,
+  runRoundTrip,
+  validateXmlAgainstSchemas,
+  W3C_CORPUS_DIR,
+  W3C_SUBMODULE_SKIP,
+} from "./helpers.js";
 import { W3C_CORPUS_KNOWN_FAILURES, W3C_CORPUS_REASONS } from "./w3cCorpusKnownFailures.js";
 import { discoverValidCases, type W3cCase } from "./w3cDriver.js";
 import { REASONS, W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
@@ -21,8 +28,6 @@ import { REASONS, W3C_KNOWN_FAILURES } from "./w3cKnownFailures.js";
 //   element matching the instance root.
 // - beyondSafeInteger: the case must round-trip in the exact integer
 //   mapping (integers: bigint) — the safe-integer ceiling is the only blocker.
-
-const W3C_DIR = path.resolve("testdata/upstream/w3c-xsdtests");
 
 type AnyNode = Record<string, unknown>;
 
@@ -61,7 +66,7 @@ const corpusCase = (key: string): W3cCase => {
   if (instance === undefined || group === undefined || segments.length === 0) {
     throw new Error(`malformed corpus pin key: ${key}`);
   }
-  return findCase(path.join(W3C_DIR, segments.join("/")), group, instance);
+  return findCase(path.join(W3C_CORPUS_DIR, segments.join("/")), group, instance);
 };
 
 // Selection keys carry the testSet basename without extension:
@@ -78,7 +83,7 @@ const selectionCase = (key: string): W3cCase => {
     throw new Error(`malformed selection pin key: ${key}`);
   }
   for (const candidate of [`sunMeta/${testSetName}.testSet`, `msMeta/${testSetName}_w3c.xml`]) {
-    const file = path.join(W3C_DIR, candidate);
+    const file = path.join(W3C_CORPUS_DIR, candidate);
     if (fs.existsSync(file)) {
       return findCase(file, group, instance);
     }
@@ -134,8 +139,8 @@ const expectNoRootDeclaration = (c: W3cCase): void => {
 };
 
 describe("W3C pin verification", () => {
-  if (!fs.existsSync(W3C_DIR) || fs.readdirSync(W3C_DIR).length === 0) {
-    it("skip — W3C submodule not checked out", () => {});
+  if (!hasW3cCorpus()) {
+    it.skip(W3C_SUBMODULE_SKIP, () => {});
     return;
   }
 
