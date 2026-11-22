@@ -16,6 +16,9 @@ review.
 - `testdata/usability/` — the fixed schema set.
 - `testdata/usability/consumers/` — snippets that perform real authoring tasks.
 - `tests/usability-shapes.test.ts` — the generated-shape snapshot guard.
+- `tests/consumer-contract.test.ts` — fixture drift, consumer typecheck,
+  domain-model round-trip, and shape-stability contract. Runs in the normal
+  suite and the release gate; a failure is a finding.
 
 ## Process
 
@@ -44,7 +47,10 @@ npm run usability
 ```
 
 This regenerates `testdata/usability/generated/` and typechecks the consumer
-snippets. A failure is a finding. Also read the diff in
+snippets. A failure is a finding. The same checks run automatically in
+`tests/consumer-contract.test.ts`, including the domain-model round-trip and
+the unrelated-type stability assertion, so a red release gate is the first
+signal. Also read the diff in
 `tests/__snapshots__/usability-shapes.test.ts.snap` when the fixture output
 changed.
 

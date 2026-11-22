@@ -1,0 +1,107 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { irToZod, parseXsd } from "../src/compiler.js";
+import { extractInterfaceBlocks, withTempDirAsync } from "./helpers.js";
+
+const usabilityDir = path.resolve("testdata/usability");
+const generatedDir = path.join(usabilityDir, "generated");
+
+const fixtures = fs
+  .readdirSync(usabilityDir)
+  .filter((file) => file.endsWith(".xsd"))
+  .sort();
+
+const generate = async (xsdFiles: string[]): Promise<string> =>
+  irToZod(await parseXsd(xsdFiles)).schemas;
+
+// The consumer snippets import the published `xsd-to-zod` entry, which
+// resolves against `dist/`. `npm test` and `npm run test:coverage` build it
+// through their `pretest` hooks; a bare vitest run on a fresh checkout has
+// not. Build on demand so the contract does not depend on how it was invoked.
+const ensureBuilt = (): void => {
+  if (fs.existsSync(path.resolve("dist/index.js"))) {
+    return;
+  }
+  const result = spawnSync(path.resolve("node_modules/.bin/tsc"), ["-p", "tsconfig.build.json"], {
+    encoding: "utf8",
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+};
+
+describe("consumer contract", () => {
+  it("keeps the committed generated modules in sync with the fixtures", async () => {
+    for (const fixture of fixtures) {
+      const generated = await generate([path.join(usabilityDir, fixture)]);
+      const committedFile = path.join(generatedDir, fixture.replace(/\.xsd$/, ".zod.ts"));
+      expect(
+        fs.existsSync(committedFile),
+        `${fixture} has no generated module: run npm run usability`,
+      ).toBe(true);
+      const committed = fs.readFileSync(committedFile, "utf8");
+      expect(generated, `${fixture} is stale: run npm run usability`).toBe(committed);
+    }
+  });
+
+  it("typechecks the consumer snippets against the generated modules", () => {
+    ensureBuilt();
+    const result = spawnSync(
+      path.resolve("node_modules/.bin/tsc"),
+      ["-p", "tsconfig.usability.json", "--noEmit"],
+      { encoding: "utf8" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  }, 60_000);
+
+  it("round-trips a document through the consumer domain model", () => {
+    // Run the consumer snippets in a subprocess so the main TypeScript program
+    // never reaches them: they import the published `xsd-to-zod` entry, which
+    // only resolves against the built `dist/`. The snippets are typechecked on
+    // their own by tsconfig.usability.json above.
+    ensureBuilt();
+    const result = spawnSync(path.resolve("node_modules/.bin/tsx"), ["scripts/usability-run.ts"], {
+      encoding: "utf8",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  }, 60_000);
+
+  it("keeps existing interfaces stable when an unrelated type is added", async () => {
+    const fixture = path.join(usabilityDir, "inherited-choices.xsd");
+    const source = fs.readFileSync(fixture, "utf8");
+    const extended = source.replace(
+      "</xs:schema>",
+      `  <xs:complexType name="UnrelatedText">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="lang" type="xs:language"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+</xs:schema>`,
+    );
+    expect(extended).not.toBe(source);
+
+    const baseline = extractInterfaceBlocks(await generate([fixture]));
+    let withExtra = new Map<string, string>();
+    await withTempDirAsync(async (dir) => {
+      const file = path.join(dir, "inherited-choices.xsd");
+      fs.writeFileSync(file, extended);
+      withExtra = extractInterfaceBlocks(await generate([file]));
+    });
+
+    expect(baseline.size).toBeGreaterThan(0);
+    // The added type must show up in the extended output, otherwise the
+    // comparison below has no chance to differ and guards nothing.
+    expect(
+      withExtra.has("UnrelatedText"),
+      "the added type should appear in the extended output",
+    ).toBe(true);
+    for (const [name, block] of baseline) {
+      expect(withExtra.get(name), `${name} changed when an unrelated type was added`).toBe(block);
+    }
+  });
+});
