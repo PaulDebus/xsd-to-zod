@@ -2973,7 +2973,13 @@ const tsFieldLine = (
     type = field.maxOccurs === "unbounded" || field.maxOccurs > 1 ? tsArrayOf(union) : union;
     const props = field.minOccurs === 0 || forceOptional ? "?" : "";
     const optionalType = props === "?" ? " | undefined" : "";
-    return `  ${JSON.stringify(toFieldKey(field))}${props}: ${type}${optionalType};`;
+    // The synthetic key (`choice`, `choice2`, …) says nothing about the
+    // branches it holds, so name them in a doc comment above the property.
+    const comment = formatJsDoc(
+      `One of: ${choice.branches.map((branch) => branch.tag).join(", ")}`,
+      2,
+    );
+    return `${comment}\n  ${JSON.stringify(toFieldKey(field))}${props}: ${type}${optionalType};`;
   }
   const wrapped =
     field.kind === "element" &&

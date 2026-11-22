@@ -142,10 +142,12 @@ import { xmlRegistry } from 'xsd-to-zod';
 export const generatedBy = "xsd-to-zod@<version>";
 
 export interface OptionalBag {
+  /** One of: A, B */
   "choice"?: ({ "A": string } | { "B": string })[] | undefined;
 }
 export type OptionalBagIn = z.input<typeof OptionalBagTypeSchema>;
 export interface Bag {
+  /** One of: A, B */
   "choice": ({ "A": string } | { "B": string })[];
 }
 export type BagIn = z.input<typeof BagTypeSchema>;

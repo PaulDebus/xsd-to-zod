@@ -9,6 +9,7 @@ const stringComplexXsiTypes: QName[] = ["{urn:usability:inherited-choices}Label"
 export const generatedBy = "xsd-to-zod@1.0.1";
 
 export interface Collection {
+  /** One of: Label, Group, Item */
   "choice": ({ "Label": Label } | { "Group": Group } | { "Item": Item })[];
   "id": string;
 }
@@ -28,11 +29,13 @@ export interface Limit {
 }
 export type LimitIn = z.input<typeof LimitSchema>;
 export interface Setting {
+  /** One of: Min, Max, Pattern */
   "choice"?: ({ "Min": Limit } | { "Max": Limit } | { "Pattern": Limit })[] | undefined;
   "kind"?: "ALPHA" | "NUMERIC" | "TEMPORAL" | undefined;
 }
 export type SettingIn = z.input<typeof SettingSchema>;
 export interface Base {
+  /** One of: Label, Title, Note, Version */
   "choice"?: ({ "Label": Label } | { "Title": Label } | { "Note": string } | { "Version": number })[] | undefined;
   "about"?: string | undefined;
   "id": string;
@@ -40,10 +43,12 @@ export interface Base {
 }
 export type BaseIn = z.input<typeof BaseSchema>;
 export interface Node extends Base {
+  /** One of: ChildRef, ParentRef */
   "choice2"?: ({ "ChildRef": Link } | { "ParentRef": Link })[] | undefined;
 }
 export type NodeIn = z.input<typeof NodeSchema>;
 export interface Group extends Node {
+  /** One of: ItemRef, GroupRef */
   "choice3"?: ({ "ItemRef": Link } | { "GroupRef": Link })[] | undefined;
 }
 export type GroupIn = z.input<typeof GroupSchema>;

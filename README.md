@@ -152,7 +152,9 @@ The generated shape is fixed at 1.0 — there is no compat or naming mode:
   `maxOccurs > 1` becomes one array of tagged items,
   `choice: ({ a: A } | { b: B })[]`, preserving document order and static
   exclusivity. Synthetic keys are `choice`, then `choice2`, `choice3`, … —
-  a positional suffix that skips keys already used by the type. Groups that
+  a positional suffix that skips keys already used by the type. Each
+  synthetic field carries a `/** One of: … */` comment naming its branch
+  element tags. Groups that
   cannot collapse keep parallel optional arrays. The exact eligibility rules
   are in
   [docs/1.0-output-defaults.md](docs/1.0-output-defaults.md#repeated-choice-eligibility).
