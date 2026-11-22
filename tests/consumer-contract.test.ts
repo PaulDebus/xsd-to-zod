@@ -16,6 +16,21 @@ const fixtures = fs
 const generate = async (xsdFiles: string[]): Promise<string> =>
   irToZod(await parseXsd(xsdFiles)).schemas;
 
+// The consumer snippets import the published `xsd-to-zod` entry, which
+// resolves against `dist/`. `npm test` and `npm run test:coverage` build it
+// through their `pretest` hooks; a bare vitest run on a fresh checkout has
+// not. Build on demand so the contract does not depend on how it was invoked.
+const ensureBuilt = (): void => {
+  if (fs.existsSync(path.resolve("dist/index.js"))) {
+    return;
+  }
+  const result = spawnSync(path.resolve("node_modules/.bin/tsc"), ["-p", "tsconfig.build.json"], {
+    encoding: "utf8",
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+};
+
 describe("consumer contract", () => {
   it("keeps the committed generated modules in sync with the fixtures", async () => {
     for (const fixture of fixtures) {
@@ -31,6 +46,7 @@ describe("consumer contract", () => {
   });
 
   it("typechecks the consumer snippets against the generated modules", () => {
+    ensureBuilt();
     const result = spawnSync(
       path.resolve("node_modules/.bin/tsc"),
       ["-p", "tsconfig.usability.json", "--noEmit"],
@@ -43,8 +59,9 @@ describe("consumer contract", () => {
   it("round-trips a document through the consumer domain model", () => {
     // Run the consumer snippets in a subprocess so the main TypeScript program
     // never reaches them: they import the published `xsd-to-zod` entry, which
-    // only resolves against the built `dist/`, not a fresh checkout. The
-    // snippets are typechecked on their own by tsconfig.usability.json above.
+    // only resolves against the built `dist/`. The snippets are typechecked on
+    // their own by tsconfig.usability.json above.
+    ensureBuilt();
     const result = spawnSync(path.resolve("node_modules/.bin/tsx"), ["scripts/usability-run.ts"], {
       encoding: "utf8",
     });
