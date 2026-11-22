@@ -149,8 +149,13 @@ The generated shape is fixed at 1.0 — there is no compat or naming mode:
   would shadow a sibling element, the element wins the bare name and the
   attribute keeps its `@` prefix; codegen warns and comments on the fallback.
 - **Repeated choices are ordered arrays.** An eligible `xs:choice` with
-  `maxOccurs > 1` becomes `choice: ({ a: A } | { b: B })[]`, preserving
-  document order and static exclusivity.
+  `maxOccurs > 1` becomes one array of tagged items,
+  `choice: ({ a: A } | { b: B })[]`, preserving document order and static
+  exclusivity. Synthetic keys are `choice`, then `choice2`, `choice3`, … —
+  a positional suffix that skips keys already used by the type. Groups that
+  cannot collapse keep parallel optional arrays. The exact eligibility rules
+  are in
+  [docs/1.0-output-defaults.md](docs/1.0-output-defaults.md#repeated-choice-eligibility).
 - **Root anonymous types use the element's bare name.** `<xs:element name="Library">`
   with an inline type exports `Library`; nested anonymous types keep the
   `Parent_Child_Type` scheme.
@@ -433,6 +438,39 @@ const extended = inner.extend({ extra: z.string() });
 The `xmlRegistry` metadata is inspectable too — e.g. `xmlRegistry.get(orderSchema)?.root` returns the root element QName. Generated schemas register it automatically; the XML runtime requires it. Object composition methods create new schemas: when composing by hand, register the resulting schema with the appropriate root and field metadata before using the XML runtime. A new field needs its own XML mapping; extending a Zod object alone does not define an XML element or attribute.
 
 **Type naming.** A global element with an inline anonymous type lends the type its bare name: `<xs:element name="Library">` with an inline complex type generates `export interface Library`, so `parseXml(LibrarySchema, xml)` is typed `Library`. Nested anonymous types follow the `Parent_Child_Type` scheme. If the friendly name collides with another declaration, the type keeps its synthetic `anonymous_…` name instead — the CLI prints a `naming-collision` warning and the generated file carries a comment at the affected type.
+
+### Using generated types in an application
+
+The generated interfaces and schemas are the **wire model**: they describe the
+XML data — lexical rules, facets, identity constraints, and everything
+`parseXml`/`serializeXml` need. They are intentionally not an application or
+editor state model, so repeated choices stay positional tagged arrays
+(`Library.choice`, `DataTypeType.choice`) and generated types keep the schema's
+shape and names.
+
+Keep your own domain model and convert at the boundary:
+
+- **Load.** `parseXml(LibrarySchema, xml)` → adapt the DTO into records: map
+  `Library.choice` entries into named collections, resolve references, and drop
+  wire-only wrappers.
+- **Save.** Rebuild the DTO in document order and call
+  `serializeXml(LibrarySchema, dto)`. Preserve branches the user did not edit
+  instead of regenerating the whole document, so untouched content round-trips
+  unchanged.
+- **Author.** When the schema has defaults, build the input type (`LibraryIn`,
+  i.e. `z.input`) rather than the output interface: defaulted fields are
+  optional there and `parse`/`serializeXml` fill them in (see
+  [Parse and serialize XML](#parse-and-serialize-xml)). The default
+  `--datatypes string` mode keeps date/time values as validated strings and is
+  the simpler choice for authoring; opt into `structured` only when you need
+  the parsed date parts.
+
+A worked adapter over an inheritance-plus-repeated-choice schema is in
+[testdata/usability/consumers/inherited-choices.ts](testdata/usability/consumers/inherited-choices.ts).
+It uses `Collection`/`Group`/`Item` rather than `Library`, and its fixture has
+no defaults, so it converts output-typed DTOs with hand-written `from*Model`
+helpers; [tests/consumer-contract.test.ts](tests/consumer-contract.test.ts)
+round-trips it through the domain model as part of the release gate.
 
 ## Why trust this?
 
